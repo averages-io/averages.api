@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "schoolagy-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    // Browser origins allowed to call this API with credentials.
+    "ALLOWED_ORIGINS": "https://app.schoolagy.io,https://schoolagy.io",
+    // Leading dot so the session cookie is shared across *.schoolagy.io.
+    "COOKIE_DOMAIN": ".schoolagy.io"
+  }
+  // SESSION_SECRET is NOT set here — it is a secret, not a var.
+  // Set it once with:  npx wrangler secret put SESSION_SECRET
+}
