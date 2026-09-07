@@ -28,6 +28,22 @@ export interface SessionData extends Credentials {
   exp: number;
 }
 
+/**
+ * The uid that marks a sample-data demo session rather than a real Schoology
+ * login.
+ *
+ * It lives here, next to sealing and opening, because those two are the only
+ * places that decide what a valid session looks like — and a demo session is
+ * valid in a different shape from a real one (see `openSession`). Keeping the
+ * constant in the route file instead meant this file couldn't recognise a demo
+ * session at all, which is exactly how it came to reject every one of them.
+ */
+export const DEMO_UID = "__demo__";
+
+export function isDemoSession(session: { uid: string }): boolean {
+  return session.uid === DEMO_UID;
+}
+
 function b64urlEncode(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes))
     .replace(/\+/g, "-")
@@ -87,7 +103,31 @@ export async function openSession(
     );
     const data = JSON.parse(new TextDecoder().decode(plaintext)) as SessionData;
     if (!data.exp || data.exp < Math.floor(Date.now() / 1000)) return null;
-    if (!data.key || !data.secret || !data.uid) return null;
+    if (!data.uid) return null;
+
+    /**
+     * Demo sessions are valid in a different shape: they carry NO Schoology
+     * credentials, because there is no Schoology account behind them.
+     *
+     * This branch is the fix for a real bug. The credential check below
+     * predates demo mode and required a non-empty key and secret on every
+     * session — so the empty strings a demo session is deliberately sealed
+     * with made it fall at the last line of validation. `/auth/me` then 401'd,
+     * the app concluded nobody was signed in, and demo/demo produced a login
+     * -> onboarding -> login redirect loop with nothing in the logs to show
+     * why.
+     *
+     * Blanking the credentials on the way out (rather than just skipping the
+     * check) makes the safety property structural instead of conventional: a
+     * demo session cannot carry credentials, so it cannot produce a signed
+     * Schoology request even if some future code path forgets to ask whether
+     * it's a demo.
+     */
+    if (isDemoSession(data)) {
+      return { ...data, key: "", secret: "" };
+    }
+
+    if (!data.key || !data.secret) return null;
     return data;
   } catch {
     // Any failure here (bad base64, failed auth tag, bad JSON) means the token

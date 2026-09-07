@@ -14,6 +14,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import {
   clearSessionCookie,
+  DEMO_UID,
+  isDemoSession as isDemo,
   openSession,
   readCookie,
   sealSession,
@@ -48,15 +50,11 @@ type Variables = {
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 /**
- * Marks a session as the sample-data demo rather than a real Schoology login.
- * A demo session deliberately holds no key/secret, so it can never produce a
- * signed Schoology request even by accident.
+ * `DEMO_UID` / `isDemo` are imported from ./session.ts rather than defined
+ * here. They used to live in this file, which meant session.ts — the module
+ * that decides whether a token is valid at all — had no idea demo sessions
+ * existed, and rejected every one of them.
  */
-const DEMO_UID = "__demo__";
-
-function isDemo(session: { uid: string }): boolean {
-  return session.uid === DEMO_UID;
-}
 
 const DEFAULT_ORIGINS = [
   "https://app.schoolagy.io",
