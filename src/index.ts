@@ -47,6 +47,17 @@ type Variables = {
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
+/**
+ * Marks a session as the sample-data demo rather than a real Schoology login.
+ * A demo session deliberately holds no key/secret, so it can never produce a
+ * signed Schoology request even by accident.
+ */
+const DEMO_UID = "__demo__";
+
+function isDemo(session: { uid: string }): boolean {
+  return session.uid === DEMO_UID;
+}
+
 const DEFAULT_ORIGINS = [
   "https://app.schoolagy.io",
   "https://schoolagy.io",
@@ -123,6 +134,32 @@ app.post("/auth/session", async (c) => {
     return c.json({ error: "server_misconfigured" }, 500);
   }
 
+  /**
+   * Demo mode: "demo" as both the key and the secret.
+   *
+   * This is the ONLY way into the sample-data version of the app. It goes
+   * through sign-in like any other credential and produces a real session
+   * cookie, which matters: it means the server decides who gets in, so nobody
+   * can reach an app page by editing browser storage or typing a URL. There is
+   * no client-side shortcut and no local flag to forge.
+   *
+   * A demo session carries no Schoology credentials at all — it can't, because
+   * there are none — so every authenticated route below refuses it rather than
+   * attempting a signed call with empty keys.
+   */
+  if (key.toLowerCase() === "demo" && secret.toLowerCase() === "demo") {
+    const token = await sealSession(
+      { key: "", secret: "", uid: DEMO_UID },
+      c.env.SESSION_SECRET
+    );
+    c.header("Set-Cookie", sessionCookie(token, cookieDomain(c)));
+    return c.json({
+      ok: true,
+      demo: true,
+      user: { uid: DEMO_UID, name: "Demo Student", firstName: "Demo", email: "", pictureUrl: "" },
+    });
+  }
+
   try {
     const me = await getMe({ key, secret });
     const uid = String(me.uid ?? me.id ?? "");
@@ -163,6 +200,18 @@ app.delete("/auth/session", (c) => {
 
 app.get("/auth/me", requireSession, async (c) => {
   const session = c.get("session");
+
+  if (isDemo(session)) {
+    return c.json({
+      uid: DEMO_UID,
+      demo: true,
+      name: "Demo Student",
+      firstName: "Demo",
+      email: "",
+      pictureUrl: "",
+    });
+  }
+
   try {
     const me = await getMe(session);
     return c.json({
@@ -188,6 +237,13 @@ app.get("/auth/me", requireSession, async (c) => {
  */
 app.get("/data/bundle", requireSession, async (c) => {
   const session = c.get("session");
+
+  // Demo sessions have no Schoology account behind them. Returning an empty
+  // bundle (rather than erroring) is what makes every page fall through to the
+  // sample data baked into its own markup.
+  if (isDemo(session)) {
+    return c.json({ demo: true, generatedAt: new Date().toISOString() });
+  }
 
   try {
     const [sections, grades] = await Promise.all([
@@ -252,6 +308,11 @@ app.get("/data/bundle", requireSession, async (c) => {
  */
 app.get("/schoology/*", requireSession, async (c) => {
   const session = c.get("session");
+
+  if (isDemo(session)) {
+    return c.json({ error: "not_available_in_demo" }, 403);
+  }
+
   const path = c.req.path.replace(/^\/schoology/, "");
   if (!path || path.includes("..")) {
     return c.json({ error: "invalid_path" }, 400);
