@@ -100,13 +100,33 @@ function cookieDomain(c: any): string {
   return c.env.COOKIE_DOMAIN ?? ".schoolagy.io";
 }
 
-app.get("/", (c) =>
-  c.json({
+/**
+ * Health check — and, deliberately, a configuration check.
+ *
+ * `configured` reports whether SESSION_SECRET is actually visible to the
+ * RUNNING Worker. That distinction matters and is easy to get wrong: a value
+ * entered as a "build variable" in the Workers Builds settings is available
+ * while the project builds and is simply absent at runtime, which produces a
+ * confusing 500 on sign-in with nothing in the dashboard obviously wrong.
+ *
+ * Opening this URL in a browser answers the question in one second. It reports
+ * only whether the secret exists and how long it is — never any part of the
+ * value itself.
+ */
+app.get("/", (c) => {
+  const secret = c.env.SESSION_SECRET ?? "";
+  return c.json({
     service: "schoolagy-api",
     status: "ok",
+    configured: secret.length > 0,
+    sessionSecretLength: secret.length,
+    hint:
+      secret.length > 0
+        ? "Ready. SESSION_SECRET is set as a runtime secret."
+        : "SESSION_SECRET is NOT reaching the Worker at runtime. Set it under the Worker's Settings -> Variables and Secrets (type: Secret), or run: npx wrangler secret put SESSION_SECRET. A value entered in Build settings does not count.",
     docs: "https://github.com/Schoolagy",
-  })
-);
+  });
+});
 
 /**
  * Sign in with a personal Schoology API key + secret.
