@@ -63,6 +63,47 @@ export function letterFromPct(pct: number | null | undefined): string {
 }
 
 /**
+ * Standard unweighted 4.0 scale — same cutoffs `grades.html`'s own
+ * client-side `GPA_SCALE` uses for its (current-grade) Estimated GPA, kept
+ * here so the server-side Projected GPA below (used for the weekly-report
+ * email's GPA snapshot, not shown elsewhere in the app) uses an identical
+ * mapping rather than a second hand-typed copy silently drifting from it.
+ */
+export const GPA_SCALE: Record<string, number> = {
+  "A+": 4.0,
+  A: 4.0,
+  "A-": 3.7,
+  "B+": 3.3,
+  B: 3.0,
+  "B-": 2.7,
+  "C+": 2.3,
+  C: 2.0,
+  "C-": 1.7,
+  "D+": 1.3,
+  D: 1.0,
+  "D-": 0.7,
+  F: 0.0,
+};
+
+/**
+ * Unweighted GPA averaged across each course's *predicted* letter grade
+ * (`AdaptedCourse.predicted`), not the current one — "Projected GPA" is
+ * meant to answer "where is this trending," matching the per-course
+ * Predicted-grade chip's own framing elsewhere in the app. Rounded to 2
+ * decimals so a week-over-week delta (`current - lastWeek`) doesn't carry
+ * meaningless float noise into the email.
+ *
+ * Returns 0 for no courses rather than NaN — an empty course list producing
+ * a silent "0.0" in a snapshot is a far easier bug to spot later than a NaN
+ * that poisons every subsequent delta calculation.
+ */
+export function computeProjectedGPA(courses: { predicted: string }[]): number {
+  if (courses.length === 0) return 0;
+  const total = courses.reduce((sum, c) => sum + (GPA_SCALE[c.predicted] ?? 0), 0);
+  return Math.round((total / courses.length) * 100) / 100;
+}
+
+/**
  * Predicted grade = least-squares trend across recent graded assignments,
  * projected one step forward — NOT a copy of the current grade.
  *

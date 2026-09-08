@@ -32,15 +32,26 @@ import {
   schoologyGet,
   SchoologyError,
 } from "./schoology.ts";
-import { adaptAssignments, adaptCourses, adaptMessages } from "./adapt.ts";
+import { adaptAssignments, adaptCourses, adaptMessages, computeProjectedGPA } from "./adapt.ts";
+import {
+  deleteSyncRecord,
+  loadSyncRecord,
+  recordGpaSnapshot,
+  saveSyncRecord,
+  syncEnabledIn,
+  type KVLike,
+} from "./sync.ts";
 
 type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
   SESSION_SECRET: string;
-  /** Comma-separated list of allowed browser origins. */
-  ALLOWED_ORIGINS?: string;
-  /** Cookie domain, e.g. ".schoolagy.io" */
-  COOKIE_DOMAIN?: string;
+  /**
+   * Backs "Sync Across Devices" and the Projected-GPA history behind the
+   * weekly-report email's "vs last week" line — see sync.ts. Provision with:
+   *   npx wrangler kv namespace create SYNC_KV
+   * then paste the returned id into wrangler.jsonc's kv_namespaces entry.
+   */
+  SYNC_KV: KVLike;
 };
 
 type Variables = {
@@ -56,21 +67,29 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
  * existed, and rejected every one of them.
  */
 
-const DEFAULT_ORIGINS = [
-  "https://app.schoolagy.io",
-  "https://schoolagy.io",
-  "http://localhost:3000",
-];
+/**
+ * schoolagy.io only, as of 2026-09-08.
+ *
+ * A `sch00lagy.com` fallback domain briefly existed (for when a school
+ * network blocked schoolagy.io outright) behind a `src/domains.ts` module
+ * that matched the incoming request's Host/Origin to the right domain
+ * family at runtime. Removed per Martin: it also turned out to be the
+ * actual cause of a real deploy failure — that file never made it into the
+ * live repo when the change was applied, so every build since then failed
+ * with "Cannot find module './domains.ts'" the moment something else
+ * triggered a rebuild. Back to one fixed domain, one fixed cookie domain,
+ * nothing to keep in sync across two files. If a second domain is wanted
+ * again later, `src/domains.ts` from that point in history is the pattern
+ * to bring back — deliberately not resurrected here as a "just in case"
+ * middle ground, since an unused abstraction is exactly the kind of thing
+ * that quietly drifts out of sync with what's actually deployed.
+ */
+const ALLOWED_ORIGINS = ["https://app.schoolagy.io", "https://schoolagy.io", "http://localhost:3000"];
+const COOKIE_DOMAIN = ".schoolagy.io";
 
 app.use("*", async (c, next) => {
-  const allowed = (c.env.ALLOWED_ORIGINS ?? "")
-    .split(",")
-    .map((o) => o.trim())
-    .filter(Boolean);
-  const origins = allowed.length ? allowed : DEFAULT_ORIGINS;
-
   return cors({
-    origin: (origin) => (origins.includes(origin) ? origin : origins[0]),
+    origin: (origin) => (ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]),
     // Required for the httpOnly session cookie to travel at all.
     credentials: true,
     allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
@@ -94,8 +113,8 @@ async function requireSession(c: any, next: any) {
   await next();
 }
 
-function cookieDomain(c: any): string {
-  return c.env.COOKIE_DOMAIN ?? ".schoolagy.io";
+function cookieDomain(_c: any): string {
+  return COOKIE_DOMAIN;
 }
 
 /**
@@ -245,6 +264,79 @@ app.get("/auth/me", requireSession, async (c) => {
 });
 
 /**
+ * Sync Across Devices — read/write the signed-in user's synced settings blob.
+ *
+ * Refused for demo sessions (403 `not_available_in_demo`), same pattern as
+ * `/schoology/*` below: a demo session has no real Schoology uid, so there's
+ * no stable key to store anything under, and nothing on a demo account is
+ * meant to persist between visits in the first place.
+ *
+ * The API doesn't validate or interpret the settings blob's shape — it's
+ * whatever the client's Settings page decides to merge together from its own
+ * localStorage keys (see sync.ts's file comment). This endpoint's only job is
+ * "keep this JSON, keyed to this user, hand it back."
+ */
+app.get("/sync/settings", requireSession, async (c) => {
+  const session = c.get("session");
+  if (isDemo(session)) {
+    return c.json({ error: "not_available_in_demo" }, 403);
+  }
+  const record = await loadSyncRecord(c.env.SYNC_KV, session.uid);
+  return c.json(record);
+});
+
+app.put("/sync/settings", requireSession, async (c) => {
+  const session = c.get("session");
+  if (isDemo(session)) {
+    return c.json({ error: "not_available_in_demo" }, 403);
+  }
+
+  let body: { settings?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_body" }, 400);
+  }
+  if (body.settings === undefined) {
+    return c.json({ error: "missing_settings" }, 400);
+  }
+
+  // Preserve any GPA history already on file — this endpoint only owns the
+  // `settings` half of the record; `/data/bundle` below owns `gpaHistory`.
+  const existing = await loadSyncRecord(c.env.SYNC_KV, session.uid);
+  const record = {
+    ...existing,
+    settings: body.settings,
+    updatedAt: new Date().toISOString(),
+  };
+  await saveSyncRecord(c.env.SYNC_KV, session.uid, record);
+  return c.json(record);
+});
+
+/**
+ * Turning Sync Across Devices off is a real "forget me," not just "stop
+ * asking" — added 2026-09-09 per Martin. Before this, the toggle only ever
+ * flipped a local flag (`schoolagy_settings_options.syncAcrossDevices`) off;
+ * `deleteSyncRecord` already existed in sync.ts but nothing ever called it,
+ * so whatever had last been pushed — the settings blob AND the GPA-history
+ * snapshots — just sat in KV under the user's uid indefinitely. Turning sync
+ * back on later would have silently pulled that stale record back down.
+ *
+ * settings.html calls this the moment the user confirms turning sync off
+ * (see its own comment there). Deletes the WHOLE record — both halves,
+ * settings and gpaHistory — not just the settings half this endpoint's
+ * GET/PUT otherwise own, since "delete my data" means all of it.
+ */
+app.delete("/sync/settings", requireSession, async (c) => {
+  const session = c.get("session");
+  if (isDemo(session)) {
+    return c.json({ error: "not_available_in_demo" }, 403);
+  }
+  await deleteSyncRecord(c.env.SYNC_KV, session.uid);
+  return c.json({ ok: true });
+});
+
+/**
  * One call that returns everything the app's pages need, already mapped into
  * the shapes they render.
  *
@@ -299,6 +391,31 @@ app.get("/data/bundle", requireSession, async (c) => {
       MESSAGES = [];
     }
 
+    /**
+     * Projected-GPA snapshot for the weekly-report email's "vs last week"
+     * line — piggybacked on this request rather than its own fetch/cron,
+     * since COURSES (and each course's predicted grade) was just computed
+     * above anyway. Only recorded for a user who (a) is real, not demo —
+     * already true of this whole branch — and (b) has Sync Across Devices on,
+     * per the rule enforced client-side in settings.html: Weekly Grade
+     * Summary can't be turned on without it, so a user with sync off has no
+     * use for a snapshot regardless. Best-effort and non-blocking: a KV
+     * hiccup here must never turn into a failed page load for the student
+     * who just wants to see their grades.
+     */
+    const projectedGPA = computeProjectedGPA(COURSES);
+    let gpaVsLastWeek: number | null = null;
+    try {
+      const syncRecord = await loadSyncRecord(c.env.SYNC_KV, session.uid);
+      if (syncEnabledIn(syncRecord.settings)) {
+        const snapshot = recordGpaSnapshot(syncRecord, projectedGPA);
+        gpaVsLastWeek = snapshot.deltaVsLastWeek;
+        c.executionCtx.waitUntil(saveSyncRecord(c.env.SYNC_KV, session.uid, snapshot.record));
+      }
+    } catch {
+      // Never let GPA-history bookkeeping take the whole bundle down with it.
+    }
+
     return c.json({
       generatedAt: new Date().toISOString(),
       COURSES,
@@ -307,6 +424,8 @@ app.get("/data/bundle", requireSession, async (c) => {
       UPCOMING,
       TODAY,
       MESSAGES,
+      projectedGPA,
+      gpaVsLastWeek,
     });
   } catch (error) {
     if (error instanceof SchoologyError) {
