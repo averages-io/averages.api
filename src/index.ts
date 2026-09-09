@@ -304,10 +304,15 @@ app.put("/sync/settings", requireSession, async (c) => {
   // Preserve any GPA history already on file — this endpoint only owns the
   // `settings` half of the record; `/data/bundle` below owns `gpaHistory`.
   const existing = await loadSyncRecord(c.env.SYNC_KV, session.uid);
+  const now = new Date().toISOString();
   const record = {
     ...existing,
     settings: body.settings,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
+    // Stamped here, and ONLY here (not by the GPA-snapshot piggyback in
+    // /data/bundle below) — see SyncRecord's own comment in sync.ts for
+    // why settings.html's pull logic needs this separate from updatedAt.
+    settingsUpdatedAt: now,
   };
   await saveSyncRecord(c.env.SYNC_KV, session.uid, record);
   return c.json(record);

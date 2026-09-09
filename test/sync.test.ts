@@ -61,12 +61,14 @@ console.log("\nloadSyncRecord / saveSyncRecord");
     settings: null,
     gpaHistory: [],
     updatedAt: "",
+    settingsUpdatedAt: "",
   });
 
   await saveSyncRecord(kv, "u1", {
     settings: { syncAcrossDevices: true, accent: "#d94a2b" },
     gpaHistory: [],
     updatedAt: "2026-09-08T00:00:00.000Z",
+    settingsUpdatedAt: "2026-09-08T00:00:00.000Z",
   });
   const loaded = await loadSyncRecord(kv, "u1");
   check("round-trips exactly what was saved", loaded.settings, {
@@ -92,6 +94,7 @@ console.log("\nloadSyncRecord defensiveness against malformed stored JSON");
   checkTrue("missing gpaHistory falls back to []", Array.isArray(loaded.gpaHistory));
   check("missing gpaHistory falls back to [] (value)", loaded.gpaHistory, []);
   check("missing updatedAt falls back to ''", loaded.updatedAt, "");
+  check("missing settingsUpdatedAt falls back to '' — an old, pre-migration record", loaded.settingsUpdatedAt, "");
   check("settings still comes through", loaded.settings, { a: 1 });
 }
 
@@ -110,7 +113,7 @@ console.log("\nisoWeekOf");
 
 console.log("\nrecordGpaSnapshot");
 {
-  const empty = { settings: null, gpaHistory: [], updatedAt: "" };
+  const empty = { settings: null, gpaHistory: [], updatedAt: "", settingsUpdatedAt: "" };
   const first = recordGpaSnapshot(empty, 3.45, new Date("2026-09-01T12:00:00Z"));
   check("first-ever snapshot has no 'last week' to compare against", first.lastWeek, null);
   check("...so no delta either", first.deltaVsLastWeek, null);
@@ -138,11 +141,31 @@ console.log("\nrecordGpaSnapshot");
     gapped.lastWeek,
     3.6
   );
+
+  // settingsUpdatedAt must survive every GPA-snapshot write untouched — the
+  // whole point of splitting it from updatedAt (see sync.ts's own comment)
+  // is that /data/bundle's snapshot piggyback runs on nearly every page
+  // load and must never look, to a client comparing settingsUpdatedAt, like
+  // a settings change happened.
+  const withStamp = recordGpaSnapshot(
+    { settings: { accent: "#2e8ae5" }, gpaHistory: [], updatedAt: "", settingsUpdatedAt: "2026-09-08T00:00:00.000Z" },
+    3.9,
+    new Date("2026-09-09T12:00:00Z")
+  );
+  check(
+    "recordGpaSnapshot leaves settingsUpdatedAt exactly as it found it",
+    withStamp.record.settingsUpdatedAt,
+    "2026-09-08T00:00:00.000Z"
+  );
+  checkTrue(
+    "...even though updatedAt itself does move",
+    withStamp.record.updatedAt !== "2026-09-08T00:00:00.000Z" && withStamp.record.updatedAt.length > 0
+  );
 }
 
 console.log("\nrecordGpaSnapshot history cap");
 {
-  let record = { settings: null, gpaHistory: [] as any[], updatedAt: "" };
+  let record = { settings: null, gpaHistory: [] as any[], updatedAt: "", settingsUpdatedAt: "" };
   let date = new Date("2026-01-05T12:00:00Z"); // a Monday
   for (let i = 0; i < MAX_GPA_HISTORY + 5; i++) {
     const result = recordGpaSnapshot(record, 3.0 + i * 0.01, date);

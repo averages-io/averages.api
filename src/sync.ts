@@ -56,7 +56,25 @@ export interface GpaSnapshot {
 export interface SyncRecord {
   settings: unknown;
   gpaHistory: GpaSnapshot[];
+  /**
+   * Stamped on every write to this record — settings pushes AND the
+   * `/data/bundle` GPA-snapshot piggyback below both touch it. Deliberately
+   * NOT what the client compares to decide whether to pull — see
+   * `settingsUpdatedAt` for that. Kept mainly so a raw look at a KV record
+   * (or a future admin view) has an obvious "last touched" field.
+   */
   updatedAt: string;
+  /**
+   * Stamped ONLY when the `settings` half of this record actually changes
+   * (index.ts's `PUT /sync/settings`) — never by the GPA-snapshot writes
+   * `/data/bundle` does on nearly every authenticated page load. That
+   * separation is the whole point: settings.html's pull logic needs to
+   * tell "another device changed my settings since I last synced" apart
+   * from "this account's GPA history quietly grew a bit," and a shared
+   * timestamp bumped by both would make every routine page load look like
+   * a settings change and trigger a needless reload.
+   */
+  settingsUpdatedAt: string;
 }
 
 /** Minimal shape of a Cloudflare Workers KV namespace binding. */
@@ -74,7 +92,7 @@ function syncKey(uid: string): string {
 }
 
 function emptyRecord(): SyncRecord {
-  return { settings: null, gpaHistory: [], updatedAt: "" };
+  return { settings: null, gpaHistory: [], updatedAt: "", settingsUpdatedAt: "" };
 }
 
 export async function loadSyncRecord(kv: KVLike, uid: string): Promise<SyncRecord> {
@@ -85,6 +103,11 @@ export async function loadSyncRecord(kv: KVLike, uid: string): Promise<SyncRecor
     settings: record.settings ?? null,
     gpaHistory: Array.isArray(record.gpaHistory) ? record.gpaHistory : [],
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
+    // Missing on any record written before this field existed — that's the
+    // exact "old, untimestamped record" case settings.html's pull logic
+    // treats as untrustworthy rather than something to adopt. See the
+    // field's own comment above.
+    settingsUpdatedAt: typeof record.settingsUpdatedAt === "string" ? record.settingsUpdatedAt : "",
   };
 }
 
