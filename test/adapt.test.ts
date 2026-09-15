@@ -14,6 +14,7 @@ import {
   adaptCourses,
   adaptMessages,
   colorForCourse,
+  computeProjectedGPA,
   formatDue,
   letterFromPct,
   predict,
@@ -168,6 +169,79 @@ const messages = adaptMessages([
 check("maps the sender", messages[0].from, "Mr. Alvarez");
 check("marks unread", messages[0].unread, true);
 check("relative time", messages[0].time, "1h ago");
+
+console.log("\nprojected GPA (weekly-report email's GPA card)");
+check(
+  "averages predicted letter grades on the standard 4.0 scale, matching grades.html's own GPA_SCALE",
+  computeProjectedGPA([{ predicted: "A" }, { predicted: "B+" }, { predicted: "C" }]),
+  Math.round(((4.0 + 3.3 + 2.0) / 3) * 100) / 100
+);
+check("all A's is a clean 4.0, not 3.999-something", computeProjectedGPA([{ predicted: "A" }, { predicted: "A+" }]), 4.0);
+check("an unrecognized/blank letter (—) contributes 0, doesn't throw", computeProjectedGPA([{ predicted: "—" }, { predicted: "A" }]), 2.0);
+check("empty course list is 0, not NaN", computeProjectedGPA([]), 0);
+// `predicted` can be a section's own reported letter grade, i.e. a data-derived
+// string. An inherited Object key resolves to a function, which `?? 0` would
+// have waved through and turned the whole sum into NaN.
+check(
+  "an inherited key like 'constructor' contributes 0 rather than poisoning the sum with NaN",
+  computeProjectedGPA([{ predicted: "constructor" }, { predicted: "A" }]),
+  2.0
+);
+check(
+  "same for 'toString'",
+  computeProjectedGPA([{ predicted: "toString" }, { predicted: "A" }]),
+  2.0
+);
+
+console.log("\nmessage bodies are flattened to plain text (they arrive as HTML)");
+{
+  const html = adaptMessages([
+    {
+      id: 11,
+      subject: "<b>Lab rubric</b>",
+      message: "<p>The rubric is <strong>posted</strong> under Materials.</p><br>See me if stuck.",
+      author_name: "Mr. Alvarez",
+    },
+  ]);
+  check(
+    "tags are stripped from the preview, not shown as text",
+    html[0].preview,
+    "The rubric is posted under Materials. See me if stuck."
+  );
+  check("and from the subject", html[0].subject, "Lab rubric");
+}
+{
+  const entities = adaptMessages([
+    { id: 12, message: "Ben &amp; Jerry&#39;s &lt;not a tag&gt;", author_name: "Ms. Cho" },
+  ]);
+  // Decoded here, re-escaped by the page on render — so this shows as
+  // characters, never as markup.
+  check(
+    "entities are decoded to their characters",
+    entities[0].preview,
+    "Ben & Jerry's <not a tag>"
+  );
+}
+{
+  const nested = adaptMessages([
+    { id: 13, message: "&amp;lt;script&amp;gt;", author_name: "x" },
+  ]);
+  check(
+    "a double-encoded sequence decodes exactly one level, not two",
+    nested[0].preview,
+    "&lt;script&gt;"
+  );
+}
+{
+  const long = adaptMessages([
+    { id: 14, message: `<div class="${"x".repeat(200)}">Hello there</div>`, author_name: "x" },
+  ]);
+  check(
+    "truncation counts visible characters — a long opening tag can't eat the whole preview",
+    long[0].preview,
+    "Hello there"
+  );
+}
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
