@@ -10,6 +10,9 @@ import { buildAuthHeader, type Credentials } from "./oauth.ts";
 
 export const SCHOOLOGY_BASE = "https://api.schoology.com/v1";
 
+/** See the comment on the fetch in schoologyGet for why this is 20s. */
+export const UPSTREAM_TIMEOUT_MS = 20_000;
+
 export class SchoologyError extends Error {
   // Declared as plain fields rather than TS parameter properties so this file
   // stays runnable under Node's type-stripping (which only removes types and
@@ -39,13 +42,43 @@ export async function schoologyGet<T = unknown>(
   }
 
   const auth = await buildAuthHeader("GET", url.toString(), creds);
-  const response = await fetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Authorization: auth,
-      Accept: "application/json",
-    },
-  });
+
+  /**
+   * A ceiling on how long one upstream call may hang (2026-09-17).
+   *
+   * Without it a Schoology request that never answers leaves the student's
+   * page spinning indefinitely — the Worker is not burning CPU while it
+   * waits, so nothing on our side ever cuts it off. 20 seconds is deliberately
+   * generous: it is not a performance knob, it is the line past which
+   * Schoology is effectively down, and a student on a slow connection must
+   * never trip it.
+   *
+   * Aborting is safe here in a way it was NOT for sign-out (see signOut in the
+   * app's lib/schoolagy.ts, where tearing down the request meant the clearing
+   * Set-Cookie never arrived). These are GETs: nothing is left half-done.
+   */
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        Authorization: auth,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // Surfaced as a SchoologyError so callers keep their one error type, and
+    // so the route layer answers 502 rather than a bare 500. The message
+    // carries no credential material — `path` is one of our own constants.
+    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+    throw new SchoologyError(
+      timedOut
+        ? `Schoology did not respond within ${UPSTREAM_TIMEOUT_MS}ms for ${path}`
+        : `Could not reach Schoology for ${path}`,
+      timedOut ? 504 : 503
+    );
+  }
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -95,14 +128,8 @@ export async function getSections(uid: string, creds: Credentials) {
   return listOf(payload, "section");
 }
 
-export async function getGrades(
-  uid: string,
-  creds: Credentials,
-  sectionId?: string
-) {
-  const payload = await schoologyGet(`/users/${uid}/grades`, creds, {
-    section_id: sectionId,
-  });
+export async function getGrades(uid: string, creds: Credentials) {
+  const payload = await schoologyGet(`/users/${uid}/grades`, creds);
   return listOf(payload, "section");
 }
 
