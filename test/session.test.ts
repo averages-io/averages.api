@@ -10,6 +10,8 @@
 
 import {
   clearSessionCookie,
+  DEMO_UID,
+  isDemoSession,
   openSession,
   readCookie,
   sealSession,
@@ -69,6 +71,70 @@ Date.now = () => realNow() + 31 * 24 * 60 * 60 * 1000; // 31 days on, TTL is 30
 check("expired token is rejected", await openSession(shortToken, SECRET), null);
 Date.now = realNow;
 checkTrue("still valid before expiry", (await openSession(shortToken, SECRET)) !== null);
+
+console.log("\ndemo sessions");
+/**
+ * Regression test for the demo redirect loop.
+ *
+ * A demo session is sealed with empty key/secret on purpose — there is no
+ * Schoology account behind it. `openSession` used to require a non-empty key
+ * AND secret on every session, so it rejected every demo token: /auth/me 401'd,
+ * the app decided nobody was signed in, and signing in with demo/demo bounced
+ * login -> onboarding -> login forever.
+ *
+ * These four assertions are the whole contract. If any of them fails, demo mode
+ * is broken again in exactly that way.
+ */
+const demoToken = await sealSession({ key: "", secret: "", uid: DEMO_UID }, SECRET);
+const demoOpened = await openSession(demoToken, SECRET);
+checkTrue("a demo session opens (empty credentials are valid for demo)", demoOpened !== null);
+check("demo uid survives", demoOpened?.uid, DEMO_UID);
+checkTrue("an opened demo session is recognisable as demo", isDemoSession(demoOpened!));
+// The safety property: a demo session must never be able to sign a request.
+check("a demo session carries no key", demoOpened?.key, "");
+check("a demo session carries no secret", demoOpened?.secret, "");
+
+// Empty credentials stay invalid for a REAL session — the demo fix must not
+// have loosened validation for everyone.
+check(
+  "a non-demo session with blank credentials is still rejected",
+  await openSession(await sealSession({ key: "", secret: "", uid: "4242" }, SECRET), SECRET),
+  null
+);
+check(
+  "a non-demo session missing only the secret is still rejected",
+  await openSession(await sealSession({ key: "abc", secret: "", uid: "4242" }, SECRET), SECRET),
+  null
+);
+// A demo token is still a sealed token — it isn't a bypass.
+check("a forged demo token is rejected", await openSession(demoToken, "wrong-secret"), null);
+// Demo sessions expire like any other.
+const demoNow = Date.now;
+Date.now = () => demoNow() + 31 * 24 * 60 * 60 * 1000;
+check("an expired demo session is rejected", await openSession(demoToken, SECRET), null);
+Date.now = demoNow;
+
+/**
+ * The whole chain, end to end, because that's what actually broke.
+ *
+ * Sealing worked and opening worked in isolation; what failed was the round
+ * trip a real demo sign-in makes — POST /auth/session seals a token and sets a
+ * cookie, the browser sends that cookie back, and GET /auth/me has to open it
+ * again. This walks that path with the real functions: Set-Cookie header ->
+ * what a browser would send back -> readCookie -> openSession.
+ */
+const setCookieHeader = sessionCookie(
+  await sealSession({ key: "", secret: "", uid: DEMO_UID }, SECRET),
+  ".schoolagy.io"
+);
+// A browser echoes only the name=value pair, not the attributes.
+const sentBack = setCookieHeader.split(";")[0];
+const roundTripped = await openSession(
+  readCookie(sentBack, "schoolagy_session") ?? "",
+  SECRET
+);
+checkTrue("demo sign-in survives the full cookie round trip", roundTripped !== null);
+check("and /auth/me would see it as demo", roundTripped?.uid, DEMO_UID);
 
 console.log("\nuniqueness");
 // Same input, different token every time — a fresh IV per seal. Identical

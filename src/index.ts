@@ -39,6 +39,7 @@ import {
   recordGpaSnapshot,
   saveSyncRecord,
   syncEnabledIn,
+  weeklyGradeSummaryEnabledIn,
   type KVLike,
 } from "./sync.ts";
 
@@ -301,13 +302,22 @@ app.put("/sync/settings", requireSession, async (c) => {
     return c.json({ error: "missing_settings" }, 400);
   }
 
-  // Preserve any GPA history already on file — this endpoint only owns the
-  // `settings` half of the record; `/data/bundle` below owns `gpaHistory`.
+  // Preserve any GPA snapshot already on file — this endpoint only owns the
+  // `settings` half of the record; `/data/bundle` below owns `gpaSnapshot`.
+  // The one exception: if this push shows Weekly Grade Summary is now off,
+  // clear the snapshot outright instead of leaving it to sit there unused.
+  // Gating storage on the toggle (see weeklyGradeSummaryEnabledIn in
+  // sync.ts, added 2026-09-12) only means anything if turning the toggle
+  // off actually makes Schoolagy stop holding the number, not just stop it
+  // from updating further.
   const existing = await loadSyncRecord(c.env.SYNC_KV, session.uid);
   const now = new Date().toISOString();
   const record = {
     ...existing,
     settings: body.settings,
+    gpaSnapshot: weeklyGradeSummaryEnabledIn(body.settings)
+      ? existing.gpaSnapshot
+      : { current: null, previous: null },
     updatedAt: now,
     // Stamped here, and ONLY here (not by the GPA-snapshot piggyback in
     // /data/bundle below) — see SyncRecord's own comment in sync.ts for
@@ -329,7 +339,7 @@ app.put("/sync/settings", requireSession, async (c) => {
  *
  * settings.html calls this the moment the user confirms turning sync off
  * (see its own comment there). Deletes the WHOLE record — both halves,
- * settings and gpaHistory — not just the settings half this endpoint's
+ * settings and gpaSnapshot — not just the settings half this endpoint's
  * GET/PUT otherwise own, since "delete my data" means all of it.
  */
 app.delete("/sync/settings", requireSession, async (c) => {
@@ -400,25 +410,33 @@ app.get("/data/bundle", requireSession, async (c) => {
      * Projected-GPA snapshot for the weekly-report email's "vs last week"
      * line — piggybacked on this request rather than its own fetch/cron,
      * since COURSES (and each course's predicted grade) was just computed
-     * above anyway. Only recorded for a user who (a) is real, not demo —
-     * already true of this whole branch — and (b) has Sync Across Devices on,
-     * per the rule enforced client-side in settings.html: Weekly Grade
-     * Summary can't be turned on without it, so a user with sync off has no
-     * use for a snapshot regardless. Best-effort and non-blocking: a KV
-     * hiccup here must never turn into a failed page load for the student
-     * who just wants to see their grades.
+     * above anyway. Recorded only for a user who (a) is real, not demo —
+     * already true of this whole branch — (b) has Sync Across Devices on,
+     * and (c) has Weekly Grade Summary itself turned on.
+     *
+     * (b) alone used to be the only check here, on the theory that the
+     * client already enforces "no weekly email without sync" so checking
+     * again server-side was redundant — but that meant anyone with sync on
+     * got a GPA snapshot recorded regardless of whether they'd ever turned
+     * the email on, which is more retention than the feature it's for
+     * needs. Fixed 2026-09-12, per Martin, alongside shrinking storage
+     * itself from a 12-week rolling history down to just this week's number
+     * and the one before it — see sync.ts's own top-of-file comment.
+     * Best-effort and non-blocking either way: a KV hiccup here must never
+     * turn into a failed page load for the student who just wants to see
+     * their grades.
      */
     const projectedGPA = computeProjectedGPA(COURSES);
     let gpaVsLastWeek: number | null = null;
     try {
       const syncRecord = await loadSyncRecord(c.env.SYNC_KV, session.uid);
-      if (syncEnabledIn(syncRecord.settings)) {
+      if (syncEnabledIn(syncRecord.settings) && weeklyGradeSummaryEnabledIn(syncRecord.settings)) {
         const snapshot = recordGpaSnapshot(syncRecord, projectedGPA);
         gpaVsLastWeek = snapshot.deltaVsLastWeek;
         c.executionCtx.waitUntil(saveSyncRecord(c.env.SYNC_KV, session.uid, snapshot.record));
       }
     } catch {
-      // Never let GPA-history bookkeeping take the whole bundle down with it.
+      // Never let GPA-snapshot bookkeeping take the whole bundle down with it.
     }
 
     return c.json({
