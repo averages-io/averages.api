@@ -29,7 +29,6 @@ import {
   getMe,
   getMessages,
   getSections,
-  schoologyGet,
   SchoologyError,
 } from "./schoology.ts";
 import { adaptAssignments, adaptCourses, adaptMessages, computeProjectedGPA } from "./adapt.ts";
@@ -85,15 +84,52 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
  * middle ground, since an unused abstraction is exactly the kind of thing
  * that quietly drifts out of sync with what's actually deployed.
  */
-const ALLOWED_ORIGINS = ["https://app.schoolagy.io", "https://schoolagy.io", "http://localhost:3000"];
+const ALLOWED_ORIGINS = ["https://app.schoolagy.io", "https://schoolagy.io"];
+
+/** Only honoured when this Worker is itself being reached on localhost — see allowedOrigins(). */
+const DEV_ORIGIN = "http://localhost:3000";
+
 const COOKIE_DOMAIN = ".schoolagy.io";
 
+/** Ceiling on one user's synced settings blob — see PUT /sync/settings. */
+const MAX_SETTINGS_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The CORS allow-list for THIS request.
+ *
+ * `http://localhost:3000` used to sit in the list unconditionally, including
+ * in production. That's a real hole, if a narrow one: with `credentials: true`,
+ * any page served from port 3000 on a student's own machine could call this
+ * API with their session cookie attached and read the response — their whole
+ * Schoology account — because the browser considers that origin allowed. It
+ * was only ever there for local development, and local development doesn't
+ * need it from production: the app's own API_BASE (see the app's
+ * lib/schoolagy.ts) points a localhost app at a localhost Worker, not at
+ * api.schoolagy.io. So allow it only when the Worker answering is itself
+ * local, which is exactly the `wrangler dev` case and never the deployed one.
+ */
+function allowedOrigins(requestUrl: string): string[] {
+  let hostname = "";
+  try {
+    hostname = new URL(requestUrl).hostname;
+  } catch {
+    // Unparseable URL — fall through to the production list, which is the
+    // safe default. Never widen the allow-list on an error path.
+  }
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
+  return isLocal ? [...ALLOWED_ORIGINS, DEV_ORIGIN] : ALLOWED_ORIGINS;
+}
+
 app.use("*", async (c, next) => {
+  const allowed = allowedOrigins(c.req.url);
   return cors({
-    origin: (origin) => (ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]),
+    // Returning a non-matching origin for anything not on the list is the deny
+    // path: the browser compares Access-Control-Allow-Origin against its own
+    // origin and blocks the response when they differ.
+    origin: (origin) => (allowed.includes(origin) ? origin : allowed[0]),
     // Required for the httpOnly session cookie to travel at all.
     credentials: true,
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type"],
   })(c, next);
 });
@@ -107,15 +143,11 @@ async function requireSession(c: any, next: any) {
   const session = await openSession(token, c.env.SESSION_SECRET);
   if (!session) {
     // Expired or tampered — clear it so the browser stops sending a dead cookie.
-    c.header("Set-Cookie", clearSessionCookie(cookieDomain(c)));
+    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
     return c.json({ error: "session_expired" }, 401);
   }
   c.set("session", session);
   await next();
-}
-
-function cookieDomain(_c: any): string {
-  return COOKIE_DOMAIN;
 }
 
 /**
@@ -128,8 +160,11 @@ function cookieDomain(_c: any): string {
  * confusing 500 on sign-in with nothing in the dashboard obviously wrong.
  *
  * Opening this URL in a browser answers the question in one second. It reports
- * only whether the secret exists and how long it is — never any part of the
- * value itself.
+ * only WHETHER the secret exists — never any part of the value, and (since
+ * 2026-09-15) not its length either. This endpoint is public and unauthenticated,
+ * and publishing the exact length of the key that seals every session cookie
+ * tells an attacker how much work a brute-force is, for no diagnostic benefit:
+ * "is it set or not" is the entire question this is here to answer.
  */
 app.get("/", (c) => {
   const secret = c.env.SESSION_SECRET ?? "";
@@ -137,7 +172,6 @@ app.get("/", (c) => {
     service: "schoolagy-api",
     status: "ok",
     configured: secret.length > 0,
-    sessionSecretLength: secret.length,
     hint:
       secret.length > 0
         ? "Ready. SESSION_SECRET is set as a runtime secret."
@@ -190,7 +224,7 @@ app.post("/auth/session", async (c) => {
       { key: "", secret: "", uid: DEMO_UID },
       c.env.SESSION_SECRET
     );
-    c.header("Set-Cookie", sessionCookie(token, cookieDomain(c)));
+    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
     return c.json({
       ok: true,
       demo: true,
@@ -206,7 +240,7 @@ app.post("/auth/session", async (c) => {
     }
 
     const token = await sealSession({ key, secret, uid }, c.env.SESSION_SECRET);
-    c.header("Set-Cookie", sessionCookie(token, cookieDomain(c)));
+    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
 
     return c.json({
       ok: true,
@@ -232,7 +266,7 @@ app.post("/auth/session", async (c) => {
 });
 
 app.delete("/auth/session", (c) => {
-  c.header("Set-Cookie", clearSessionCookie(cookieDomain(c)));
+  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
   return c.json({ ok: true });
 });
 
@@ -300,6 +334,30 @@ app.put("/sync/settings", requireSession, async (c) => {
   }
   if (body.settings === undefined) {
     return c.json({ error: "missing_settings" }, 400);
+  }
+
+  /**
+   * Bound what one account can park in KV.
+   *
+   * This blob is whatever the Settings page decides to merge together, stored
+   * verbatim and never inspected — which until now meant no ceiling at all
+   * beyond Cloudflare's own 25MB-per-value limit. It legitimately carries a
+   * cropped wallpaper as a data: URL (a 1600px JPEG, so a few hundred KB is
+   * normal and expected), so the cap has to sit well clear of that; 2MB is
+   * roughly triple the realistic worst case and still a hard stop on using a
+   * student account as free storage. Rejecting loudly with 413 rather than
+   * truncating: a silently half-saved settings record is worse than one that
+   * didn't save.
+   */
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(body.settings);
+  } catch {
+    // Circular structure, or something else JSON can't represent.
+    return c.json({ error: "invalid_settings" }, 400);
+  }
+  if (serialized.length > MAX_SETTINGS_BYTES) {
+    return c.json({ error: "settings_too_large", maxBytes: MAX_SETTINGS_BYTES }, 413);
   }
 
   // Preserve any GPA snapshot already on file — this endpoint only owns the
@@ -371,9 +429,30 @@ app.get("/data/bundle", requireSession, async (c) => {
   }
 
   try {
-    const [sections, grades] = await Promise.all([
+    /**
+     * One wave for everything that depends on nothing (2026-09-17).
+     *
+     * This used to be three separate waits, and two of them didn't need to
+     * be: the inbox fetch sat at the bottom of the handler, behind the twelve
+     * assignment calls, and the sync-record read sat below that again — even
+     * though neither needs a single byte from Schoology's sections or grades.
+     * Every bundle paid two full round trips for the ordering alone.
+     *
+     * Now there are exactly two waits, and the second one is the only one
+     * that has to be second: assignments are per-section, so they can't be
+     * asked for until wave 1 says which sections exist.
+     *
+     * The two `.catch` handlers are load-bearing. `Promise.all` rejects on the
+     * FIRST rejection, so an unguarded inbox fetch — messaging can be turned
+     * off district-wide — would take sections and grades down with it and turn
+     * a working grades page into a 502. Sections and grades are deliberately
+     * left unguarded: without them there is no bundle to return.
+     */
+    const [sections, grades, inbox, syncRecord] = await Promise.all([
       getSections(session.uid, session),
       getGrades(session.uid, session),
+      getMessages("inbox", session).catch(() => null),
+      loadSyncRecord(c.env.SYNC_KV, session.uid).catch(() => null),
     ]);
 
     const { COURSES, HISTORY } = adaptCourses(sections, grades);
@@ -397,12 +476,14 @@ app.get("/data/bundle", requireSession, async (c) => {
 
     const { OVERDUE, UPCOMING, TODAY } = adaptAssignments(assignmentsBySection);
 
+    // The fetch already happened up in wave 1; this is just the mapping. It
+    // keeps its own guard because adaptMessages walks a shape Schoology varies
+    // by district, and a surprise there must not cost the student their
+    // grades either.
     let MESSAGES: any[] = [];
     try {
-      MESSAGES = adaptMessages(await getMessages("inbox", session));
+      MESSAGES = inbox ? adaptMessages(inbox) : [];
     } catch {
-      // Messaging can be disabled district-wide; that's not a failure of the
-      // rest of the app.
       MESSAGES = [];
     }
 
@@ -429,8 +510,10 @@ app.get("/data/bundle", requireSession, async (c) => {
     const projectedGPA = computeProjectedGPA(COURSES);
     let gpaVsLastWeek: number | null = null;
     try {
-      const syncRecord = await loadSyncRecord(c.env.SYNC_KV, session.uid);
-      if (syncEnabledIn(syncRecord.settings) && weeklyGradeSummaryEnabledIn(syncRecord.settings)) {
+      // `syncRecord` was read in wave 1 — it only ever needed session.uid.
+      // Null means the read failed, which is treated the same as sync being
+      // off: no snapshot, no delta, and the grades still render.
+      if (syncRecord && syncEnabledIn(syncRecord.settings) && weeklyGradeSummaryEnabledIn(syncRecord.settings)) {
         const snapshot = recordGpaSnapshot(syncRecord, projectedGPA);
         gpaVsLastWeek = snapshot.deltaVsLastWeek;
         c.executionCtx.waitUntil(saveSyncRecord(c.env.SYNC_KV, session.uid, snapshot.record));
@@ -459,39 +542,24 @@ app.get("/data/bundle", requireSession, async (c) => {
 });
 
 /**
- * Escape hatch: signed passthrough to any read-only Schoology endpoint.
+ * REMOVED 2026-09-15: `GET /schoology/*`, a signed passthrough to any
+ * read-only Schoology endpoint.
  *
- * Lets the app reach parts of the API that don't have a dedicated adapter yet
- * without needing a Worker redeploy for each one. GET-only on purpose — this
- * beta has no reason to write to a student's Schoology account, and not
- * accepting writes at all is a stronger guarantee than validating them.
+ * It was built as an escape hatch so the app could reach parts of Schoology
+ * with no dedicated adapter yet without a Worker redeploy. Nothing ever used
+ * it — a search across the whole app (pages-src, app/, scripts/) found zero
+ * callers — so what it actually provided was a single authenticated URL that
+ * would relay ANY read from a signed-in student's Schoology account back to
+ * whatever asked. That's a large amplifier for any other bug: one XSS, one
+ * malicious extension, one leaked session and the reachable blast radius is
+ * everything Schoology will show that student, rather than the specific
+ * fields /data/bundle chooses to return.
+ *
+ * Deleting it is not a loss of capability — the typed helpers in
+ * schoology.ts (getMe/getSections/getGrades/getAssignments/getMessages) are
+ * how every real call is made, and a new endpoint is a few lines there plus a
+ * route here. If it's ever wanted back, bring it back deliberately, with an
+ * allow-list of the exact paths the app needs rather than a wildcard.
  */
-app.get("/schoology/*", requireSession, async (c) => {
-  const session = c.get("session");
-
-  if (isDemo(session)) {
-    return c.json({ error: "not_available_in_demo" }, 403);
-  }
-
-  const path = c.req.path.replace(/^\/schoology/, "");
-  if (!path || path.includes("..")) {
-    return c.json({ error: "invalid_path" }, 400);
-  }
-
-  const query: Record<string, string> = {};
-  const url = new URL(c.req.url);
-  url.searchParams.forEach((value, key) => {
-    query[key] = value;
-  });
-
-  try {
-    return c.json(await schoologyGet(path, session, query));
-  } catch (error) {
-    if (error instanceof SchoologyError) {
-      return c.json({ error: "schoology_error", status: error.status }, 502);
-    }
-    return c.json({ error: "unexpected_error" }, 500);
-  }
-});
 
 export default app;
