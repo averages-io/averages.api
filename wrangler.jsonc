@@ -7,13 +7,25 @@
   "observability": {
     "enabled": true
   },
-
+  // Where Google and Canva send students back after they sign in. Not secret
+  // (they show in the address bar), so they live here instead of the dashboard.
+  // For local testing, .dev.vars overrides these with the localhost addresses.
   "vars": {
     "GOOGLE_REDIRECT_URI": "https://api.averages.io/auth/google/callback",
     "CANVA_REDIRECT_URI": "https://api.averages.io/canva/callback"
   },
-
+  // Backs "Sync Across Devices" plus the Projected-GPA history behind the
+  // weekly-report email's "vs last week" line — see src/sync.ts. Namespace
+  // created 2026-09-08 via `npx wrangler kv namespace create SYNC_KV`.
+  // TO DO: being replaced by a US-only Durable Object (see data-map.md).
   "kv_namespaces": [
     { "binding": "SYNC_KV", "id": "68503ced5e4d4a25ab14f85d98084cd2" }
   ]
-
+  // Allowed CORS origins and the session cookie's domain are hardcoded as
+  // ALLOWED_ORIGINS/COOKIE_DOMAIN constants in src/index.ts rather than
+  // living here as wrangler vars.
+  //
+  // Secrets (dashboard or `npx wrangler secret put`, never in this file):
+  // SESSION_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+  // CANVA_CLIENT_ID, CANVA_CLIENT_SECRET
+}
