@@ -159,15 +159,10 @@ OAuth spec and made-up strings, not real credentials.
 
 ## License
 
-**GNU Affero General Public License v3.0.** See [LICENSE](LICENSE).
+**GNU General Public License v3.0.** See [LICENSE](LICENSE).
 
-You're free to use, study, change and share this code. The condition that matters
-most is the AGPL's network clause: **if you run a changed version as a public
-service, you have to make your changed source available to its users.**
-
-That's a deliberate choice. Averages.io promises students it never sells or tracks
-their schoolwork, and the AGPL keeps that promise true for forks too: a copy can't
-quietly become a closed version that does.
+You're free to use, study, change and share this code. If you give out a changed
+version, you have to share its source under the same license.
 
 ## Trademarks and affiliation
 
