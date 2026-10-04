@@ -1,0 +1,13 @@
+node_modules/
+.wrangler/
+dist/
+
+# Secrets: never commit these
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+*.pem
+*.key
+# Google's downloaded OAuth file (client_secret_....json)
+client_secret*.json
