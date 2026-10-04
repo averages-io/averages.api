@@ -23,7 +23,7 @@ browser talks to this Worker, and only this Worker talks to Schoology.
 | Sign in with a personal Schoology API key | Live |
 | Demo account (`demo` / `demo`) | Live |
 | `/data/bundle`: courses, grades, assignments and messages, already shaped for the app | Live |
-| Sync Across Devices | **Paused.** The old storage copied data outside the US and was deleted on 2026-10-01. Moving to a US-only Durable Object. |
+| Sync Across Devices | Live, stored only in the US (one Durable Object per student) |
 | Sign in through Schoology's App Center ("appAuth") | Planned, needed before public launch |
 | Google Classroom | Planned. OAuth client is set up; no code yet |
 | Canva | Built and tested, not yet merged into this repo |
@@ -62,7 +62,10 @@ from the server; it lasts until it expires or the student signs out.
   their Schoology user ID: their Averages.io settings (name, photo, background,
   colors, course nicknames) and, only if the Weekly Grade Summary email is also on,
   at most two Projected GPA numbers (this week's and last week's). Turning sync off
-  deletes the record. This is paused until the US-only storage is ready.
+  deletes the record. Each student's record lives in their own Durable Object,
+  created in Cloudflare's `us` jurisdiction, so it is stored and handled only in
+  the United States. (It used Workers KV until 2026-10-04; KV copies data
+  worldwide, so it was replaced.)
 - **Nothing else.** No analytics, no tracking, no ads.
 
 ## Endpoints
@@ -123,6 +126,8 @@ runtime ones. If sign-in returns 500, open `/` on the Worker: it says whether
 
 **Local development:** put the same names in a `.dev.vars` file (already in
 `.gitignore`) and point the redirect addresses at `http://localhost:8787/...`.
+Cloudflare's local runtime can't pin Durable Objects to the US, so on
+`localhost` (and only there) sync storage is opened without the `us` setting.
 
 ## Development
 

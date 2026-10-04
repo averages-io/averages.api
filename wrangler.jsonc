@@ -14,13 +14,17 @@
     "GOOGLE_REDIRECT_URI": "https://api.averages.io/auth/google/callback",
     "CANVA_REDIRECT_URI": "https://api.averages.io/canva/callback"
   },
-  // Backs "Sync Across Devices" plus the Projected-GPA history behind the
-  // weekly-report email's "vs last week" line — see src/sync.ts. Namespace
-  // created 2026-09-08 via `npx wrangler kv namespace create SYNC_KV`.
-  // TO DO: being replaced by a US-only Durable Object (see data-map.md).
-  "kv_namespaces": [
-    { "binding": "SYNC_KV", "id": "68503ced5e4d4a25ab14f85d98084cd2" }
-  ]
+  // Sync Across Devices: one SyncStore Durable Object per student (src/syncStore.ts).
+  // The code always opens them in the "us" jurisdiction, so the stored record
+  // and the code that reads it stay in the United States (PowerSchool terms
+  // §3.2.1). Replaced the SYNC_KV namespace on 2026-10-04; KV copied data
+  // to Cloudflare locations worldwide. SQLite-backed, which the Free plan supports.
+  "durable_objects": {
+    "bindings": [{ "name": "SYNC", "class_name": "SyncStore" }]
+  },
+  // One-time setup Cloudflare runs on the first deploy that includes SyncStore.
+  // Never edit or remove a tag once deployed; later changes get a new tag.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncStore"] }]
   // Allowed CORS origins and the session cookie's domain are hardcoded as
   // ALLOWED_ORIGINS/COOKIE_DOMAIN constants in src/index.ts rather than
   // living here as wrangler vars.
