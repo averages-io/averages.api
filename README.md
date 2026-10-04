@@ -1,132 +1,181 @@
-# schoolagy-api
+# averages.api
 
-Schoolagy's Schoology proxy — `api.schoolagy.io`. A Cloudflare Worker (Hono).
+The API behind [Averages.io](https://averages.io), a student-built companion app for your
+school's learning platform. It is a Cloudflare Worker written in TypeScript with
+[Hono](https://hono.dev).
 
-It exists for one non-negotiable reason: **OAuth-signed Schoology calls have to
-happen server-side.** The consumer secret can never be exposed to browser JS, so
-the browser talks to this Worker, and only this Worker talks to Schoology.
+The app never talks to Schoology directly. Every Schoology request has to be signed
+with OAuth, and the secret that signs it can never be handed to browser code. So the
+browser talks to this Worker, and only this Worker talks to Schoology.
+
+> **Naming:** the product is Averages.io. The Worker is still deployed as
+> `schoolagy-api` and still answers on `api.schoolagy.io`. Both move to
+> `api.averages.io` with the domain change; until then, don't rename the Worker,
+> the cookie, or any `schoolagy_*` storage key, or existing users lose their
+> sessions and settings.
 
 ---
 
-## Authentication model
+## What it does today
 
-Schoolagy uses **two-legged OAuth 1.0a** with **personal API keys**. The student
-generates their own key + secret at their school's Schoology `/api` page, and
-the app signs requests with it directly — the consumer and the user are the same
-account.
+| Part | Status |
+|---|---|
+| Sign in with a personal Schoology API key | Live |
+| Demo account (`demo` / `demo`) | Live |
+| `/data/bundle`: courses, grades, assignments and messages, already shaped for the app | Live |
+| Sync Across Devices | **Paused.** The old storage copied data outside the US and was deleted on 2026-10-01. Moving to a US-only Durable Object. |
+| Sign in through Schoology's App Center ("appAuth") | Planned, needed before public launch |
+| Google Classroom | Planned. OAuth client is set up; no code yet |
+| Canva | Built and tested, not yet merged into this repo |
+| Rate limiting | Planned |
 
-This matters because it means **no admin involvement and no App Center
-approval** are needed. Those are only required for three-legged OAuth, i.e. an
-app reading *other people's* accounts. (The "appAuth" button on the login screen
-is that future flow; `oauth.ts` already accepts a token + token secret so it can
-be reused unchanged when it arrives.)
+## How sign-in works
 
-Schoology expires OAuth1 tokens after 90 days, so expect users to re-key
-periodically.
+**Today: personal API keys.** A student creates their own key and secret on their
+school's Schoology `/api` page and signs in with them. The Worker checks them by
+calling Schoology as that student, so a typo fails at the login screen instead of
+producing an empty app. Requests use two-legged OAuth 1.0a: the key and the account
+are the same person, so no admin or App Center approval is involved. Schoology
+expires these keys after 90 days.
+
+**Next: appAuth.** Students sign in on Schoology's own page and approve Averages.io,
+instead of pasting a key. `oauth.ts` already accepts a token and token secret so the
+signing code carries over unchanged.
 
 ## Sessions
 
-On sign-in, the Worker verifies the key/secret by actually calling Schoology as
-that user, then seals `{key, secret, uid}` with AES-GCM into an opaque token
-delivered as an **httpOnly, Secure, SameSite=Lax cookie** on `.schoolagy.io`.
+After sign-in the Worker seals `{key, secret, uid}` with AES-GCM using
+`SESSION_SECRET` and sends it back as a cookie:
 
-- httpOnly means no JS — including ours — can read the credentials back out.
-- Encryption means the token is unreadable even if it leaks.
-- No database: nothing to breach, nothing to provision, no KV namespace needed.
+- **httpOnly:** no JavaScript, including the app's own, can read it.
+- **Secure, SameSite=Lax**, on `.schoolagy.io`, valid for 30 days.
+- **Sealed:** the token is unreadable and can't be edited even if it leaks.
 
-The tradeoff is that a session can't be individually revoked before it expires
-(30 days). For a personal-key beta that's a reasonable trade; if true revocation
-is ever needed, swap the sealed blob for a KV lookup key and delete on logout.
+The Worker keeps no copy. The tradeoff is that a session can't be cancelled early
+from the server; it lasts until it expires or the student signs out.
+
+## What gets stored
+
+- **Grades and schoolwork are never stored.** They pass through the Worker to the
+  browser on each request.
+- **Sync Across Devices** (off by default) stores one record per student, keyed by
+  their Schoology user ID: their Averages.io settings (name, photo, background,
+  colors, course nicknames) and, only if the Weekly Grade Summary email is also on,
+  at most two Projected GPA numbers (this week's and last week's). Turning sync off
+  deletes the record. This is paused until the US-only storage is ready.
+- **Nothing else.** No analytics, no tracking, no ads.
 
 ## Endpoints
 
-| Method | Path | Auth | Purpose |
+| Method | Path | Sign-in | What it does |
 |---|---|---|---|
-| `GET` | `/` | — | Health check |
-| `POST` | `/auth/session` | — | Sign in with `{key, secret}`; sets the session cookie |
-| `DELETE` | `/auth/session` | — | Sign out; clears the cookie |
-| `GET` | `/auth/me` | session | Current user |
-| `GET` | `/data/bundle` | session | Everything the app's pages render, already mapped into their shapes |
-| `GET` | `/schoology/*` | session | Signed read-only passthrough to any Schoology endpoint |
+| `GET` | `/` | | Health and setup check. Says whether `SESSION_SECRET` reaches the running Worker, never any part of it |
+| `POST` | `/auth/session` | | Sign in with `{key, secret}`; sets the session cookie |
+| `DELETE` | `/auth/session` | | Sign out; clears the cookie |
+| `GET` | `/auth/me` | yes | The signed-in student |
+| `GET` | `/data/bundle` | yes | Everything the app's pages show, in one call |
+| `GET` | `/sync/settings` | yes | Read the synced settings |
+| `PUT` | `/sync/settings` | yes | Save the synced settings (2 MB max) |
+| `DELETE` | `/sync/settings` | yes | Delete everything sync stored |
 
-`/data/bundle` is deliberately one call rather than one per page: Schoology is
-slow and rate-limited, and sections/grades/assignments are interdependent. The
-app caches it for five minutes.
+Demo sessions get `403 not_available_in_demo` on the sync routes.
 
-`/schoology/*` is **GET-only on purpose.** This beta has no reason to write to a
-student's Schoology account, and refusing writes entirely is a stronger
-guarantee than validating them.
+`/data/bundle` is one call on purpose: Schoology is slow and rate-limited, and
+sections, grades and assignments depend on each other. Every Schoology call gives up
+after 20 seconds.
 
-## Setup
+**There is no general Schoology passthrough.** An earlier `GET /schoology/*` route
+could relay any read from a student's account and was removed on 2026-09-15. Each new
+feature gets its own route with its own fixed Schoology calls.
+
+## Security notes
+
+- **CORS** only allows `https://app.schoolagy.io` and `https://schoolagy.io`.
+  `http://localhost:3000` is allowed only when the Worker itself is running locally.
+- **No secrets in the repo.** Everything secret is a Cloudflare secret (below).
+- **Found a security problem?** Please email help@averages.io instead of opening a
+  public issue.
+
+## Configuration
+
+**Secrets** (Worker → Settings → Variables and Secrets, type *Secret*, or
+`npx wrangler secret put NAME`):
+
+| Name | Used for |
+|---|---|
+| `SESSION_SECRET` | Seals session cookies. Required: without it sign-in returns 500 on purpose |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Classroom sign-in (planned) |
+| `CANVA_CLIENT_ID`, `CANVA_CLIENT_SECRET` | Canva (planned) |
+
+Make a `SESSION_SECRET` with:
+`node -e "console.log(crypto.randomUUID()+crypto.randomUUID())"`
+
+**Variables** (in `wrangler.jsonc`, not secret):
+
+| Name | Value |
+|---|---|
+| `GOOGLE_REDIRECT_URI` | `https://api.averages.io/auth/google/callback` |
+| `CANVA_REDIRECT_URI` | `https://api.averages.io/canva/callback` |
+
+Values entered under **Build** variables don't reach the running Worker. Use the
+runtime ones. If sign-in returns 500, open `/` on the Worker: it says whether
+`SESSION_SECRET` is set.
+
+**Local development:** put the same names in a `.dev.vars` file (already in
+`.gitignore`) and point the redirect addresses at `http://localhost:8787/...`.
+
+## Development
 
 ```bash
 npm install
-
-# Required. Seals session tokens — without it, sign-in returns 500 by design
-# rather than issuing sessions sealed with "undefined".
-npx wrangler secret put SESSION_SECRET     # paste a long random string
-
-npm test        # OAuth signing, session crypto, and data adapters
-npm run dev     # local, on :8787
-npm run deploy
+npm test          # OAuth signing, sessions, data adapters, sync
+npm run dev       # local Worker on http://localhost:8787
 ```
 
-Then attach `api.schoolagy.io` as a Custom Domain on the Worker.
-
-`ALLOWED_ORIGINS` and `COOKIE_DOMAIN` are plain vars in `wrangler.jsonc`; adjust
-them if the app is ever served from somewhere else.
-
-> Generate a secret with:
-> `node -e "console.log(crypto.randomUUID()+crypto.randomUUID())"`
+Cloudflare Workers Builds deploys `main` automatically: `npm run build`
+(a TypeScript check) and then `npx wrangler deploy`.
 
 ## Tests
 
-```bash
-npm test
-```
+No test framework and no build step: the modules run directly under Node's
+TypeScript support.
 
-No build step and no test framework — the modules import cleanly under Node's
-type stripping, so the suite runs directly.
+- **OAuth signing** is checked against the published OAuth 1.0 test vector
+  (RFC 5849, Appendix A.5.1), base string and signature. A wrong signature shows up
+  from Schoology as a bare `401` with no explanation, so it's pinned to a known-good
+  answer.
+- **Sessions:** the Schoology secret can't be read out of a token, edited or
+  wrong-key tokens are rejected, and expired ones fail.
+- **Adapters** run against realistic Schoology responses, including its quirks:
+  single results sent as a bare object instead of a list, two timestamp formats, and
+  excused work that must not pull a grade trend down.
+- **Sync:** records stay separate per student, the GPA snapshot never holds more
+  than two numbers, and the weekly email switch is read correctly.
 
-What's covered, and why each part is worth pinning:
-
-- **OAuth signing** is checked against the canonical published OAuth 1.0
-  Appendix A.5.1 test vector — base string and signature both. A wrong signature
-  surfaces as a bare `401` from Schoology with no explanation, which is close to
-  undebuggable from the outside, so it gets verified against a known-good vector
-  rather than "it seemed to work".
-- **Sessions** are checked for confidentiality (the Schoology secret must not be
-  readable in the token), integrity (tampering and wrong keys are rejected), and
-  expiry.
-- **Adapters** are checked against realistic Schoology payloads, including the
-  quirks: single results returned as bare objects instead of arrays, two
-  different timestamp formats, and excused work that must not drag a grade
-  trend down.
+The keys and secrets in the test files are the public example values from the
+OAuth spec and made-up strings, not real credentials.
 
 ---
 
 ## License
 
-**GNU Affero General Public License v3.0** — see [LICENSE](LICENSE).
+**GNU Affero General Public License v3.0.** See [LICENSE](LICENSE).
 
-In short: you're free to use, study, modify and share this code. The one
-condition that matters most is AGPL's network clause — **if you run a modified
-version as a public service, you have to make your modified source available to
-its users.**
+You're free to use, study, change and share this code. The condition that matters
+most is the AGPL's network clause: **if you run a changed version as a public
+service, you have to make your changed source available to its users.**
 
-That's a deliberate choice, not a default. Schoolagy tells students it never
-stores or sells their academic data, and the AGPL is what keeps that promise
-honest downstream: a fork can't quietly become a closed, tracking-laden version
-of the same app. Running your own instance, changing it, and sharing it are all
-explicitly fine — publishing your changes is the only ask.
+That's a deliberate choice. Averages.io promises students it never sells or tracks
+their schoolwork, and the AGPL keeps that promise true for forks too: a copy can't
+quietly become a closed version that does.
 
-## Trademark and affiliation
+## Trademarks and affiliation
 
-Schoolagy is an independent project. It is **not affiliated with, endorsed by, or
-sponsored by PowerSchool or Schoology**. Schoology is a trademark of PowerSchool
-Group LLC, used here only to describe the API this service talks to.
+Averages.io is an independent app made by a student. It is **not affiliated with,
+endorsed by, or sponsored by PowerSchool, Schoology, Google or Canva.** Schoology is
+a trademark of PowerSchool Group LLC; Google Classroom is a trademark of Google LLC;
+Canva is a trademark of Canva Pty Ltd. They are named here only to describe the
+services this code connects to.
 
-"Schoolagy", the Schoolagy name, logo and visual identity are **not** covered by
-this repository's license. The license grants rights to the code; it does not
-grant permission to use the project's name or branding. A fork is welcome — just
-give it your own name.
+The license covers the code, not the Averages.io name, logo or look. Forks are
+welcome under their own name.
