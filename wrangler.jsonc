@@ -5,8 +5,14 @@
   "compatibility_date": "2026-09-05",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
-    "enabled": true
+  "logs": {
+    "enabled": true,
+    "invocation_logs": true
   },
+  "traces": {
+    "enabled": false
+  }
+},
   // Where Google and Canva send students back after they sign in. Not secret
   // (they show in the address bar), so they live here instead of the dashboard.
   // For local testing, .dev.vars overrides these with the localhost addresses.
