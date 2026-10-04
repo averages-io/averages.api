@@ -18,7 +18,9 @@ import {
   saveSyncRecord,
   syncEnabledIn,
   weeklyGradeSummaryEnabledIn,
+  kvFromSyncStore,
   type KVLike,
+  type SyncStoreLike,
 } from "../src/sync.ts";
 
 let passed = 0;
@@ -258,6 +260,46 @@ console.log("\nweeklyGradeSummaryEnabledIn");
     "sync being on doesn't imply the email is on — the two are checked independently",
     !weeklyGradeSummaryEnabledIn({ syncAcrossDevices: true, settingsOptions: {} })
   );
+}
+
+// ---------------------------------------------------------------------------
+// kvFromSyncStore (2026-10-04): the per-student Durable Object (syncStore.ts),
+// wrapped as KVLike. A plain in-memory stand-in for the Durable Object, with
+// the same three methods syncStore.ts has.
+// ---------------------------------------------------------------------------
+function fakeStore(): SyncStoreLike & { data: Map<string, string> } {
+  const data = new Map<string, string>();
+  return {
+    data,
+    async getRecord(key) { return data.has(key) ? data.get(key)! : null; },
+    async putRecord(key, value) { data.set(key, value); },
+    async deleteRecord() { data.clear(); },
+  };
+}
+
+console.log("\nkvFromSyncStore (Durable Object storage)");
+{
+  const store = fakeStore();
+  const kv = kvFromSyncStore(() => store);
+  check("nothing saved yet reads as an empty record", await loadSyncRecord(kv, "77"), {
+    settings: null, gpaSnapshot: { current: null, previous: null }, updatedAt: "", settingsUpdatedAt: "",
+  });
+  const rec = { settings: { theme: "dark" }, gpaSnapshot: { current: null, previous: null }, updatedAt: "t1", settingsUpdatedAt: "t1" };
+  await saveSyncRecord(kv, "77", rec);
+  check("a saved record comes back exactly as written", await loadSyncRecord(kv, "77"), rec);
+  checkTrue("it's stored as a JSON string, same as KV was", typeof [...store.data.values()][0] === "string");
+  await deleteSyncRecord(kv, "77");
+  check("delete leaves nothing behind", store.data.size, 0);
+  store.data.set("sync:77", "{not json");
+  check("a damaged record reads as nothing saved instead of throwing", (await loadSyncRecord(kv, "77")).settings, null);
+}
+{
+  let opened = 0;
+  const kv = kvFromSyncStore(() => { opened++; throw new Error("SYNC binding missing"); });
+  check("making the wrapper doesn't touch the Durable Object yet", opened, 0);
+  let rejected = false;
+  await loadSyncRecord(kv, "77").catch(() => { rejected = true; });
+  checkTrue("a missing binding is a rejected promise (so /data/bundle's .catch keeps grades working), not a thrown error", rejected);
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
