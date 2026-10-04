@@ -32,8 +32,9 @@
  *
  * Deliberately shaped around a minimal KV-namespace-like interface
  * (`get`/`put`), not Hono-aware, so the logic here is unit-testable with a
- * plain in-memory fake — same reasoning as `domains.ts`. A real Cloudflare KV
- * binding satisfies `KVLike` as-is.
+ * plain in-memory fake. Since 2026-10-04 the real storage is a per-student
+ * Durable Object in the US (syncStore.ts), wrapped as `KVLike` by
+ * `kvFromSyncStore` below; this file's rules didn't change.
  *
  * Demo sessions never reach this module at all: every route in `index.ts`
  * checks `isDemoSession` first and refuses (403 `not_available_in_demo`)
@@ -100,6 +101,44 @@ export interface KVLike {
   get(key: string, type: "json"): Promise<unknown | null>;
   put(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
+}
+
+/** What sync.ts needs from the per-student Durable Object (see syncStore.ts). */
+export interface SyncStoreLike {
+  getRecord(key: string): Promise<string | null>;
+  putRecord(key: string, value: string): Promise<void>;
+  deleteRecord(key: string): Promise<void>;
+}
+
+/**
+ * Wraps a student's Durable Object (syncStore.ts) as the same `KVLike` shape
+ * the rest of this file was written against, so none of the sync rules had
+ * to change when storage moved off Workers KV (2026-10-04).
+ *
+ * `getStore` is called inside each method rather than up front on purpose:
+ * if the binding is missing or the object can't be reached, the error comes
+ * back as a rejected promise, which `/data/bundle`'s `.catch(() => null)`
+ * already handles, instead of a thrown error that would take the grades
+ * page down with it.
+ */
+export function kvFromSyncStore(getStore: () => SyncStoreLike): KVLike {
+  return {
+    async get(key) {
+      const raw = await getStore().getRecord(key);
+      if (raw === null) return null;
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null; // a damaged record reads as "nothing saved", same as KV did
+      }
+    },
+    async put(key, value) {
+      await getStore().putRecord(key, value);
+    },
+    async delete(key) {
+      await getStore().deleteRecord(key);
+    },
+  };
 }
 
 function syncKey(uid: string): string {

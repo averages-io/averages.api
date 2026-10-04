@@ -99,7 +99,13 @@ export const GPA_SCALE: Record<string, number> = {
  */
 export function computeProjectedGPA(courses: { predicted: string }[]): number {
   if (courses.length === 0) return 0;
-  const total = courses.reduce((sum, c) => sum + (GPA_SCALE[c.predicted] ?? 0), 0);
+  // `?? 0` alone isn't enough: `predicted` can come from Schoology data, and an
+  // inherited key like "constructor" resolves to a function, not undefined,
+  // which would turn the whole sum into NaN (security audit, 2026-09-15).
+  const total = courses.reduce((sum, c) => {
+    const points = Object.prototype.hasOwnProperty.call(GPA_SCALE, c.predicted) ? GPA_SCALE[c.predicted] : 0;
+    return sum + (typeof points === "number" ? points : 0);
+  }, 0);
   return Math.round((total / courses.length) * 100) / 100;
 }
 
@@ -378,13 +384,39 @@ export function adaptAssignments(
   return { OVERDUE, UPCOMING: UPCOMING.slice(0, 25), TODAY };
 }
 
+/**
+ * Schoology message bodies arrive as HTML (a teacher's rich-text editor
+ * produces <p>, <br>, entities). The app escapes everything it renders, so raw
+ * markup would show up as visible tags; this flattens it to plain text first
+ * (security audit, 2026-09-15).
+ *
+ * Order matters: tags are stripped BEFORE entities are decoded, and entities
+ * are decoded exactly one level, so someone who literally typed "&lt;script&gt;"
+ * ends up with the text "<script>", which the page then escapes on render.
+ */
+export function toPlainText(html: unknown): string {
+  const withBreaks = String(html ?? "").replace(/<\s*(br|\/p|\/div|\/li)\b[^>]*>/gi, " ");
+  const noTags = withBreaks.replace(/<[^>]*>/g, "");
+  const decoded = noTags.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, code: string) => {
+    if (code[0] === "#") {
+      const n = code[1].toLowerCase() === "x" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+      return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : whole;
+    }
+    const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+    return Object.prototype.hasOwnProperty.call(named, code.toLowerCase()) ? named[code.toLowerCase()] : whole;
+  });
+  return decoded.replace(/\s+/g, " ").trim();
+}
+
 export function adaptMessages(messages: Raw[]): Raw[] {
   return messages.slice(0, 25).map((message) => ({
     from: message?.author_name ?? message?.author_id ?? "Unknown sender",
     courseId: "",
-    preview: String(message?.message ?? message?.subject ?? "").slice(0, 140),
+    // Flattened before truncating, so the 140 characters are visible text and
+    // a long opening tag can't use them all up.
+    preview: toPlainText(message?.message ?? message?.subject ?? "").slice(0, 140),
     time: relativeTime(message?.last_updated ?? message?.created),
-    subject: message?.subject ?? "",
+    subject: toPlainText(message?.subject ?? ""),
     unread: String(message?.message_status ?? "").toLowerCase() === "unread",
     id: String(message?.id ?? ""),
   }));

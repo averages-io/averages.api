@@ -39,20 +39,58 @@ import {
   saveSyncRecord,
   syncEnabledIn,
   weeklyGradeSummaryEnabledIn,
+  kvFromSyncStore,
   type KVLike,
 } from "./sync.ts";
+import type { SyncStore } from "./syncStore.ts";
+
+// The Durable Object class has to be exported from the Worker's main module
+// for Cloudflare to find it (see wrangler.jsonc's durable_objects).
+export { SyncStore } from "./syncStore.ts";
 
 type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
   SESSION_SECRET: string;
   /**
-   * Backs "Sync Across Devices" and the Projected-GPA history behind the
-   * weekly-report email's "vs last week" line — see sync.ts. Provision with:
-   *   npx wrangler kv namespace create SYNC_KV
-   * then paste the returned id into wrangler.jsonc's kv_namespaces entry.
+   * Backs "Sync Across Devices" and the Projected-GPA snapshot behind the
+   * weekly-report email's "vs last week" line: one SyncStore Durable Object
+   * per student, always opened in the "us" jurisdiction (see syncKV below).
+   * Replaced the SYNC_KV namespace on 2026-10-04; KV copied data outside the US.
    */
-  SYNC_KV: KVLike;
+  SYNC: DurableObjectNamespace<SyncStore>;
 };
+
+/** True only when this Worker is being reached on localhost (`wrangler dev`). */
+function isLocalRequest(requestUrl: string): boolean {
+  try {
+    const { hostname } = new URL(requestUrl);
+    return hostname === "localhost" || hostname === "127.0.0.1";
+  } catch {
+    return false; // unparseable: treat as production, the safe default
+  }
+}
+
+/**
+ * This student's sync storage: their own SyncStore Durable Object, created in
+ * the "us" jurisdiction so the stored record and the code that reads it stay
+ * in the United States (PowerSchool developer terms §3.2.1).
+ *
+ * Local exception: Cloudflare's local runtime (workerd, every Wrangler
+ * version as of 2026-10-04) refuses jurisdictions outright ("Jurisdiction
+ * restrictions are not implemented in workerd"), so under `wrangler dev` on
+ * localhost the object is opened without one. That's decided from the
+ * request's own URL, the same way allowedOrigins() does it, so a deployed
+ * Worker can never take this path: it is never reached on localhost.
+ *
+ * The cast is only because the installed @cloudflare/workers-types predates
+ * the "us" jurisdiction (added June 2026); the runtime accepts it.
+ */
+function syncKV(env: Bindings, uid: string, requestUrl: string): KVLike {
+  return kvFromSyncStore(() => {
+    const ns = isLocalRequest(requestUrl) ? env.SYNC : env.SYNC.jurisdiction("us" as DurableObjectJurisdiction);
+    return ns.get(ns.idFromName(uid));
+  });
+}
 
 type Variables = {
   session: SessionData;
@@ -109,15 +147,9 @@ const MAX_SETTINGS_BYTES = 2 * 1024 * 1024;
  * local, which is exactly the `wrangler dev` case and never the deployed one.
  */
 function allowedOrigins(requestUrl: string): string[] {
-  let hostname = "";
-  try {
-    hostname = new URL(requestUrl).hostname;
-  } catch {
-    // Unparseable URL — fall through to the production list, which is the
-    // safe default. Never widen the allow-list on an error path.
-  }
-  const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
-  return isLocal ? [...ALLOWED_ORIGINS, DEV_ORIGIN] : ALLOWED_ORIGINS;
+  // An unparseable URL counts as production (see isLocalRequest), which is the
+  // safe default: never widen the allow-list on an error path.
+  return isLocalRequest(requestUrl) ? [...ALLOWED_ORIGINS, DEV_ORIGIN] : ALLOWED_ORIGINS;
 }
 
 app.use("*", async (c, next) => {
@@ -176,7 +208,7 @@ app.get("/", (c) => {
       secret.length > 0
         ? "Ready. SESSION_SECRET is set as a runtime secret."
         : "SESSION_SECRET is NOT reaching the Worker at runtime. Set it under the Worker's Settings -> Variables and Secrets (type: Secret), or run: npx wrangler secret put SESSION_SECRET. A value entered in Build settings does not count.",
-    docs: "https://github.com/Schoolagy",
+    docs: "https://github.com/averages-io/averages.api",
   });
 });
 
@@ -316,7 +348,7 @@ app.get("/sync/settings", requireSession, async (c) => {
   if (isDemo(session)) {
     return c.json({ error: "not_available_in_demo" }, 403);
   }
-  const record = await loadSyncRecord(c.env.SYNC_KV, session.uid);
+  const record = await loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
   return c.json(record);
 });
 
@@ -368,7 +400,7 @@ app.put("/sync/settings", requireSession, async (c) => {
   // sync.ts, added 2026-09-12) only means anything if turning the toggle
   // off actually makes Schoolagy stop holding the number, not just stop it
   // from updating further.
-  const existing = await loadSyncRecord(c.env.SYNC_KV, session.uid);
+  const existing = await loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
   const now = new Date().toISOString();
   const record = {
     ...existing,
@@ -382,7 +414,7 @@ app.put("/sync/settings", requireSession, async (c) => {
     // why settings.html's pull logic needs this separate from updatedAt.
     settingsUpdatedAt: now,
   };
-  await saveSyncRecord(c.env.SYNC_KV, session.uid, record);
+  await saveSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid, record);
   return c.json(record);
 });
 
@@ -405,7 +437,7 @@ app.delete("/sync/settings", requireSession, async (c) => {
   if (isDemo(session)) {
     return c.json({ error: "not_available_in_demo" }, 403);
   }
-  await deleteSyncRecord(c.env.SYNC_KV, session.uid);
+  await deleteSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
   return c.json({ ok: true });
 });
 
@@ -452,7 +484,7 @@ app.get("/data/bundle", requireSession, async (c) => {
       getSections(session.uid, session),
       getGrades(session.uid, session),
       getMessages("inbox", session).catch(() => null),
-      loadSyncRecord(c.env.SYNC_KV, session.uid).catch(() => null),
+      loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid).catch(() => null),
     ]);
 
     const { COURSES, HISTORY } = adaptCourses(sections, grades);
@@ -516,7 +548,7 @@ app.get("/data/bundle", requireSession, async (c) => {
       if (syncRecord && syncEnabledIn(syncRecord.settings) && weeklyGradeSummaryEnabledIn(syncRecord.settings)) {
         const snapshot = recordGpaSnapshot(syncRecord, projectedGPA);
         gpaVsLastWeek = snapshot.deltaVsLastWeek;
-        c.executionCtx.waitUntil(saveSyncRecord(c.env.SYNC_KV, session.uid, snapshot.record));
+        c.executionCtx.waitUntil(saveSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid, snapshot.record));
       }
     } catch {
       // Never let GPA-snapshot bookkeeping take the whole bundle down with it.
