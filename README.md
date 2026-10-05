@@ -26,8 +26,10 @@ browser talks to this Worker, and only this Worker talks to Schoology.
 | Sync Across Devices | Live, stored only in the US (one Durable Object per student) |
 | Sign in through Schoology's App Center ("appAuth") | Planned, needed before public launch |
 | Google Classroom | Planned. OAuth client is set up; no code yet |
-| Canva: connect, Edit in Canva, Drafts, designs list | Built (2026-10-05), stored only in the US; works for the developer's own Canva account until Canva reviews the app |
+| Canva: connect, Edit in Canva, Drafts, designs list | Built (2026-10-05), stored only in the US. Canva approved the integration (2026-10-05), so any student can connect |
 | Assignment details and attachment downloads | Built (2026-10-05) |
+| Course files (`/data/files`): every class's Materials documents and assignment attachments | Built (2026-10-05) |
+| Google Drive and OneDrive | Built (2026-10-05), entirely in the student's browser; the Worker only serves public app IDs |
 | Rate limiting | Planned |
 
 ## How sign-in works
@@ -94,7 +96,8 @@ from the server; it lasts until it expires or the student signs out.
 | `PUT` | `/sync/settings` | yes | Save the synced settings (2 MB max) |
 | `DELETE` | `/sync/settings` | yes | Delete everything sync stored |
 | `GET` | `/data/assignment?section=&id=` | yes | One assignment's description and attachments (file ids and names only, never download links) |
-| `GET` | `/data/attachment?section=&assignment=&file=` | yes | Download one attachment, streamed from Schoology |
+| `GET` | `/data/attachment?section=&assignment=&file=` | yes | Download one attachment, streamed from Schoology. `document=` instead of `assignment=` for a file a teacher posted in Materials |
+| `GET` | `/data/files` | yes | Every file in the student's classes (Materials documents and assignment attachments): ids, names, class, newest first, `partial: true` if a class didn't answer. No download paths |
 | `GET` | `/canva/status` | yes | Whether Canva is set up and connected, and the account name |
 | `GET` | `/canva/connect?return_to=` | yes | Starts connecting Canva (browser navigation) |
 | `GET` | `/canva/callback` | yes | Where Canva sends the student back after they allow access |
@@ -123,7 +126,7 @@ feature gets its own route with its own fixed Schoology calls.
   `http://localhost:3000` is allowed only when the Worker itself is running locally.
 - **No secrets in the repo.** Everything secret is a Cloudflare secret (below).
 - **Attachments:** the browser only ever sends ids. The Worker looks the file up on
-  that student's own assignment, signs the request only for `api.schoology.com`,
+  that student's own assignment (or Materials document), signs the request only for `api.schoology.com`,
   follows Schoology's redirect to its file storage itself (https only, without the
   signature), and refuses files over 25 MB for Canva.
 - **Canva:** PKCE with the state kept in the student's own Durable Object and used
@@ -175,7 +178,7 @@ Cloudflare's local runtime can't pin Durable Objects to the US, so on
 
 ```bash
 npm install
-npm test          # OAuth signing, sessions, data adapters, sync, Canva, cloud config
+npm test          # OAuth signing, sessions, data adapters, sync, Canva, cloud config, course files
 npm run dev       # local Worker on http://localhost:8787
 ```
 
@@ -204,6 +207,9 @@ TypeScript support.
   in flight, Return JWTs (bad signature, audience, type, expiry, unknown key), import
   polling and Canva's error codes, and attachment downloads (no signature sent off
   Schoology, size cap, no http redirects).
+- **Course files:** both of Schoology's attachment shapes, extensions kept on names,
+  non-numeric ids skipped, no download paths in the answer, the 1,000-file cap, and
+  `partial` when a class didn't answer.
 - **Cloud config:** `/config/cloud` serves IDs in the right shapes and leaves out
   anything that looks like a secret pasted into the wrong box.
 
