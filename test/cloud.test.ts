@@ -42,6 +42,20 @@ check(
   { google: { clientId: GOOGLE_ID, apiKey: null, appId: "123456789012" }, microsoft: null },
 );
 
+{
+  const DRIVE_ID = "123456789012-zyxwvutsrqponmlkjihgfedcba543210.apps.googleusercontent.com";
+  check(
+    "a separate Google Drive client wins over the sign-in client",
+    cloudConfig({ GOOGLE_CLIENT_ID: GOOGLE_ID, GOOGLE_DRIVE_CLIENT_ID: DRIVE_ID, GOOGLE_PICKER_API_KEY: API_KEY }).google,
+    { clientId: DRIVE_ID, apiKey: API_KEY, appId: "123456789012" },
+  );
+  check(
+    "a bad Google Drive client value falls back to the sign-in client",
+    cloudConfig({ GOOGLE_CLIENT_ID: GOOGLE_ID, GOOGLE_DRIVE_CLIENT_ID: "GOCSPX-" + "x".repeat(28) }).google?.clientId,
+    GOOGLE_ID,
+  );
+}
+
 check("surrounding spaces from pasting are trimmed", cloudConfig({ MS_CLIENT_ID: `  ${MS_ID}\n` }).microsoft, { clientId: MS_ID });
 check("a Microsoft ID in capitals is served in lower case", cloudConfig({ MS_CLIENT_ID: MS_ID.toUpperCase() }).microsoft, { clientId: MS_ID });
 
