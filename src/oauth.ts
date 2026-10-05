@@ -1,7 +1,7 @@
 /**
  * OAuth 1.0a request signing for the Schoology REST API.
  *
- * Schoolagy uses TWO-LEGGED OAuth: the user generates a personal API key +
+ * Averages.io uses TWO-LEGGED OAuth: the user generates a personal API key +
  * secret for their own account at `app.schoology.com/api`, and the app signs
  * requests with it directly. There is no request-token/access-token dance and
  * no `oauth_token` — per Schoology's own docs, "the consumer and the user are

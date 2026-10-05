@@ -1,5 +1,5 @@
 /**
- * Maps Schoology's API shapes into the exact data shapes Schoolagy's pages
+ * Maps Schoology's API shapes into the exact data shapes Averages.io's pages
  * already render.
  *
  * This is deliberately the ONLY place that knows about both sides. The pages

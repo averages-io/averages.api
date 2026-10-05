@@ -26,7 +26,7 @@
  *     months of GPA history as creepier than the feature it's for needs to
  *     be — and, separately, storage is now gated on the email toggle
  *     itself rather than on sync alone, so turning the email off (while
- *     leaving sync on for everything else) actually stops Schoolagy
+ *     leaving sync on for everything else) actually stops Averages.io
  *     recording a number for it, and `PUT /sync/settings` below clears
  *     whatever's already stored the moment a push shows the email is off.
  *

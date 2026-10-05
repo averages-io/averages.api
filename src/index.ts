@@ -145,7 +145,7 @@ const MAX_SETTINGS_BYTES = 2 * 1024 * 1024;
  * Schoology account — because the browser considers that origin allowed. It
  * was only ever there for local development, and local development doesn't
  * need it from production: the app's own API_BASE (see the app's
- * lib/schoolagy.ts) points a localhost app at a localhost Worker, not at
+ * lib/averages.ts) points a localhost app at a localhost Worker, not at
  * api.averages.io. So allow it only when the Worker answering is itself
  * local, which is exactly the `wrangler dev` case and never the deployed one.
  */
@@ -401,7 +401,7 @@ app.put("/sync/settings", requireSession, async (c) => {
   // clear the snapshot outright instead of leaving it to sit there unused.
   // Gating storage on the toggle (see weeklyGradeSummaryEnabledIn in
   // sync.ts, added 2026-09-12) only means anything if turning the toggle
-  // off actually makes Schoolagy stop holding the number, not just stop it
+  // off actually makes Averages.io stop holding the number, not just stop it
   // from updating further.
   const existing = await loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
   const now = new Date().toISOString();

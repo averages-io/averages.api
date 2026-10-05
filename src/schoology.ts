@@ -54,7 +54,7 @@ export async function schoologyGet<T = unknown>(
    * never trip it.
    *
    * Aborting is safe here in a way it was NOT for sign-out (see signOut in the
-   * app's lib/schoolagy.ts, where tearing down the request meant the clearing
+   * app's lib/averages.ts, where tearing down the request meant the clearing
    * Set-Cookie never arrived). These are GETs: nothing is left half-done.
    */
   let response: Response;
