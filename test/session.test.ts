@@ -12,6 +12,7 @@ import {
   clearSessionCookie,
   DEMO_UID,
   isDemoSession,
+  isIncognitoSession,
   openSession,
   readCookie,
   sealSession,
@@ -164,6 +165,15 @@ check(
 );
 check("absent cookie is null", readCookie("other=1", "schoolagy_session"), null);
 check("no header is null", readCookie(null, "schoolagy_session"), null);
+
+console.log("\nincognito (under 13)");
+{
+  const inc = await openSession(await sealSession({ ...CREDS, inc: true }, SECRET), SECRET);
+  checkTrue("an under-13 session opens with its Incognito flag", !!inc && isIncognitoSession(inc));
+  const normal = await openSession(await sealSession(CREDS, SECRET), SECRET);
+  check("a normal session isn't Incognito", !!normal && isIncognitoSession(normal), false);
+  check("only true counts (a stray value from old code doesn't)", isIncognitoSession({ inc: "yes" as unknown }), false);
+}
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
