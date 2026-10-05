@@ -164,6 +164,7 @@ Make a `SESSION_SECRET` with:
 | `GOOGLE_REDIRECT_URI` | `https://api.averages.io/auth/google/callback` |
 | `CANVA_REDIRECT_URI` | `https://api.averages.io/canva/callback` |
 | `MS_CLIENT_ID` | The Microsoft Entra app's Application (client) ID, for OneDrive. A public ID, no client secret (it's a single-page app registration) |
+| `GOOGLE_DRIVE_CLIENT_ID` | Optional. A separate Google OAuth client (same Google Cloud project) used only for Google Drive in the browser; its only setting is the JavaScript origin `https://app.averages.io`. Without it, Google Drive uses `GOOGLE_CLIENT_ID` |
 
 Values entered under **Build** variables don't reach the running Worker. Use the
 runtime ones. If sign-in returns 500, open `/` on the Worker: it says whether
