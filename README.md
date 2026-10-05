@@ -8,11 +8,11 @@ The app never talks to Schoology directly. Every Schoology request has to be sig
 with OAuth, and the secret that signs it can never be handed to browser code. So the
 browser talks to this Worker, and only this Worker talks to Schoology.
 
-> **Naming:** the product is Averages.io. The Worker is still deployed as
-> `schoolagy-api` and still answers on `api.schoolagy.io`. Both move to
-> `api.averages.io` with the domain change; until then, don't rename the Worker,
-> the cookie, or any `schoolagy_*` storage key, or existing users lose their
-> sessions and settings.
+> **Naming:** the product is Averages.io. The Worker is `averages-api` and answers on
+> `api.averages.io`, for the app at `app.averages.io` (moved from `schoolagy.io` on
+> 2026-10-05). Code that talks to Schoology may still say Schoolagy internally: the
+> session cookie is still named `schoolagy_session` and the app's storage keys are still
+> `schoolagy_*`. Don't rename those, or existing users lose their sessions and settings.
 
 ---
 
@@ -48,7 +48,7 @@ After sign-in the Worker seals `{key, secret, uid}` with AES-GCM using
 `SESSION_SECRET` and sends it back as a cookie:
 
 - **httpOnly:** no JavaScript, including the app's own, can read it.
-- **Secure, SameSite=Lax**, on `.schoolagy.io`, valid for 30 days.
+- **Secure, SameSite=Lax**, on `.averages.io`, valid for 30 days.
 - **Sealed:** the token is unreadable and can't be edited even if it leaks.
 
 The Worker keeps no copy. The tradeoff is that a session can't be cancelled early
@@ -93,7 +93,7 @@ feature gets its own route with its own fixed Schoology calls.
 
 ## Security notes
 
-- **CORS** only allows `https://app.schoolagy.io` and `https://schoolagy.io`.
+- **CORS** only allows `https://app.averages.io` and `https://averages.io`.
   `http://localhost:3000` is allowed only when the Worker itself is running locally.
 - **No secrets in the repo.** Everything secret is a Cloudflare secret (below).
 - **Found a security problem?** Please email help@averages.io instead of opening a

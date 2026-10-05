@@ -1,6 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "schoolagy-api",
+  // Must match the Worker in the Cloudflare dashboard (averages-api: it holds the
+  // secrets and the SYNC Durable Object). Renamed from schoolagy-api 2026-10-05.
+  "name": "averages-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-05",
   "compatibility_flags": ["nodejs_compat"],
