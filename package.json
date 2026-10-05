@@ -8,7 +8,7 @@
     "dev": "wrangler dev",
     "build": "tsc --noEmit",
     "deploy": "wrangler deploy",
-    "test": "node --experimental-strip-types test/oauth.test.ts && node --experimental-strip-types test/session.test.ts && node --experimental-strip-types test/adapt.test.ts && node --experimental-strip-types test/sync.test.ts && node --experimental-strip-types test/canva.test.ts && node --experimental-strip-types test/cloud.test.ts && node --experimental-strip-types test/files.test.ts"
+    "test": "node --experimental-strip-types test/oauth.test.ts && node --experimental-strip-types test/session.test.ts && node --experimental-strip-types test/adapt.test.ts && node --experimental-strip-types test/sync.test.ts && node --experimental-strip-types test/canva.test.ts && node --experimental-strip-types test/cloud.test.ts && node --experimental-strip-types test/files.test.ts && node --experimental-strip-types test/classroom.test.ts && node --experimental-strip-types --import ./test/cf-loader.mjs test/google.test.ts"
   },
   "dependencies": {
     "hono": "^4.6.14"

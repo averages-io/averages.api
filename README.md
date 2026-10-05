@@ -4,9 +4,10 @@ The API behind [Averages.io](https://averages.io), a student-built companion app
 school's learning platform. It is a Cloudflare Worker written in TypeScript with
 [Hono](https://hono.dev).
 
-The app never talks to Schoology directly. Every Schoology request has to be signed
-with OAuth, and the secret that signs it can never be handed to browser code. So the
-browser talks to this Worker, and only this Worker talks to Schoology.
+The app never talks to Schoology or Google Classroom directly. Every Schoology request
+has to be signed with OAuth, and the secrets behind both sign-ins can never be handed to
+browser code. So the browser talks to this Worker, and only this Worker talks to
+Schoology and Classroom.
 
 > **Naming:** the product is Averages.io. The Worker is `averages-api` and answers on
 > `api.averages.io`, for the app at `app.averages.io` (moved from `schoolagy.io` on
@@ -25,7 +26,7 @@ browser talks to this Worker, and only this Worker talks to Schoology.
 | `/data/bundle`: courses, grades, assignments and messages, already shaped for the app | Live |
 | Sync Across Devices | Live, stored only in the US (one Durable Object per student) |
 | Sign in through Schoology's App Center ("appAuth") | Planned, needed before public launch |
-| Google Classroom | Planned. OAuth client is set up; no code yet |
+| Sign in with Google, for Google Classroom: classes, grades, coursework, announcements, class files (Drive links) | Built (2026-10-05). Read-only; nothing stored. Turning in happens on Classroom itself |
 | Canva: connect, Edit in Canva, Drafts, designs list | Built (2026-10-05), stored only in the US. Canva approved the integration (2026-10-05), so any student can connect |
 | Assignment details and attachment downloads | Built (2026-10-05) |
 | Course files (`/data/files`): every class's Materials documents and assignment attachments | Built (2026-10-05) |
@@ -41,14 +42,33 @@ producing an empty app. Requests use two-legged OAuth 1.0a: the key and the acco
 are the same person, so no admin or App Center approval is involved. Schoology
 expires these keys after 90 days.
 
+**Google Classroom (2026-10-05).** "Continue with Google" sends the browser to
+`/auth/google/start`, which sends it on to Google's consent screen with a random
+`state` and a PKCE challenge (both kept in a sealed 10-minute cookie only
+`/auth/google` sees). Google sends it back to `/auth/google/callback`; the state must
+match that cookie, the code is traded for tokens with the client secret, and the
+permissions the student actually ticked are checked (classes and coursework are
+required; announcements and class materials are optional). The tokens are sealed into
+the same session cookie as a Schoology sign-in, and the browser goes back to the login
+page with `?google=ok` (or `cancelled`, `permissions`, `expired`, `failed`,
+`unavailable`). All Classroom permissions are read-only:
+`classroom.courses.readonly`, `classroom.coursework.me.readonly`,
+`classroom.courseworkmaterials.readonly`, `classroom.announcements.readonly`, plus
+`openid email profile`.
+
+Classroom's API only lets an app turn in work that the same app created, so students
+turn work in on Classroom; the app shows the status and links there.
+
 **Next: appAuth.** Students sign in on Schoology's own page and approve Averages.io,
 instead of pasting a key. `oauth.ts` already accepts a token and token secret so the
 signing code carries over unchanged.
 
 ## Sessions
 
-After sign-in the Worker seals `{key, secret, uid}` with AES-GCM using
-`SESSION_SECRET` and sends it back as a cookie:
+After sign-in the Worker seals `{key, secret, uid}` (or, for Google, the account id
+plus the Google access and refresh tokens, name, email and picture; the Schoology key
+and secret are then always blank) with AES-GCM using `SESSION_SECRET` and sends it back
+as a cookie:
 
 - **httpOnly:** no JavaScript, including the app's own, can read it.
 - **Secure, SameSite=Lax**, on `.averages.io`, valid for 30 days.
@@ -56,6 +76,14 @@ After sign-in the Worker seals `{key, secret, uid}` with AES-GCM using
 
 The Worker keeps no copy. The tradeoff is that a session can't be cancelled early
 from the server; it lasts until it expires or the student signs out.
+
+A Google access token lasts an hour. After that the Worker gets a new one with the
+refresh token and keeps it in a second sealed cookie, `averages_google_access`
+(httpOnly, host-only on `api.averages.io`, an hour), tied to that one session. The
+session cookie itself is never rewritten, so a session still ends 30 days after sign-in,
+and a request that was refreshing while the student signed out can't sign them back in.
+If the student removes Averages.io's access in their Google account, the next request
+signs them out.
 
 ## What gets stored
 
@@ -77,6 +105,10 @@ from the server; it lasts until it expires or the student signs out.
   jurisdiction, separate from Sync (turning Sync off doesn't disconnect Canva).
   Disconnect deletes all of it. Their designs live in their own Canva account;
   attachment files pass through the Worker on their way to Canva and aren't kept.
+- **Google Classroom: nothing.** Classes, coursework, grades and announcements are
+  read with the student's own token on each request and passed to the browser.
+  Class files stay in Google Drive: the app gets their Drive links, and nothing is
+  downloaded through the Worker.
 - **Google Drive and OneDrive: nothing.** Both connect straight from the
   student's browser to Google or Microsoft. Their tokens stay in that browser tab
   and never reach this Worker; the Worker only serves the public app IDs
@@ -90,14 +122,16 @@ from the server; it lasts until it expires or the student signs out.
 | `GET` | `/` | | Health and setup check. Says whether `SESSION_SECRET` reaches the running Worker, never any part of it |
 | `POST` | `/auth/session` | | Sign in with `{key, secret}`; sets the session cookie |
 | `DELETE` | `/auth/session` | | Sign out; clears the cookie |
-| `GET` | `/auth/me` | yes | The signed-in student |
-| `GET` | `/data/bundle` | yes | Everything the app's pages show, in one call |
+| `GET` | `/auth/google/start?under13=` | | Sign in with Google (browser navigation): sets the 10-minute state cookie and sends the browser to Google. `under13` is the login page's 13+ box; anything but `0` seals Incognito in |
+| `GET` | `/auth/google/callback` | | Where Google sends the student back; sets the session cookie and returns to the login page with `?google=<outcome>` |
+| `GET` | `/auth/me` | yes | The signed-in student (`provider`: `schoology` or `google`) |
+| `GET` | `/data/bundle?tz=` | yes | Everything the app's pages show, in one call. For Google Classroom, `tz` (the device's time zone) puts UTC due dates on the right day, and the bundle also carries `platform: "classroom"`, `SUBMITTED`, `RECENT_GRADES`, `COURSE_UPDATES` (announcements) and `GRADEBOOK` |
 | `GET` | `/sync/settings` | yes | Read the synced settings |
 | `PUT` | `/sync/settings` | yes | Save the synced settings (2 MB max) |
 | `DELETE` | `/sync/settings` | yes | Delete everything sync stored |
-| `GET` | `/data/assignment?section=&id=` | yes | One assignment's description and attachments (file ids and names only, never download links) |
+| `GET` | `/data/assignment?section=&id=` | yes | One assignment's description and attachments (file ids and names only, never download links). Classroom: materials as links (Drive, YouTube, Forms, web), the student's submission state and grade, and the Classroom link to turn it in |
 | `GET` | `/data/attachment?section=&assignment=&file=` | yes | Download one attachment, streamed from Schoology. `document=` instead of `assignment=` for a file a teacher posted in Materials |
-| `GET` | `/data/files` | yes | Every file in the student's classes (Materials documents and assignment attachments): ids, names, class, newest first, `partial: true` if a class didn't answer. No download paths |
+| `GET` | `/data/files` | yes | Every file in the student's classes (Materials documents and assignment attachments): ids, names, class, newest first, `partial: true` if a class didn't answer. No download paths. Classroom: the Google Drive files posted in class materials and assignments, with their Drive links |
 | `GET` | `/canva/status` | yes | Whether Canva is set up and connected, and the account name |
 | `GET` | `/canva/connect?return_to=` | yes | Starts connecting Canva (browser navigation) |
 | `GET` | `/canva/callback` | yes | Where Canva sends the student back after they allow access |
@@ -111,10 +145,20 @@ from the server; it lasts until it expires or the student signs out.
 | `GET` | `/config/cloud` | | Public IDs the app needs to connect Google Drive and OneDrive in the browser (`null` for anything not set up) |
 
 Demo sessions get `403 not_available_in_demo` on the sync, assignment and Canva routes.
+Google sessions get `404 classroom_files_open_in_drive` from `/data/attachment` and
+`403 classroom_not_supported` from `/canva/edit` (their files are in Google Drive).
 
 `/data/bundle` is one call on purpose: Schoology is slow and rate-limited, and
 sections, grades and assignments depend on each other. Every Schoology call gives up
 after 20 seconds.
+
+For Classroom it reads up to 12 classes: each class's coursework, the student's own
+submissions and recent announcements, with `fields=` so only what's needed comes back.
+Cloudflare's Free plan allows 50 outside calls per request, so Classroom calls are
+capped at 42: every class's first page comes first, then more pages while calls are
+left (`partial: true` when something was cut). Work whose submission didn't arrive is
+never called missing. A teacher who hides the overall grade in Classroom hides it here
+too; weighted categories are averaged the way Classroom does it.
 
 **There is no general Schoology passthrough.** An earlier `GET /schoology/*` route
 could relay any read from a student's account and was removed on 2026-09-15. Each new
@@ -134,6 +178,14 @@ feature gets its own route with its own fixed Schoology calls.
   the Return JWT's Ed25519 signature, audience, type and expiry are checked; every
   redirect goes to a fixed app origin plus a checked path. POSTs must be JSON from an
   allowed Origin, so another page can't trigger them.
+- **Google sign-in:** the state is 256 bits, sealed in its own cookie under a
+  different key from sessions, compared in constant time and used once; PKCE (S256)
+  on top; the callback URL is pinned; every redirect goes to the fixed app origin
+  with a fixed outcome word, with `Referrer-Policy: no-referrer`. The ID token comes
+  straight from Google's token endpoint over HTTPS, so (as OpenID Connect allows) its
+  signature isn't re-checked, but issuer, audience and expiry are. Classroom ids are
+  digits only before they reach a URL, and only http(s) links (Classroom links only
+  for "Turn in") reach the app.
 - **`/config/cloud`** only serves values that look like the public ID they're
   meant to be (a Google client ID, an `AIza…` API key, a project number, a
   Microsoft GUID). If a secret were ever pasted into one of those boxes, it's left
@@ -149,7 +201,7 @@ feature gets its own route with its own fixed Schoology calls.
 | Name | Used for |
 |---|---|
 | `SESSION_SECRET` | Seals session cookies. Required: without it sign-in returns 500 on purpose |
-| `GOOGLE_CLIENT_SECRET` | Google Classroom sign-in (planned) |
+| `GOOGLE_CLIENT_SECRET` | Sign in with Google (Google Classroom). Without it the Google button says sign-in isn't switched on yet |
 | `CANVA_CLIENT_SECRET` | Canva Connect app secret (Developer Portal). Without it Canva reports "not set up" |
 | `GOOGLE_PICKER_API_KEY` | Google Cloud API key for "Add from Google Drive". **Must** be restricted to `https://app.averages.io/*` and the Google Picker API: it's served publicly, and `/config/cloud` can't tell a restricted key from an unrestricted one |
 | `GOOGLE_PROJECT_NUMBER` | Optional. The Google Cloud project number the Picker needs; without it, the number at the start of `GOOGLE_CLIENT_ID` is used |
@@ -161,7 +213,7 @@ Make a `SESSION_SECRET` with:
 
 | Name | Value |
 |---|---|
-| `GOOGLE_CLIENT_ID` | The Google OAuth client: Classroom sign-in (planned) and Google Drive in the browser |
+| `GOOGLE_CLIENT_ID` | The Google OAuth client: Sign in with Google (Classroom) and Google Drive in the browser |
 | `CANVA_CLIENT_ID` | The Canva Connect integration's client ID |
 | `GOOGLE_REDIRECT_URI` | `https://api.averages.io/auth/google/callback` |
 | `CANVA_REDIRECT_URI` | `https://api.averages.io/canva/callback` |
@@ -184,7 +236,7 @@ Cloudflare's local runtime can't pin Durable Objects to the US, so on
 
 ```bash
 npm install
-npm test          # OAuth signing, sessions, data adapters, sync, Canva, cloud config, course files
+npm test          # OAuth signing, sessions, data adapters, sync, Canva, cloud config, course files, Google Classroom
 npm run dev       # local Worker on http://localhost:8787
 ```
 
@@ -218,6 +270,17 @@ TypeScript support.
   `partial` when a class didn't answer.
 - **Cloud config:** `/config/cloud` serves IDs in the right shapes and leaves out
   anything that looks like a secret pasted into the wrong box.
+- **Google Classroom** (`classroom.test.ts`): due dates in the student's time zone
+  (including half-hour zones), total-points and weighted grades (empty categories
+  left out, uncategorized work not counted, hidden overall grades), Missing only when
+  the submission is known, announcements, recent grades, the gradebook, materials as
+  safe links, Drive files, and the sign-in helpers (granted scopes, ID token checks).
+- **Google sign-in routes** (`google.test.ts`) run the real Worker in Node with
+  Google faked (`test/cf-loader.mjs` stands in for `cloudflare:workers`): state and
+  PKCE, cancelled/expired/forged sign-ins, missing permissions, under-13 Incognito,
+  the session's contents, token refresh into its own cookie, revoked access, Classroom
+  errors, Schoology-only routes refusing a Google session, forged sessions, and the
+  42-call budget.
 
 The keys and secrets in the test files are the public example values from the
 OAuth spec and made-up strings, not real credentials.
