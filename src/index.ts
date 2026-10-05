@@ -16,6 +16,7 @@ import {
   clearSessionCookie,
   DEMO_UID,
   isDemoSession as isDemo,
+  isIncognitoSession as isIncognito,
   openSession,
   readCookie,
   sealSession,
@@ -283,7 +284,7 @@ app.get("/", (c) => {
  * silently producing an app full of empty pages.
  */
 app.post("/auth/session", async (c) => {
-  let body: { key?: string; secret?: string };
+  let body: { key?: string; secret?: string; under13?: unknown };
   try {
     body = await c.req.json();
   } catch {
@@ -334,7 +335,10 @@ app.post("/auth/session", async (c) => {
       return c.json({ error: "no_user_id" }, 502);
     }
 
-    const token = await sealSession({ key, secret, uid }, c.env.SESSION_SECRET);
+    // Under 13 (the login page's 13+ box left unticked): Incognito only, sealed
+    // into the session so nothing stored on our servers can be turned on.
+    const under13 = body.under13 === true;
+    const token = await sealSession(under13 ? { key, secret, uid, inc: true } : { key, secret, uid }, c.env.SESSION_SECRET);
     c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
 
     return c.json({
@@ -387,6 +391,7 @@ app.get("/auth/me", requireSession, async (c) => {
       firstName: me.name_first ?? "",
       email: me.primary_email ?? "",
       pictureUrl: me.picture_url ?? "",
+      incognito: isIncognito(session),
     });
   } catch {
     return c.json({ error: "schoology_unreachable" }, 502);
@@ -411,6 +416,7 @@ app.get("/sync/settings", requireSession, async (c) => {
   if (isDemo(session)) {
     return c.json({ error: "not_available_in_demo" }, 403);
   }
+  if (isIncognito(session)) return c.json({ error: "incognito_mode" }, 403);
   const record = await loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
   return c.json(record);
 });
@@ -420,6 +426,8 @@ app.put("/sync/settings", requireSession, async (c) => {
   if (isDemo(session)) {
     return c.json({ error: "not_available_in_demo" }, 403);
   }
+  // Incognito stores nothing on our servers. (DELETE stays allowed: deleting is always fine.)
+  if (isIncognito(session)) return c.json({ error: "incognito_mode" }, 403);
 
   let body: { settings?: unknown };
   try {
@@ -547,7 +555,7 @@ app.get("/data/bundle", requireSession, async (c) => {
       getSections(session.uid, session),
       getGrades(session.uid, session),
       getMessages("inbox", session).catch(() => null),
-      loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid).catch(() => null),
+      isIncognito(session) ? null : loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid).catch(() => null),
     ]);
 
     const { COURSES, HISTORY } = adaptCourses(sections, grades);
@@ -687,6 +695,7 @@ function canvaFailure(c: any, error: unknown, fallback = "canva_failed") {
 /** Demo and unconfigured checks shared by the JSON Canva routes. Returns a response to send, or null to continue. */
 function canvaGuard(c: any) {
   if (isDemo(c.get("session"))) return c.json({ error: "not_available_in_demo" }, 403);
+  if (isIncognito(c.get("session"))) return c.json({ error: "incognito_mode" }, 403);
   if (!canvaConfigured(c.env)) return c.json({ error: "canva_not_configured" }, 503);
   return null;
 }
@@ -851,6 +860,7 @@ app.get("/config/cloud", (c) => {
 app.get("/canva/status", requireSession, async (c) => {
   if (isDemo(c.get("session"))) return c.json({ error: "not_available_in_demo" }, 403);
   c.header("Cache-Control", "private, no-store");
+  if (isIncognito(c.get("session"))) return c.json({ configured: canvaConfigured(c.env), connected: false, name: "", incognito: true });
   if (!canvaConfigured(c.env)) return c.json({ configured: false, connected: false, name: "" });
   try {
     const status = await canvaStore(c.env, c.get("session").uid, c.req.url).status(c.get("session").uid);
@@ -865,6 +875,7 @@ app.get("/canva/connect", async (c) => {
   const origin = appOrigin(c.req.url);
   const session = await sessionFrom(c);
   if (!session || isDemo(session)) return c.redirect(`${origin}/`);
+  if (isIncognito(session)) return c.redirect(`${origin}/settings?canva=incognito`);
   const returnTo = safeAppPath(c.req.query("return_to"), "/settings");
   try {
     return c.redirect(await canvaStore(c.env, session.uid, c.req.url).beginConnect(returnTo));
@@ -879,6 +890,7 @@ app.get("/canva/callback", async (c) => {
   const origin = appOrigin(c.req.url);
   const session = await sessionFrom(c);
   if (!session || isDemo(session)) return c.redirect(`${origin}/`);
+  if (isIncognito(session)) return c.redirect(`${origin}/settings?canva=incognito`);
   if (c.req.query("error")) return c.redirect(`${origin}/settings?canva=cancelled`);
   try {
     const returnTo = await canvaStore(c.env, session.uid, c.req.url).finishConnect(

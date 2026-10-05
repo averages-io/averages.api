@@ -26,6 +26,13 @@ export interface SessionData extends Credentials {
   uid: string;
   /** Unix seconds. Checked on every request. */
   exp: number;
+  /**
+   * Incognito (2026-10-05): set when the student signed in saying they're
+   * under 13. Such a session can't use anything that stores data on our
+   * servers (Sync Across Devices, Canva). Sealed in, so it can't be changed
+   * without signing in again.
+   */
+  inc?: true;
 }
 
 /**
@@ -42,6 +49,11 @@ export const DEMO_UID = "__demo__";
 
 export function isDemoSession(session: { uid: string }): boolean {
   return session.uid === DEMO_UID;
+}
+
+/** True for a session signed in as under 13 (Incognito only). */
+export function isIncognitoSession(session: { inc?: unknown }): boolean {
+  return session.inc === true;
 }
 
 function b64urlEncode(bytes: Uint8Array): string {
