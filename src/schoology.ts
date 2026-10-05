@@ -147,3 +147,130 @@ export async function getMessages(
   const payload = await schoologyGet(`/messages/${folder}`, creds);
   return listOf(payload, "message");
 }
+
+/**
+ * One assignment with its attachments (description, files, links). Used by
+ * the assignment page and by Edit in Canva, which re-reads the assignment
+ * itself rather than trusting a file URL from the browser: the only files it
+ * will ever download are ones Schoology lists on that student's assignment.
+ */
+export async function getAssignment(sectionId: string, assignmentId: string, creds: Credentials) {
+  return schoologyGet<Record<string, any>>(`/sections/${sectionId}/assignments/${assignmentId}`, creds, {
+    with_attachments: "true",
+  });
+}
+
+/** True for an https URL on Schoology's API host, the only place a signed request may go. */
+export function isSchoologyApiUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" && u.hostname === "api.schoology.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reads a response body, stopping (and failing) as soon as it passes
+ * `maxBytes`. When the size is announced up front, the bytes go straight into
+ * one buffer of that size, so a big file isn't held twice in memory.
+ */
+async function readCapped(res: Response, maxBytes: number): Promise<ArrayBuffer> {
+  if (!res.body) return new ArrayBuffer(0);
+  const reader = res.body.getReader();
+  const declared = Number(res.headers.get("Content-Length") ?? 0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  if (declared > 0 && declared <= maxBytes) {
+    const out = new Uint8Array(declared);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return total === declared ? out.buffer : out.slice(0, total).buffer;
+      if (total + value.byteLength > declared) {
+        // More than announced (a decompressed body, say): carry on the slow way.
+        chunks.push(out.slice(0, total));
+        chunks.push(value);
+        total += value.byteLength;
+        break;
+      }
+      out.set(value, total);
+      total += value.byteLength;
+    }
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new SchoologyError("Attachment is too large", 413);
+    }
+  }
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new SchoologyError("Attachment is too large", 413);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.byteLength;
+  }
+  return out.buffer;
+}
+
+/**
+ * Opens an attachment for the signed-in student and returns Schoology's final
+ * response (body not read yet), for streaming or reading.
+ *
+ * `downloadPath` must come from Schoology's own assignment response (never
+ * from the browser) and must be on api.schoology.com, the only host our OAuth
+ * signature is ever sent to. Schoology answers with a redirect to its file
+ * storage; that's followed by hand (https only, at most 3 hops) so the
+ * Authorization header is never forwarded to another host.
+ */
+export async function openAttachment(downloadPath: string, creds: Credentials): Promise<Response> {
+  if (!isSchoologyApiUrl(downloadPath)) {
+    throw new SchoologyError("Attachment is not on api.schoology.com", 400);
+  }
+  const get = async (url: string) => {
+    const headers: Record<string, string> = {};
+    if (isSchoologyApiUrl(url)) headers.Authorization = await buildAuthHeader("GET", url, creds);
+    try {
+      return await fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+    } catch (error) {
+      const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+      throw new SchoologyError(timedOut ? "Attachment download timed out" : "Could not download the attachment", timedOut ? 504 : 503);
+    }
+  };
+
+  let url = downloadPath;
+  let res = await get(url);
+  for (let hop = 0; hop < 3 && res.status >= 300 && res.status < 400; hop++) {
+    const location = res.headers.get("Location");
+    if (!location) break;
+    const next = new URL(location, url);
+    if (next.protocol !== "https:") throw new SchoologyError("Attachment redirect is not https", 502);
+    url = next.toString();
+    res = await get(url);
+  }
+  if (!res.ok) {
+    throw new SchoologyError(`Schoology returned ${res.status} for an attachment`, res.status);
+  }
+  return res;
+}
+
+/** An attachment's bytes (for Edit in Canva), refused past `maxBytes`. */
+export async function downloadAttachment(
+  downloadPath: string,
+  creds: Credentials,
+  maxBytes: number
+): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  const res = await openAttachment(downloadPath, creds);
+  const declared = Number(res.headers.get("Content-Length") ?? 0);
+  if (declared > maxBytes) throw new SchoologyError("Attachment is too large", 413);
+  const bytes = await readCapped(res, maxBytes);
+  const contentType = (res.headers.get("Content-Type") ?? "").split(";")[0].trim();
+  return { bytes, contentType };
+}

@@ -421,3 +421,83 @@ export function adaptMessages(messages: Raw[]): Raw[] {
     id: String(message?.id ?? ""),
   }));
 }
+
+export interface AttachmentFile {
+  id: string;
+  name: string;
+  ext: string;
+  /** Bytes; 0 when Schoology doesn't say. */
+  size: number;
+}
+
+export interface AssignmentDetail {
+  id: string;
+  sectionId: string;
+  title: string;
+  description: string;
+  due: string;
+  type: string;
+  files: AttachmentFile[];
+  links: { title: string; url: string }[];
+}
+
+/**
+ * Schoology nests list-ish things two ways depending on the endpoint:
+ * `files: [...]` or `files: { file: [...] }` (and a bare object for one).
+ */
+function nestedList(container: unknown, inner: string): Raw[] {
+  if (Array.isArray(container)) return container as Raw[];
+  if (container && typeof container === "object") {
+    const value = (container as Raw)[inner];
+    if (value !== undefined) return asArray(value);
+  }
+  return [];
+}
+
+function extOf(name: string): string {
+  const m = name.toLowerCase().match(/\.([a-z0-9]{1,8})$/);
+  return m ? m[1] : "";
+}
+
+/**
+ * The assignment page's description and Attached Materials. Download paths
+ * are deliberately NOT included: the browser only ever gets a file's id, and
+ * the Worker looks the real path up again when a file is opened in Canva.
+ */
+export function adaptAssignmentDetail(raw: Raw, sectionId: string): AssignmentDetail {
+  const attachments = raw?.attachments ?? {};
+  const files = nestedList(attachments?.files, "file")
+    .map((f) => {
+      const filename = String(f?.filename ?? f?.title ?? "");
+      const name = Array.from(String(f?.title || filename || "File")).slice(0, 255).join(""); // never cut an emoji in half
+      const ext = String(f?.extension ?? "").toLowerCase().replace(/^\./, "") || extOf(filename) || extOf(name);
+      return { id: String(f?.id ?? ""), name, ext, size: num(f?.filesize) ?? 0 };
+    })
+    .filter((f) => f.id);
+  const links = nestedList(attachments?.links, "link")
+    .map((l) => ({ title: toPlainText(l?.title ?? l?.url ?? "Link").slice(0, 255), url: String(l?.url ?? "") }))
+    .filter((l) => /^https?:\/\//i.test(l.url));
+  return {
+    id: String(raw?.id ?? ""),
+    sectionId,
+    title: toPlainText(raw?.title ?? "Untitled"),
+    description: toPlainText(raw?.description ?? ""),
+    due: formatDue(raw?.due),
+    type: TYPE_MAP[String(raw?.type ?? "").toLowerCase()] ?? "assignment",
+    files,
+    links,
+  };
+}
+
+/** The raw file entry for an attachment id, with its Schoology download path (Worker only). */
+export function findAttachment(raw: Raw, fileId: string): { name: string; downloadPath: string; size: number } | null {
+  for (const f of nestedList(raw?.attachments?.files, "file")) {
+    if (String(f?.id ?? "") !== fileId) continue;
+    const filename = String(f?.filename ?? f?.title ?? "file");
+    const title = String(f?.title || "");
+    // Keep the real extension on the name Canva sees, even when the title has none.
+    const name = title && extOf(title) ? title : title ? `${title}${extOf(filename) ? "." + extOf(filename) : ""}` : filename;
+    return { name: Array.from(name).slice(0, 255).join(""), downloadPath: String(f?.download_path ?? ""), size: num(f?.filesize) ?? 0 };
+  }
+  return null;
+}

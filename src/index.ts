@@ -24,6 +24,9 @@ import {
   type SessionData,
 } from "./session.ts";
 import {
+  downloadAttachment,
+  getAssignment,
+  openAttachment,
   getAssignments,
   getGrades,
   getMe,
@@ -31,7 +34,31 @@ import {
   getSections,
   SchoologyError,
 } from "./schoology.ts";
-import { adaptAssignments, adaptCourses, adaptMessages, computeProjectedGPA } from "./adapt.ts";
+import {
+  adaptAssignmentDetail,
+  adaptAssignments,
+  adaptCourses,
+  adaptMessages,
+  computeProjectedGPA,
+  findAttachment,
+} from "./adapt.ts";
+import {
+  canvaConfigured,
+  editUrlWithCorrelation,
+  findDesignByTitle,
+  getDesign,
+  importFile,
+  importTitle,
+  listDesigns,
+  MAX_IMPORT_BYTES,
+  mimeForName,
+  safeAppPath,
+  statusForCode,
+  verifyReturnJwt,
+  withQuery,
+  type DesignInfo,
+  type Draft,
+} from "./canva.ts";
 import {
   deleteSyncRecord,
   loadSyncRecord,
@@ -43,10 +70,12 @@ import {
   type KVLike,
 } from "./sync.ts";
 import type { SyncStore } from "./syncStore.ts";
+import type { CanvaStore } from "./canvaStore.ts";
 
-// The Durable Object class has to be exported from the Worker's main module
-// for Cloudflare to find it (see wrangler.jsonc's durable_objects).
+// The Durable Object classes have to be exported from the Worker's main module
+// for Cloudflare to find them (see wrangler.jsonc's durable_objects).
 export { SyncStore } from "./syncStore.ts";
+export { CanvaStore } from "./canvaStore.ts";
 
 type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
@@ -58,6 +87,15 @@ type Bindings = {
    * Replaced the SYNC_KV namespace on 2026-10-04; KV copied data outside the US.
    */
   SYNC: DurableObjectNamespace<SyncStore>;
+  /**
+   * Canva connections and drafts: one CanvaStore Durable Object per student,
+   * also in the "us" jurisdiction (see canvaStore below). Added 2026-10-05.
+   */
+  CANVA: DurableObjectNamespace<CanvaStore>;
+  /** Canva Connect app credentials (dashboard secrets) and the callback URL (wrangler.jsonc var). */
+  CANVA_CLIENT_ID?: string;
+  CANVA_CLIENT_SECRET?: string;
+  CANVA_REDIRECT_URI?: string;
 };
 
 /** True only when this Worker is being reached on localhost (`wrangler dev`). */
@@ -90,6 +128,12 @@ function syncKV(env: Bindings, uid: string, requestUrl: string): KVLike {
     const ns = isLocalRequest(requestUrl) ? env.SYNC : env.SYNC.jurisdiction("us" as DurableObjectJurisdiction);
     return ns.get(ns.idFromName(uid));
   });
+}
+
+/** This student's CanvaStore, in the US (same local-dev exception as syncKV above). */
+function canvaStore(env: Bindings, uid: string, requestUrl: string) {
+  const ns = isLocalRequest(requestUrl) ? env.CANVA : env.CANVA.jurisdiction("us" as DurableObjectJurisdiction);
+  return ns.get(ns.idFromName(uid));
 }
 
 type Variables = {
@@ -573,6 +617,438 @@ app.get("/data/bundle", requireSession, async (c) => {
       return c.json({ error: "schoology_error", status: error.status }, 502);
     }
     return c.json({ error: "unexpected_error" }, 500);
+  }
+});
+
+/* ────────────────────────────────────────────────────────────────────
+ * Assignment detail and Canva (2026-10-05)
+ * ──────────────────────────────────────────────────────────────────── */
+
+/** Schoology ids are plain numbers; anything else never reaches a Schoology URL. */
+const ID_RE = /^\d{1,20}$/;
+/** Canva design ids are short letters/digits/_/- strings. */
+const DESIGN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+const APP_ORIGIN = "https://app.averages.io";
+
+/** Where a browser navigation should land: the real app, or the local one under `wrangler dev`. */
+function appOrigin(requestUrl: string): string {
+  return isLocalRequest(requestUrl) ? DEV_ORIGIN : APP_ORIGIN;
+}
+
+/**
+ * The session for routes the browser NAVIGATES to (connect, callback, return):
+ * those answer with redirects, never a JSON 401 page, so they read the cookie
+ * themselves instead of using requireSession.
+ */
+async function sessionFrom(c: any): Promise<SessionData | null> {
+  const token = readCookie(c.req.header("Cookie") ?? null, SESSION_COOKIE);
+  if (!token || !c.env.SESSION_SECRET) return null;
+  return openSession(token, c.env.SESSION_SECRET);
+}
+
+/** An error code safe to hand to the app; anything unexpected becomes `fallback` (and is logged). */
+function errorCode(error: unknown, fallback: string): string {
+  // Errors from the Durable Object arrive over RPC as plain Errors whose
+  // message may be prefixed with the original class ("CanvaError: canva_..."),
+  // so the code is picked out rather than compared whole.
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const code = message.match(/\bcanva_[a-z_]+/)?.[0];
+  if (code) return code;
+  console.error(fallback, error);
+  return fallback;
+}
+
+function canvaFailure(c: any, error: unknown, fallback = "canva_failed") {
+  if (error instanceof SchoologyError) {
+    if (error.status === 413) return c.json({ error: "file_too_large" }, 413);
+    return c.json({ error: "schoology_error", status: error.status }, 502);
+  }
+  const code = errorCode(error, fallback);
+  return c.json({ error: code }, statusForCode(code));
+}
+
+/** Demo and unconfigured checks shared by the JSON Canva routes. Returns a response to send, or null to continue. */
+function canvaGuard(c: any) {
+  if (isDemo(c.get("session"))) return c.json({ error: "not_available_in_demo" }, 403);
+  if (!canvaConfigured(c.env)) return c.json({ error: "canva_not_configured" }, 503);
+  return null;
+}
+
+/**
+ * State-changing Canva calls must come from our own app: an allowed Origin
+ * (when the browser sends one) and, for POSTs, a JSON body. JSON forces a
+ * CORS preflight, so a plain form on some other page (even another
+ * *.averages.io one, which SameSite=Lax would let through) can't fire them.
+ * Returns a response to send, or null to continue.
+ */
+function notFromOurApp(c: any) {
+  const origin = c.req.header("Origin");
+  if (origin && !allowedOrigins(c.req.url).includes(origin)) return c.json({ error: "forbidden_origin" }, 403);
+  if (c.req.method === "POST" && !(c.req.header("Content-Type") ?? "").toLowerCase().startsWith("application/json")) {
+    return c.json({ error: "json_required" }, 415);
+  }
+  return null;
+}
+
+/** What the app sees of a draft (no Schoology or Canva URLs that outlive the page). */
+function publicDraft(d: Draft, design?: { title: string; updatedAt: number; thumbnailUrl: string } | null) {
+  return {
+    designId: d.designId,
+    title: (design?.title || d.title || d.sourceName).slice(0, 255),
+    sourceName: d.sourceName,
+    createdAt: d.createdAt,
+    updatedAt: Math.max(d.updatedAt, design?.updatedAt ?? 0),
+    thumbnailUrl: design?.thumbnailUrl ?? "",
+  };
+}
+
+/**
+ * One assignment's description and Attached Materials, for the assignment
+ * page. Files come back with an id and name only; the download path stays on
+ * the server.
+ */
+app.get("/data/assignment", requireSession, async (c) => {
+  const session = c.get("session");
+  if (isDemo(session)) {
+    return c.json({ error: "not_available_in_demo" }, 403);
+  }
+  const section = c.req.query("section") ?? "";
+  const id = c.req.query("id") ?? "";
+  if (!ID_RE.test(section) || !ID_RE.test(id)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  try {
+    const raw = await getAssignment(section, id, session);
+    c.header("Cache-Control", "private, no-store");
+    return c.json(adaptAssignmentDetail(raw, section));
+  } catch (error) {
+    if (error instanceof SchoologyError) {
+      return c.json({ error: "schoology_error", status: error.status }, error.status === 404 ? 404 : 502);
+    }
+    return c.json({ error: "unexpected_error" }, 500);
+  }
+});
+
+/**
+ * Downloads one of an assignment's attached files (the assignment page's
+ * Download button). The browser navigates here; the file is streamed straight
+ * through from Schoology, never stored. Same rule as Edit in Canva: ids only
+ * from the browser, the real download path is looked up on Schoology.
+ */
+app.get("/data/attachment", async (c) => {
+  const session = await sessionFrom(c);
+  if (!session) return c.json({ error: "not_authenticated" }, 401);
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  const section = c.req.query("section") ?? "";
+  const assignment = c.req.query("assignment") ?? "";
+  const fileId = c.req.query("file") ?? "";
+  if (!ID_RE.test(section) || !ID_RE.test(assignment) || !ID_RE.test(fileId)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  try {
+    const file = findAttachment(await getAssignment(section, assignment, session), fileId);
+    if (!file || !file.downloadPath) return c.json({ error: "file_not_found" }, 404);
+    const upstream = await openAttachment(file.downloadPath, session);
+    // RFC 5987 filename*, plus a plain ASCII fallback, so any name downloads under its real title.
+    const ascii = file.name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+    let utf8Name: string;
+    try {
+      utf8Name = encodeURIComponent(file.name).replace(/['()*]/g, (ch) => "%" + ch.charCodeAt(0).toString(16).toUpperCase());
+    } catch {
+      utf8Name = encodeURIComponent(ascii); // a lone surrogate can't be encoded; the ASCII name still works
+    }
+    const headers = new Headers({
+      "Content-Type": upstream.headers.get("Content-Type") || "application/octet-stream",
+      "Content-Disposition": `attachment; filename="${ascii}"; filename*=UTF-8''${utf8Name}`,
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    const length = upstream.headers.get("Content-Length");
+    if (length) headers.set("Content-Length", length);
+    return new Response(upstream.body, { status: 200, headers });
+  } catch (error) {
+    if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
+    return c.json({ error: "unexpected_error" }, 500);
+  }
+});
+
+/**
+ * Drives Settings › Integrations' "Connected / Not connected" line, which
+ * Canva's review requires (along with a Disconnect button).
+ */
+app.get("/canva/status", requireSession, async (c) => {
+  if (isDemo(c.get("session"))) return c.json({ error: "not_available_in_demo" }, 403);
+  c.header("Cache-Control", "private, no-store");
+  if (!canvaConfigured(c.env)) return c.json({ configured: false, connected: false, name: "" });
+  try {
+    const status = await canvaStore(c.env, c.get("session").uid, c.req.url).status(c.get("session").uid);
+    return c.json({ configured: true, ...status });
+  } catch (error) {
+    return canvaFailure(c, error, "canva_status_failed");
+  }
+});
+
+/** Starts connecting: the browser navigates here and is sent on to Canva's consent screen. */
+app.get("/canva/connect", async (c) => {
+  const origin = appOrigin(c.req.url);
+  const session = await sessionFrom(c);
+  if (!session || isDemo(session)) return c.redirect(`${origin}/`);
+  const returnTo = safeAppPath(c.req.query("return_to"), "/settings");
+  try {
+    return c.redirect(await canvaStore(c.env, session.uid, c.req.url).beginConnect(returnTo));
+  } catch (error) {
+    errorCode(error, "canva_connect_failed");
+    return c.redirect(`${origin}${withQuery(returnTo, "canva", "failed")}`);
+  }
+});
+
+/** Canva sends the student back here with ?code&state (or ?error when they cancel). */
+app.get("/canva/callback", async (c) => {
+  const origin = appOrigin(c.req.url);
+  const session = await sessionFrom(c);
+  if (!session || isDemo(session)) return c.redirect(`${origin}/`);
+  if (c.req.query("error")) return c.redirect(`${origin}/settings?canva=cancelled`);
+  try {
+    const returnTo = await canvaStore(c.env, session.uid, c.req.url).finishConnect(
+      session.uid,
+      c.req.query("state") ?? "",
+      c.req.query("code") ?? ""
+    );
+    return c.redirect(`${origin}${withQuery(safeAppPath(returnTo, "/settings"), "canva", "connected")}`);
+  } catch (error) {
+    errorCode(error, "canva_callback_failed");
+    return c.redirect(`${origin}/settings?canva=failed`);
+  }
+});
+
+/** Disconnect: forgets the tokens and the drafts list. Designs stay in the student's Canva. */
+app.delete("/canva/connection", requireSession, async (c) => {
+  if (isDemo(c.get("session"))) return c.json({ error: "not_available_in_demo" }, 403);
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
+  try {
+    await canvaStore(c.env, c.get("session").uid, c.req.url).disconnect();
+    return c.json({ ok: true });
+  } catch (error) {
+    return canvaFailure(c, error, "canva_disconnect_failed");
+  }
+});
+
+/**
+ * Edit in Canva: imports one of the assignment's attached files into the
+ * student's Canva, records it as a draft, and answers with the editor URL
+ * (carrying a Return key). The browser sends ids only; the Worker re-reads the
+ * assignment from Schoology and downloads that file itself.
+ *
+ * A file already in Drafts is reopened instead of imported again: Canva
+ * refuses a second import of the same file anyway (duplicate_import).
+ */
+app.post("/canva/edit", requireSession, async (c) => {
+  const blocked = canvaGuard(c) ?? notFromOurApp(c);
+  if (blocked) return blocked;
+  const session = c.get("session");
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_body" }, 400);
+  }
+  const section = String(body?.section ?? "");
+  const assignment = String(body?.assignment ?? "");
+  const fileId = String(body?.fileId ?? "");
+  if (!ID_RE.test(section) || !ID_RE.test(assignment) || !ID_RE.test(fileId)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  const returnTo = safeAppPath(body?.returnTo, "/assignments");
+  const store = canvaStore(c.env, session.uid, c.req.url);
+
+  /** Records `design` as this file's draft and answers with its editor link. */
+  const answer = async (design: DesignInfo, sourceName: string, existing: Draft | null, reused: boolean) => {
+    const now = Date.now();
+    const draft: Draft = existing ?? {
+      designId: design.id,
+      title: design.title || importTitle(sourceName),
+      sourceName,
+      fileId,
+      section,
+      assignment,
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (!existing) await store.addDraft(draft);
+    await store.rememberImport(section, assignment, fileId, design.id);
+    const key = await store.saveReturn({ designId: design.id, returnTo });
+    return c.json({ editUrl: editUrlWithCorrelation(design.editUrl, key), draft: publicDraft(draft, design), reused });
+  };
+
+  try {
+    const token = await store.accessToken(session.uid);
+
+    // Already made a design from this file? Reopen it: Canva refuses to import
+    // the same file twice anyway. (Remembered even after its draft is deleted.)
+    const existing = await store.findDraftForFile(section, assignment, fileId);
+    const knownId = existing?.designId ?? (await store.importedDesign(section, assignment, fileId));
+    if (knownId) {
+      const design = await getDesign(token, knownId);
+      if (design) return answer(design, existing?.sourceName ?? design.title, existing, true);
+      // Deleted in Canva, expired unedited, or another Canva account: start over.
+      if (existing) await store.removeDraft(existing.designId);
+    }
+
+    const raw = await getAssignment(section, assignment, session);
+    const file = findAttachment(raw, fileId);
+    if (!file || !file.downloadPath) return c.json({ error: "file_not_found" }, 404);
+    if (file.size > MAX_IMPORT_BYTES) return c.json({ error: "file_too_large" }, 413);
+
+    const { bytes, contentType } = await downloadAttachment(file.downloadPath, session, MAX_IMPORT_BYTES);
+    let design: DesignInfo | null;
+    try {
+      design = (await importFile(token, file.name, bytes, mimeForName(file.name) ?? (contentType || undefined)))[0] ?? null;
+    } catch (error) {
+      // Imported before and we lost track of it (e.g. after a disconnect):
+      // find the student's own design with that title instead.
+      if (!(error instanceof Error && error.message.includes("canva_duplicate_import"))) throw error;
+      design = await findDesignByTitle(token, importTitle(file.name));
+      if (!design) throw error;
+    }
+    if (!design) return c.json({ error: "canva_import_failed" }, 422);
+    return answer(design, file.name, null, false);
+  } catch (error) {
+    return canvaFailure(c, error, "canva_edit_failed");
+  }
+});
+
+/**
+ * Reopen a design (a draft, or one from the Files tab) with a fresh Return
+ * key, so Canva's Return button comes back to the page it was opened from.
+ */
+app.post("/canva/designs/:id/open", requireSession, async (c) => {
+  const blocked = canvaGuard(c) ?? notFromOurApp(c);
+  if (blocked) return blocked;
+  const session = c.get("session");
+  const designId = c.req.param("id");
+  if (!DESIGN_ID_RE.test(designId)) return c.json({ error: "bad_request" }, 400);
+  let body: any = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    /* returnTo is optional */
+  }
+  const store = canvaStore(c.env, session.uid, c.req.url);
+  try {
+    const token = await store.accessToken(session.uid);
+    const design = await getDesign(token, designId);
+    if (!design) {
+      await store.removeDraft(designId);
+      return c.json({ error: "canva_design_gone" }, 404);
+    }
+    const key = await store.saveReturn({ designId, returnTo: safeAppPath(body?.returnTo, "/files") });
+    return c.json({ editUrl: editUrlWithCorrelation(design.editUrl, key) });
+  } catch (error) {
+    return canvaFailure(c, error, "canva_open_failed");
+  }
+});
+
+/**
+ * Where Canva's Return button lands (?correlation_jwt=...). The JWT is checked
+ * (signature, audience, type, expiry), the Return key is looked up in this
+ * student's own storage, and they're sent back to the page they came from.
+ */
+app.get("/canva/return", async (c) => {
+  const origin = appOrigin(c.req.url);
+  const session = await sessionFrom(c);
+  if (!session || isDemo(session)) return c.redirect(`${origin}/`);
+  try {
+    const { designId, correlationState } = await verifyReturnJwt(c.env, c.req.query("correlation_jwt") ?? "");
+    const store = canvaStore(c.env, session.uid, c.req.url);
+    const ctx = await store.takeReturn(correlationState);
+    if (!ctx || ctx.designId !== designId) return c.redirect(`${origin}/home?canva=returned`);
+    await store.touchDraft(designId);
+    return c.redirect(`${origin}${withQuery(safeAppPath(ctx.returnTo, "/home"), "canva", "saved")}`);
+  } catch (error) {
+    // An unverifiable JWT is hostile input, not a bug: note it and send them home.
+    errorCode(error, "canva_return_failed");
+    return c.redirect(`${origin}/home?canva=bad_return`);
+  }
+});
+
+/** One assignment's drafts, refreshed from Canva (titles, edit times). Designs deleted in Canva drop off. */
+app.get("/canva/drafts", requireSession, async (c) => {
+  const blocked = canvaGuard(c);
+  if (blocked) return blocked;
+  const session = c.get("session");
+  const section = c.req.query("section") ?? "";
+  const assignment = c.req.query("assignment") ?? "";
+  if (!ID_RE.test(section) || !ID_RE.test(assignment)) return c.json({ error: "bad_request" }, 400);
+  c.header("Cache-Control", "private, no-store"); // thumbnails expire after 15 minutes
+  const store = canvaStore(c.env, session.uid, c.req.url);
+  try {
+    const { connected } = await store.status(session.uid);
+    if (!connected) return c.json({ connected: false, drafts: [] });
+    const token = await store.accessToken(session.uid);
+    const drafts = (await store.listDrafts(section, assignment)).slice(0, 20);
+    const out: ReturnType<typeof publicDraft>[] = [];
+    await Promise.all(
+      drafts.map(async (d) => {
+        let design;
+        try {
+          design = await getDesign(token, d.designId);
+        } catch {
+          design = undefined; // Canva hiccup: still show the draft with what we know
+        }
+        if (design === null) {
+          await store.removeDraft(d.designId);
+          return;
+        }
+        out.push(publicDraft(d, design));
+      })
+    );
+    out.sort((a, b) => b.updatedAt - a.updatedAt);
+    return c.json({ connected: true, drafts: out });
+  } catch (error) {
+    return canvaFailure(c, error, "canva_drafts_failed");
+  }
+});
+
+/** Removes a draft from Averages.io. The design itself stays in the student's Canva. */
+app.delete("/canva/drafts/:id", requireSession, async (c) => {
+  if (isDemo(c.get("session"))) return c.json({ error: "not_available_in_demo" }, 403);
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
+  const designId = c.req.param("id");
+  if (!DESIGN_ID_RE.test(designId)) return c.json({ error: "bad_request" }, 400);
+  try {
+    const removed = await canvaStore(c.env, c.get("session").uid, c.req.url).removeDraft(designId);
+    return c.json({ ok: true, removed });
+  } catch (error) {
+    return canvaFailure(c, error, "canva_draft_delete_failed");
+  }
+});
+
+/** The student's Canva designs for the Files tab, newest first, 50 a page. */
+app.get("/canva/designs", requireSession, async (c) => {
+  const blocked = canvaGuard(c);
+  if (blocked) return blocked;
+  const session = c.get("session");
+  c.header("Cache-Control", "private, no-store"); // thumbnails expire after 15 minutes
+  const continuation = c.req.query("continuation");
+  if (continuation !== undefined && !/^[A-Za-z0-9_\-=.~+/]{1,512}$/.test(continuation)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  try {
+    const store = canvaStore(c.env, session.uid, c.req.url);
+    const { connected } = await store.status(session.uid);
+    if (!connected) return c.json({ connected: false, items: [] });
+    const page = await listDesigns(await store.accessToken(session.uid), continuation);
+    return c.json({
+      connected: true,
+      items: page.items.map((d) => ({ id: d.id, title: d.title, updatedAt: d.updatedAt, thumbnailUrl: d.thumbnailUrl })),
+      continuation: page.continuation,
+    });
+  } catch (error) {
+    return canvaFailure(c, error, "canva_list_failed");
   }
 });
 
