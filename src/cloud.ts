@@ -14,6 +14,8 @@
  */
 
 export type CloudEnv = {
+  /** Optional: a separate OAuth client just for Google Drive in the browser (2026-10-05). */
+  GOOGLE_DRIVE_CLIENT_ID?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_PICKER_API_KEY?: string;
   GOOGLE_PROJECT_NUMBER?: string;
@@ -41,7 +43,10 @@ function pick(value: unknown, shape: RegExp): string | null {
 }
 
 export function cloudConfig(env: CloudEnv): CloudConfig {
-  const googleClientId = pick(env.GOOGLE_CLIENT_ID, GOOGLE_CLIENT_ID_RE);
+  // Google Drive uses its own client when GOOGLE_DRIVE_CLIENT_ID is set (same
+  // Google Cloud project, so the same consent screen and Picker project
+  // number); otherwise the sign-in client, GOOGLE_CLIENT_ID.
+  const googleClientId = pick(env.GOOGLE_DRIVE_CLIENT_ID, GOOGLE_CLIENT_ID_RE) ?? pick(env.GOOGLE_CLIENT_ID, GOOGLE_CLIENT_ID_RE);
   const msClientId = pick(env.MS_CLIENT_ID, MS_CLIENT_ID_RE);
   return {
     google: googleClientId

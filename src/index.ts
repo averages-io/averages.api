@@ -108,6 +108,7 @@ type Bindings = {
    * Picker API key is restricted to app.averages.io in Google Cloud.
    */
   GOOGLE_CLIENT_ID?: string;
+  GOOGLE_DRIVE_CLIENT_ID?: string;
   GOOGLE_PICKER_API_KEY?: string;
   GOOGLE_PROJECT_NUMBER?: string;
   MS_CLIENT_ID?: string;
