@@ -1,12 +1,12 @@
 /**
- * api.schoolagy.io — Schoolagy's Schoology proxy.
+ * api.averages.io — Averages.io's Schoology proxy (was api.schoolagy.io until 2026-10-05).
  *
  * Exists for one non-negotiable reason: OAuth-signed Schoology calls must
  * happen server-side. The user's consumer secret can never be exposed to
  * browser JS, so the browser talks to this Worker, and only this Worker talks
  * to Schoology.
  *
- * Deployed separately from the app (app.schoolagy.io) so the two can be
+ * Deployed separately from the app (app.averages.io) so the two can be
  * redeployed, scaled and reasoned about independently.
  */
 
@@ -106,7 +106,10 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
  */
 
 /**
- * schoolagy.io only, as of 2026-09-08.
+ * averages.io only, as of 2026-10-05 (schoolagy.io before that: it carries a
+ * greyware tag on school filters and reads as a Schoology lookalike).
+ *
+ * Earlier, schoolagy.io only, as of 2026-09-08.
  *
  * A `sch00lagy.com` fallback domain briefly existed (for when a school
  * network blocked schoolagy.io outright) behind a `src/domains.ts` module
@@ -122,12 +125,12 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
  * middle ground, since an unused abstraction is exactly the kind of thing
  * that quietly drifts out of sync with what's actually deployed.
  */
-const ALLOWED_ORIGINS = ["https://app.schoolagy.io", "https://schoolagy.io"];
+const ALLOWED_ORIGINS = ["https://app.averages.io", "https://averages.io"];
 
 /** Only honoured when this Worker is itself being reached on localhost — see allowedOrigins(). */
 const DEV_ORIGIN = "http://localhost:3000";
 
-const COOKIE_DOMAIN = ".schoolagy.io";
+const COOKIE_DOMAIN = ".averages.io";
 
 /** Ceiling on one user's synced settings blob — see PUT /sync/settings. */
 const MAX_SETTINGS_BYTES = 2 * 1024 * 1024;
@@ -143,7 +146,7 @@ const MAX_SETTINGS_BYTES = 2 * 1024 * 1024;
  * was only ever there for local development, and local development doesn't
  * need it from production: the app's own API_BASE (see the app's
  * lib/schoolagy.ts) points a localhost app at a localhost Worker, not at
- * api.schoolagy.io. So allow it only when the Worker answering is itself
+ * api.averages.io. So allow it only when the Worker answering is itself
  * local, which is exactly the `wrangler dev` case and never the deployed one.
  */
 function allowedOrigins(requestUrl: string): string[] {
@@ -201,7 +204,7 @@ async function requireSession(c: any, next: any) {
 app.get("/", (c) => {
   const secret = c.env.SESSION_SECRET ?? "";
   return c.json({
-    service: "schoolagy-api",
+    service: "averages-api",
     status: "ok",
     configured: secret.length > 0,
     hint:

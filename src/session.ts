@@ -145,8 +145,8 @@ export function sessionCookie(token: string, domain: string): string {
     `Domain=${domain}`,
     "HttpOnly",
     "Secure",
-    // Lax works because app.schoolagy.io and api.schoolagy.io share the
-    // schoolagy.io registrable domain, so this is same-site, not cross-site.
+    // Lax works because app.averages.io and api.averages.io share the
+    // averages.io registrable domain, so this is same-site, not cross-site.
     "SameSite=Lax",
     `Max-Age=${SESSION_TTL_SECONDS}`,
   ].join("; ");
