@@ -26,7 +26,8 @@ browser talks to this Worker, and only this Worker talks to Schoology.
 | Sync Across Devices | Live, stored only in the US (one Durable Object per student) |
 | Sign in through Schoology's App Center ("appAuth") | Planned, needed before public launch |
 | Google Classroom | Planned. OAuth client is set up; no code yet |
-| Canva | Built and tested, not yet merged into this repo |
+| Canva: connect, Edit in Canva, Drafts, designs list | Built (2026-10-05), stored only in the US; works for the developer's own Canva account until Canva reviews the app |
+| Assignment details and attachment downloads | Built (2026-10-05) |
 | Rate limiting | Planned |
 
 ## How sign-in works
@@ -66,6 +67,14 @@ from the server; it lasts until it expires or the student signs out.
   created in Cloudflare's `us` jurisdiction, so it is stored and handled only in
   the United States. (It used Workers KV until 2026-10-04; KV copies data
   worldwide, so it was replaced.)
+- **Canva** (only if the student connects it): their Canva access and refresh
+  tokens, encrypted with a key derived from `SESSION_SECRET` and tied to their
+  user ID; their Canva display name; their Drafts list (which assignment file
+  became which Canva design); and, for a day at most, where to send them back
+  when they click Return in Canva. One Durable Object per student, in the `us`
+  jurisdiction, separate from Sync (turning Sync off doesn't disconnect Canva).
+  Disconnect deletes all of it. Their designs live in their own Canva account;
+  attachment files pass through the Worker on their way to Canva and aren't kept.
 - **Nothing else.** No analytics, no tracking, no ads.
 
 ## Endpoints
@@ -80,8 +89,20 @@ from the server; it lasts until it expires or the student signs out.
 | `GET` | `/sync/settings` | yes | Read the synced settings |
 | `PUT` | `/sync/settings` | yes | Save the synced settings (2 MB max) |
 | `DELETE` | `/sync/settings` | yes | Delete everything sync stored |
+| `GET` | `/data/assignment?section=&id=` | yes | One assignment's description and attachments (file ids and names only, never download links) |
+| `GET` | `/data/attachment?section=&assignment=&file=` | yes | Download one attachment, streamed from Schoology |
+| `GET` | `/canva/status` | yes | Whether Canva is set up and connected, and the account name |
+| `GET` | `/canva/connect?return_to=` | yes | Starts connecting Canva (browser navigation) |
+| `GET` | `/canva/callback` | yes | Where Canva sends the student back after they allow access |
+| `DELETE` | `/canva/connection` | yes | Disconnect: forgets the tokens and drafts |
+| `POST` | `/canva/edit` | yes | `{section, assignment, fileId, returnTo}`: imports that attachment into the student's Canva, adds a draft, answers with the editor link |
+| `GET` | `/canva/return` | yes | Where Canva's Return button lands; sends the student back to the page they came from |
+| `GET` | `/canva/drafts?section=&assignment=` | yes | That assignment's drafts |
+| `DELETE` | `/canva/drafts/:id` | yes | Removes a draft from Averages.io (the design stays in Canva) |
+| `POST` | `/canva/designs/:id/open` | yes | A fresh editor link with a Return key |
+| `GET` | `/canva/designs` | yes | The student's Canva designs, newest first, 50 a page |
 
-Demo sessions get `403 not_available_in_demo` on the sync routes.
+Demo sessions get `403 not_available_in_demo` on the sync, assignment and Canva routes.
 
 `/data/bundle` is one call on purpose: Schoology is slow and rate-limited, and
 sections, grades and assignments depend on each other. Every Schoology call gives up
@@ -96,6 +117,15 @@ feature gets its own route with its own fixed Schoology calls.
 - **CORS** only allows `https://app.averages.io` and `https://averages.io`.
   `http://localhost:3000` is allowed only when the Worker itself is running locally.
 - **No secrets in the repo.** Everything secret is a Cloudflare secret (below).
+- **Attachments:** the browser only ever sends ids. The Worker looks the file up on
+  that student's own assignment, signs the request only for `api.schoology.com`,
+  follows Schoology's redirect to its file storage itself (https only, without the
+  signature), and refuses files over 25 MB for Canva.
+- **Canva:** PKCE with the state kept in the student's own Durable Object and used
+  once; tokens encrypted at rest; refreshes can't race (one object per student);
+  the Return JWT's Ed25519 signature, audience, type and expiry are checked; every
+  redirect goes to a fixed app origin plus a checked path. POSTs must be JSON from an
+  allowed Origin, so another page can't trigger them.
 - **Found a security problem?** Please email help@averages.io instead of opening a
   public issue.
 
@@ -108,7 +138,7 @@ feature gets its own route with its own fixed Schoology calls.
 |---|---|
 | `SESSION_SECRET` | Seals session cookies. Required: without it sign-in returns 500 on purpose |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Classroom sign-in (planned) |
-| `CANVA_CLIENT_ID`, `CANVA_CLIENT_SECRET` | Canva (planned) |
+| `CANVA_CLIENT_ID`, `CANVA_CLIENT_SECRET` | Canva Connect app credentials (Developer Portal). Without them Canva reports "not set up" |
 
 Make a `SESSION_SECRET` with:
 `node -e "console.log(crypto.randomUUID()+crypto.randomUUID())"`
@@ -156,6 +186,12 @@ TypeScript support.
   excused work that must not pull a grade trend down.
 - **Sync:** records stay separate per student, the GPA snapshot never holds more
   than two numbers, and the weekly email switch is read correctly.
+- **Canva:** PKCE against the RFC 7636 test vector, forged and reused states
+  (including names like `constructor`), sealed tokens that only open for their own
+  student, one refresh for many simultaneous requests, Disconnect beating a refresh
+  in flight, Return JWTs (bad signature, audience, type, expiry, unknown key), import
+  polling and Canva's error codes, and attachment downloads (no signature sent off
+  Schoology, size cap, no http redirects).
 
 The keys and secrets in the test files are the public example values from the
 OAuth spec and made-up strings, not real credentials.

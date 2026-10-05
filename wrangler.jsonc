@@ -21,12 +21,23 @@
   // and the code that reads it stay in the United States (PowerSchool terms
   // §3.2.1). Replaced the SYNC_KV namespace on 2026-10-04; KV copied data
   // to Cloudflare locations worldwide. SQLite-backed, which the Free plan supports.
+  //
+  // Canva (2026-10-05): one CanvaStore Durable Object per student, also opened
+  // in the "us" jurisdiction (src/canvaStore.ts). Holds their Canva tokens
+  // (encrypted), drafts and short-lived Return contexts. Separate from SyncStore
+  // so turning Sync off never disconnects Canva.
   "durable_objects": {
-    "bindings": [{ "name": "SYNC", "class_name": "SyncStore" }]
+    "bindings": [
+      { "name": "SYNC", "class_name": "SyncStore" },
+      { "name": "CANVA", "class_name": "CanvaStore" }
+    ]
   },
   // One-time setup Cloudflare runs on the first deploy that includes SyncStore.
   // Never edit or remove a tag once deployed; later changes get a new tag.
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncStore"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SyncStore"] },
+    { "tag": "v2", "new_sqlite_classes": ["CanvaStore"] }
+  ]
   // Allowed CORS origins and the session cookie's domain are hardcoded as
   // ALLOWED_ORIGINS/COOKIE_DOMAIN constants in src/index.ts rather than
   // living here as wrangler vars.
