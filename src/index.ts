@@ -69,6 +69,7 @@ import {
   kvFromSyncStore,
   type KVLike,
 } from "./sync.ts";
+import { cloudConfig } from "./cloud.ts";
 import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
 
@@ -96,6 +97,16 @@ type Bindings = {
   CANVA_CLIENT_ID?: string;
   CANVA_CLIENT_SECRET?: string;
   CANVA_REDIRECT_URI?: string;
+  /**
+   * Google Drive and OneDrive run in the browser (2026-10-05); these are the
+   * PUBLIC values the app needs for that, served by GET /config/cloud.
+   * GOOGLE_CLIENT_ID is the same OAuth client the Worker already has; the
+   * Picker API key is restricted to app.averages.io in Google Cloud.
+   */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_PICKER_API_KEY?: string;
+  GOOGLE_PROJECT_NUMBER?: string;
+  MS_CLIENT_ID?: string;
 };
 
 /** True only when this Worker is being reached on localhost (`wrangler dev`). */
@@ -771,6 +782,19 @@ app.get("/data/attachment", async (c) => {
     if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
     return c.json({ error: "unexpected_error" }, 500);
   }
+});
+
+/**
+ * Public app values for Google Drive and OneDrive, which connect in the
+ * browser (the student's tokens never reach this Worker). Everything here is
+ * already visible to anyone who opens the app: OAuth client IDs, and a Picker
+ * API key that Google Cloud restricts to app.averages.io. No secrets, so no
+ * sign-in needed. A missing value comes back as null and the app shows that
+ * app as "Coming soon".
+ */
+app.get("/config/cloud", (c) => {
+  c.header("Cache-Control", "public, max-age=300");
+  return c.json(cloudConfig(c.env));
 });
 
 /**
