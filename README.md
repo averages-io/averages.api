@@ -149,8 +149,8 @@ feature gets its own route with its own fixed Schoology calls.
 | Name | Used for |
 |---|---|
 | `SESSION_SECRET` | Seals session cookies. Required: without it sign-in returns 500 on purpose |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Classroom sign-in (planned) |
-| `CANVA_CLIENT_ID`, `CANVA_CLIENT_SECRET` | Canva Connect app credentials (Developer Portal). Without them Canva reports "not set up" |
+| `GOOGLE_CLIENT_SECRET` | Google Classroom sign-in (planned) |
+| `CANVA_CLIENT_SECRET` | Canva Connect app secret (Developer Portal). Without it Canva reports "not set up" |
 | `GOOGLE_PICKER_API_KEY` | Google Cloud API key for "Add from Google Drive". **Must** be restricted to `https://app.averages.io/*` and the Google Picker API: it's served publicly, and `/config/cloud` can't tell a restricted key from an unrestricted one |
 | `GOOGLE_PROJECT_NUMBER` | Optional. The Google Cloud project number the Picker needs; without it, the number at the start of `GOOGLE_CLIENT_ID` is used |
 
@@ -161,10 +161,15 @@ Make a `SESSION_SECRET` with:
 
 | Name | Value |
 |---|---|
+| `GOOGLE_CLIENT_ID` | The Google OAuth client: Classroom sign-in (planned) and Google Drive in the browser |
+| `CANVA_CLIENT_ID` | The Canva Connect integration's client ID |
 | `GOOGLE_REDIRECT_URI` | `https://api.averages.io/auth/google/callback` |
 | `CANVA_REDIRECT_URI` | `https://api.averages.io/canva/callback` |
 | `MS_CLIENT_ID` | The Microsoft Entra app's Application (client) ID, for OneDrive. A public ID, no client secret (it's a single-page app registration) |
 | `GOOGLE_DRIVE_CLIENT_ID` | Optional. A separate Google OAuth client (same Google Cloud project) used only for Google Drive in the browser; its only setting is the JavaScript origin `https://app.averages.io`. Without it, Google Drive uses `GOOGLE_CLIENT_ID` |
+
+`keep_vars` is on, so a variable added only in the dashboard survives deploys; one that's
+also in `wrangler.jsonc` takes the file's value.
 
 Values entered under **Build** variables don't reach the running Worker. Use the
 runtime ones. If sign-in returns 500, open `/` on the Worker: it says whether
