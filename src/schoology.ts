@@ -160,6 +160,37 @@ export async function getAssignment(sectionId: string, assignmentId: string, cre
   });
 }
 
+/**
+ * Course files for the Files page (2026-10-05): a section's documents (files
+ * the teacher posted in Materials) and its assignments, both with their
+ * attachments. Read-only, and only the signed-in student's own sections.
+ */
+export const COURSE_FILE_PAGE = 200;
+
+/** A section's Materials documents; exactly COURSE_FILE_PAGE back means there may be more. */
+export async function getDocuments(sectionId: string, creds: Credentials) {
+  const payload = await schoologyGet(`/sections/${sectionId}/documents`, creds, {
+    limit: COURSE_FILE_PAGE,
+    with_attachments: "true",
+  });
+  return listOf(payload, "document");
+}
+
+export async function getAssignmentsWithAttachments(sectionId: string, creds: Credentials) {
+  const payload = await schoologyGet(`/sections/${sectionId}/assignments`, creds, {
+    limit: COURSE_FILE_PAGE,
+    with_attachments: "true",
+  });
+  return listOf(payload, "assignment");
+}
+
+/** One document with its attachment, so a download is looked up again on the Worker. */
+export async function getDocument(sectionId: string, documentId: string, creds: Credentials) {
+  return schoologyGet<Record<string, any>>(`/sections/${sectionId}/documents/${documentId}`, creds, {
+    with_attachments: "true",
+  });
+}
+
 /** True for an https URL on Schoology's API host, the only place a signed request may go. */
 export function isSchoologyApiUrl(raw: string): boolean {
   try {

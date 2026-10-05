@@ -493,11 +493,88 @@ export function adaptAssignmentDetail(raw: Raw, sectionId: string): AssignmentDe
 export function findAttachment(raw: Raw, fileId: string): { name: string; downloadPath: string; size: number } | null {
   for (const f of nestedList(raw?.attachments?.files, "file")) {
     if (String(f?.id ?? "") !== fileId) continue;
-    const filename = String(f?.filename ?? f?.title ?? "file");
-    const title = String(f?.title || "");
-    // Keep the real extension on the name Canva sees, even when the title has none.
-    const name = title && extOf(title) ? title : title ? `${title}${extOf(filename) ? "." + extOf(filename) : ""}` : filename;
-    return { name: Array.from(name).slice(0, 255).join(""), downloadPath: String(f?.download_path ?? ""), size: num(f?.filesize) ?? 0 };
+    // Same name as the Files list shows, with the real extension even when the title has none.
+    return { name: fileNameOf(f).name, downloadPath: String(f?.download_path ?? ""), size: num(f?.filesize) ?? 0 };
   }
   return null;
+}
+
+/* ── Course files (Files page, 2026-10-05) ─────────────────────────────── */
+
+export interface CourseFile {
+  /** Schoology's attachment id. */
+  id: string;
+  /** Shown name, always with its extension. */
+  name: string;
+  ext: string;
+  /** Bytes; 0 when Schoology doesn't say. */
+  size: number;
+  /** Section id. */
+  course: string;
+  /** Where it's attached: a Materials document or an assignment. */
+  kind: "document" | "assignment";
+  /** That document's or assignment's id (needed to download it again). */
+  parent: string;
+  parentTitle: string;
+  /** Upload time in ms, 0 when unknown. */
+  at: number;
+}
+
+export const MAX_COURSE_FILES = 1000;
+
+/**
+ * A file's shown name and extension, the same in the Files list and on the
+ * downloaded file: plain-text title (else the filename), cut by character
+ * (never mid-emoji), with its extension on the end. The extension must look
+ * like one (letters and digits, up to 8).
+ */
+function fileNameOf(f: Raw): { name: string; ext: string } {
+  const filename = String(f?.filename ?? "");
+  const title = toPlainText(f?.title ?? "").trim();
+  const given = String(f?.extension ?? "").toLowerCase().replace(/^\./, "");
+  const ext = (/^[a-z0-9]{1,8}$/.test(given) ? given : "") || extOf(filename) || extOf(title);
+  let name = Array.from(title || filename || "File").slice(0, 240).join("");
+  if (ext && !extOf(name)) name = `${name}.${ext}`;
+  return { name, ext };
+}
+
+/** The file attachments on one document or assignment, named with their extension. */
+function attachedFiles(raw: Raw): { id: string; name: string; ext: string; size: number; at: number }[] {
+  return nestedList(raw?.attachments?.files, "file")
+    .map((f) => {
+      const { name, ext } = fileNameOf(f);
+      const at = toDate(f?.timestamp ?? undefined)?.getTime() ?? 0;
+      return { id: String(f?.id ?? ""), name, ext, size: num(f?.filesize) ?? 0, at };
+    })
+    .filter((f) => /^\d{1,20}$/.test(f.id));
+}
+
+/**
+ * Every file in the student's courses: teachers' Materials documents and the
+ * files attached to assignments, newest first. No download paths: the
+ * browser gets ids, and the Worker looks the file up again to download it.
+ */
+export function adaptCourseFiles(
+  bySection: Record<string, { documents: Raw[] | null; assignments: Raw[] | null }>,
+): { files: CourseFile[]; partial: boolean } {
+  const files: CourseFile[] = [];
+  let partial = false;
+  for (const [course, lists] of Object.entries(bySection)) {
+    if (!lists.documents || !lists.assignments) partial = true;
+    // A full page (200) may mean Schoology has more than it sent.
+    if ((lists.documents?.length ?? 0) >= 200 || (lists.assignments?.length ?? 0) >= 200) partial = true;
+    for (const [kind, list] of [["document", lists.documents ?? []], ["assignment", lists.assignments ?? []]] as const) {
+      for (const item of list) {
+        const parent = String(item?.id ?? "");
+        if (!/^\d{1,20}$/.test(parent)) continue;
+        const parentTitle = toPlainText(item?.title ?? "").slice(0, 255) || (kind === "document" ? "Document" : "Assignment");
+        for (const f of attachedFiles(item)) {
+          files.push({ ...f, course, kind, parent, parentTitle });
+        }
+      }
+    }
+  }
+  files.sort((a, b) => b.at - a.at || a.name.localeCompare(b.name));
+  if (files.length > MAX_COURSE_FILES) partial = true;
+  return { files: files.slice(0, MAX_COURSE_FILES), partial };
 }

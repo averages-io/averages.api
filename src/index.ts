@@ -26,6 +26,9 @@ import {
 import {
   downloadAttachment,
   getAssignment,
+  getAssignmentsWithAttachments,
+  getDocument,
+  getDocuments,
   openAttachment,
   getAssignments,
   getGrades,
@@ -37,6 +40,7 @@ import {
 import {
   adaptAssignmentDetail,
   adaptAssignments,
+  adaptCourseFiles,
   adaptCourses,
   adaptMessages,
   computeProjectedGPA,
@@ -754,11 +758,15 @@ app.get("/data/attachment", async (c) => {
   const section = c.req.query("section") ?? "";
   const assignment = c.req.query("assignment") ?? "";
   const fileId = c.req.query("file") ?? "";
-  if (!ID_RE.test(section) || !ID_RE.test(assignment) || !ID_RE.test(fileId)) {
+  // A file can also hang off a Materials document (Files page, 2026-10-05): exactly one of the two.
+  const documentId = c.req.query("document") ?? "";
+  const parentOk = (ID_RE.test(assignment) && documentId === "") || (ID_RE.test(documentId) && assignment === "");
+  if (!ID_RE.test(section) || !ID_RE.test(fileId) || !parentOk) {
     return c.json({ error: "bad_request" }, 400);
   }
   try {
-    const file = findAttachment(await getAssignment(section, assignment, session), fileId);
+    const parent = assignment ? await getAssignment(section, assignment, session) : await getDocument(section, documentId, session);
+    const file = findAttachment(parent, fileId);
     if (!file || !file.downloadPath) return c.json({ error: "file_not_found" }, 404);
     const upstream = await openAttachment(file.downloadPath, session);
     // RFC 5987 filename*, plus a plain ASCII fallback, so any name downloads under its real title.
@@ -778,6 +786,44 @@ app.get("/data/attachment", async (c) => {
     const length = upstream.headers.get("Content-Length");
     if (length) headers.set("Content-Length", length);
     return new Response(upstream.body, { status: 200, headers });
+  } catch (error) {
+    if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
+    return c.json({ error: "unexpected_error" }, 500);
+  }
+});
+
+/**
+ * Every file in the signed-in student's courses, for the Files page
+ * (2026-10-05): the files teachers posted in Materials (documents) and the
+ * files attached to assignments. Ids and names only, never download paths;
+ * GET /data/attachment looks a file up again to download it. Nothing is
+ * stored. Four sections at a time, so a student with many classes doesn't
+ * fire two dozen Schoology calls at once; a section that fails is skipped and
+ * the answer says `partial: true`.
+ */
+app.get("/data/files", async (c) => {
+  const session = await sessionFrom(c);
+  if (!session) return c.json({ error: "not_authenticated" }, 401);
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  c.header("Cache-Control", "private, no-store");
+  try {
+    const { COURSES } = adaptCourses(await getSections(session.uid, session), []);
+    const courses = COURSES.slice(0, 12).map((course) => ({ id: course.id, name: course.name, color: course.color }));
+    const bySection: Record<string, { documents: any[] | null; assignments: any[] | null }> = {};
+    let next = 0;
+    const worker = async () => {
+      while (next < courses.length) {
+        const course = courses[next++];
+        const [documents, assignments] = await Promise.all([
+          getDocuments(course.id, session).catch(() => null),
+          getAssignmentsWithAttachments(course.id, session).catch(() => null),
+        ]);
+        bySection[course.id] = { documents, assignments };
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, courses.length) }, worker));
+    const { files, partial } = adaptCourseFiles(bySection);
+    return c.json({ courses, files, partial });
   } catch (error) {
     if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
     return c.json({ error: "unexpected_error" }, 500);
