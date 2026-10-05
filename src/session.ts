@@ -33,6 +33,49 @@ export interface SessionData extends Credentials {
    * without signing in again.
    */
   inc?: true;
+  /**
+   * Google Classroom sign-in (2026-10-05). Present only on a Google session,
+   * whose `uid` is "g:" + the Google account id and whose Schoology `key` and
+   * `secret` are always blank (openSession blanks them), so a Google session
+   * can never make a Schoology call. Sealed like everything else in here: the
+   * browser can't read it, and nothing about it is stored on our servers.
+   */
+  g?: GoogleSession;
+}
+
+export interface GoogleSession {
+  /** Access token (about an hour). */
+  at: string;
+  /** Refresh token, for a new access token when that one runs out. */
+  rt: string;
+  /** When `at` expires, unix seconds. */
+  ax: number;
+  /** Which optional Classroom permissions the student granted (letters, see google.ts SCOPES). */
+  sc: string;
+  name: string;
+  email: string;
+  pic: string;
+}
+
+/** The prefix that keeps Google account ids apart from Schoology's numeric ones. */
+export const GOOGLE_UID_PREFIX = "g:";
+
+export function isGoogleSession(session: { g?: unknown; uid?: unknown }): boolean {
+  return !!session.g && typeof session.uid === "string" && session.uid.startsWith(GOOGLE_UID_PREFIX);
+}
+
+function validGoogle(g: any): g is GoogleSession {
+  return (
+    !!g &&
+    typeof g === "object" &&
+    typeof g.at === "string" && g.at.length > 0 &&
+    typeof g.rt === "string" && g.rt.length > 0 &&
+    typeof g.ax === "number" &&
+    typeof g.sc === "string" &&
+    typeof g.name === "string" &&
+    typeof g.email === "string" &&
+    typeof g.pic === "string"
+  );
 }
 
 /**
@@ -99,6 +142,38 @@ export async function sealSession(
   return `${b64urlEncode(iv)}.${b64urlEncode(new Uint8Array(ciphertext))}`;
 }
 
+/**
+ * A short-lived sealed value that isn't a session (the Google sign-in's
+ * state, 2026-10-05). Same AES-GCM sealing, but under a different key derived
+ * from the same secret, so one can never be opened as the other.
+ */
+async function purposeKey(secret: string, purpose: string): Promise<CryptoKey> {
+  return aesKey(`${purpose}\u0000${secret}`);
+}
+
+export async function sealValue(value: unknown, secret: string, purpose: string, ttlSeconds: number): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await purposeKey(secret, purpose);
+  const payload = JSON.stringify({ v: value, x: Math.floor(Date.now() / 1000) + ttlSeconds });
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(payload));
+  return `${b64urlEncode(iv)}.${b64urlEncode(new Uint8Array(ciphertext))}`;
+}
+
+/** The value sealed by sealValue for this purpose, or null (wrong purpose, tampered, expired, malformed). */
+export async function openValue(token: string, secret: string, purpose: string): Promise<unknown> {
+  try {
+    const [ivPart, dataPart] = token.split(".");
+    if (!ivPart || !dataPart) return null;
+    const key = await purposeKey(secret, purpose);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64urlDecode(ivPart) }, key, b64urlDecode(dataPart));
+    const data = JSON.parse(new TextDecoder().decode(plaintext));
+    if (!data || typeof data.x !== "number" || data.x < Math.floor(Date.now() / 1000)) return null;
+    return data.v ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Returns null for anything malformed, tampered with, or expired. */
 export async function openSession(
   token: string,
@@ -136,6 +211,17 @@ export async function openSession(
      * it's a demo.
      */
     if (isDemoSession(data)) {
+      const { g: _ignored, ...rest } = data;
+      return { ...rest, key: "", secret: "" };
+    }
+
+    /**
+     * Google Classroom sessions: also no Schoology credentials, blanked here
+     * for the same structural reason as demo. A "g:" uid without valid Google
+     * tokens (or Google tokens on a non-"g:" uid) isn't a session we made.
+     */
+    if (data.g !== undefined || String(data.uid).startsWith(GOOGLE_UID_PREFIX)) {
+      if (!validGoogle(data.g) || !String(data.uid).startsWith(GOOGLE_UID_PREFIX) || String(data.uid).length <= GOOGLE_UID_PREFIX.length) return null;
       return { ...data, key: "", secret: "" };
     }
 

@@ -16,10 +16,13 @@ import {
   clearSessionCookie,
   DEMO_UID,
   isDemoSession as isDemo,
+  isGoogleSession as isGoogle,
   isIncognitoSession as isIncognito,
   openSession,
+  openValue,
   readCookie,
   sealSession,
+  sealValue,
   sessionCookie,
   SESSION_COOKIE,
   type SessionData,
@@ -44,6 +47,7 @@ import {
   adaptCourseFiles,
   adaptCourses,
   adaptMessages,
+  colorForCourse,
   computeProjectedGPA,
   findAttachment,
 } from "./adapt.ts";
@@ -75,6 +79,45 @@ import {
   type KVLike,
 } from "./sync.ts";
 import { cloudConfig } from "./cloud.ts";
+import {
+  accessCookie,
+  ACCESS_COOKIE,
+  ACCESS_PURPOSE,
+  authorizationUrl,
+  clearAccessCookie,
+  clearStateCookie,
+  exchangeCode,
+  googleConfig,
+  googleSessionFrom,
+  GoogleError,
+  hasRequiredScopes,
+  idTokenClaims,
+  newSignInState,
+  nowSeconds,
+  refreshAccessToken,
+  sameString,
+  stateCookie,
+  STATE_COOKIE,
+  STATE_PURPOSE,
+  STATE_RE,
+  STATE_TTL_SECONDS,
+  validCachedAccess,
+  validSignInState,
+} from "./google.ts";
+import {
+  adaptClassroomAssignment,
+  adaptClassroomBundle,
+  adaptClassroomFiles,
+  CALL_BUDGET,
+  CallBudget,
+  CLASSROOM_ID_RE,
+  ClassroomError,
+  fetchClassroomAssignment,
+  fetchClassroomBundle,
+  fetchClassroomFiles,
+  plain,
+  safeTimeZone,
+} from "./classroom.ts";
 import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
 
@@ -109,6 +152,13 @@ type Bindings = {
    * Picker API key is restricted to app.averages.io in Google Cloud.
    */
   GOOGLE_CLIENT_ID?: string;
+  /**
+   * Sign in with Google, for Google Classroom (2026-10-05): the same OAuth
+   * client's secret (dashboard secret, never in this repo) and the callback
+   * URL (wrangler.jsonc var; .dev.vars for local testing).
+   */
+  GOOGLE_CLIENT_SECRET?: string;
+  GOOGLE_REDIRECT_URI?: string;
   GOOGLE_DRIVE_CLIENT_ID?: string;
   GOOGLE_PICKER_API_KEY?: string;
   GOOGLE_PROJECT_NUMBER?: string;
@@ -366,8 +416,137 @@ app.post("/auth/session", async (c) => {
 
 app.delete("/auth/session", (c) => {
   c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
+  // A Google sign-in's refreshed access token, if any (see googleAccess).
+  c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
   return c.json({ ok: true });
 });
+
+/* ────────────────────────────────────────────────────────────────────
+ * Sign in with Google, for Google Classroom (2026-10-05)
+ * ──────────────────────────────────────────────────────────────────── */
+
+/**
+ * Step 1: the login page's "Continue with Google" button navigates here. The
+ * sign-in's random state and PKCE verifier go into a sealed, 10-minute cookie
+ * that only this Worker's /auth/google paths ever see, and the browser is sent
+ * on to Google's consent screen.
+ *
+ * `under13` is the login page's 13+ box: anything but "0" means under 13
+ * (the safe default), which seals Incognito into the session.
+ */
+app.get("/auth/google/start", async (c) => {
+  const origin = appOrigin(c.req.url);
+  const config = googleConfig(c.env);
+  if (!config || !c.env.SESSION_SECRET) return c.redirect(`${origin}/?google=unavailable`);
+  const signIn = newSignInState(c.req.query("under13") !== "0");
+  const sealed = await sealValue(signIn, c.env.SESSION_SECRET, STATE_PURPOSE, STATE_TTL_SECONDS);
+  c.header("Set-Cookie", stateCookie(sealed, !isLocalRequest(c.req.url)));
+  c.header("Cache-Control", "no-store");
+  c.header("Referrer-Policy", "no-referrer");
+  return c.redirect(await authorizationUrl(config, signIn));
+});
+
+/**
+ * Step 2: Google sends the browser back here with ?code&state (or ?error when
+ * the student cancels). The state must match the cookie this same browser got
+ * in step 1, so a sign-in can't be finished in someone else's browser. The
+ * code is traded for tokens with the client secret, the permissions actually
+ * granted are checked, and the tokens are sealed into the session cookie.
+ * Every outcome goes back to the login page, which either moves on (signed
+ * in) or explains what happened (?google=...).
+ */
+app.get("/auth/google/callback", async (c) => {
+  const origin = appOrigin(c.req.url);
+  const secure = !isLocalRequest(c.req.url);
+  const back = (outcome: string) => {
+    c.header("Cache-Control", "no-store");
+    c.header("Referrer-Policy", "no-referrer");
+    return c.redirect(`${origin}/?google=${outcome}`);
+  };
+  // The state cookie is single-use: cleared whatever happens next.
+  c.header("Set-Cookie", clearStateCookie(secure), { append: true });
+
+  const config = googleConfig(c.env);
+  if (!config || !c.env.SESSION_SECRET) return back("unavailable");
+
+  const sealed = readCookie(c.req.header("Cookie") ?? null, STATE_COOKIE);
+  const signIn = sealed ? await openValue(sealed, c.env.SESSION_SECRET, STATE_PURPOSE) : null;
+  const state = c.req.query("state") ?? "";
+  if (!validSignInState(signIn) || !STATE_RE.test(state) || !sameString(state, signIn.state)) return back("expired");
+
+  const error = c.req.query("error");
+  if (error) return back(error === "access_denied" ? "cancelled" : "failed");
+  const code = c.req.query("code") ?? "";
+  if (!code || code.length > 2048) return back("failed");
+
+  try {
+    const exchange = await exchangeCode(config, code, signIn.verifier);
+    if (!hasRequiredScopes(exchange.letters)) return back("permissions");
+    const claims = idTokenClaims(exchange.idToken, config.clientId);
+    if (!claims || !exchange.refreshToken) return back("failed");
+    const google = googleSessionFrom(exchange, claims);
+    const session = { key: "", secret: "", ...google, ...(signIn.under13 ? { inc: true as const } : {}) };
+    const token = await sealSession(session, c.env.SESSION_SECRET);
+    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN), { append: true });
+    return back("ok");
+  } catch (err) {
+    if (!(err instanceof GoogleError)) console.error("google_callback_failed", err);
+    return back("failed");
+  }
+});
+
+/**
+ * A working Google access token for this request. The one sealed at sign-in
+ * lasts an hour; after that a refreshed one is kept in its own short-lived
+ * cookie (ACCESS_COOKIE, see google.ts), never by rewriting the session
+ * cookie, so the session keeps its 30 days from sign-in and signing out can't
+ * be undone by a request that was still refreshing. Throws
+ * GoogleError("google_invalid_grant") when the student removed Averages.io's
+ * access in their Google account: the caller signs them out.
+ */
+async function googleAccess(c: any, session: SessionData): Promise<string> {
+  const g = session.g!;
+  const now = nowSeconds();
+  if (g.ax - 60 > now) return g.at;
+  const sealed = readCookie(c.req.header("Cookie") ?? null, ACCESS_COOKIE);
+  const cached = sealed ? await openValue(sealed, c.env.SESSION_SECRET, ACCESS_PURPOSE) : null;
+  if (validCachedAccess(cached, session.uid, session.exp) && cached.ax - 60 > now) return cached.at;
+  const config = googleConfig(c.env);
+  if (!config) throw new GoogleError("google_not_configured");
+  const fresh = await refreshAccessToken(config, g.rt);
+  const ttl = Math.max(60, Math.min(fresh.expiresAt, session.exp) - now);
+  const value = await sealValue({ uid: session.uid, exp: session.exp, at: fresh.accessToken, ax: fresh.expiresAt }, c.env.SESSION_SECRET, ACCESS_PURPOSE, ttl);
+  c.header("Set-Cookie", accessCookie(value, ttl, !isLocalRequest(c.req.url)), { append: true });
+  return fresh.accessToken;
+}
+
+/**
+ * How a failed Google Classroom call is answered. Google saying the sign-in
+ * is no good any more (revoked, expired) signs the student out (401 clears
+ * the cookie, and the app goes back to the login page); anything else is a
+ * 502 the app shows as "couldn't load".
+ */
+function classroomFailure(c: any, error: unknown) {
+  const signedOut =
+    (error instanceof GoogleError && error.code === "google_invalid_grant") ||
+    (error instanceof ClassroomError && error.status === 401);
+  if (signedOut) {
+    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN), { append: true });
+    c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
+    return c.json({ error: "session_expired" }, 401);
+  }
+  if (error instanceof ClassroomError) {
+    return c.json({ error: "classroom_error", status: error.status }, error.status === 404 ? 404 : 502);
+  }
+  if (error instanceof GoogleError) return c.json({ error: "google_unreachable" }, 502);
+  console.error("classroom_failed", error);
+  return c.json({ error: "unexpected_error" }, 500);
+}
+
+/** The student's time zone for Classroom's UTC due dates: the app's, else Cloudflare's guess, else UTC. */
+function studentTimeZone(c: any): string {
+  return safeTimeZone(c.req.query("tz"), (c.req.raw as any)?.cf?.timezone);
+}
 
 app.get("/auth/me", requireSession, async (c) => {
   const session = c.get("session");
@@ -383,6 +562,19 @@ app.get("/auth/me", requireSession, async (c) => {
     });
   }
 
+  if (isGoogle(session)) {
+    const g = session.g!;
+    return c.json({
+      uid: session.uid,
+      name: g.name || "Student",
+      firstName: g.name.split(" ")[0] ?? "",
+      email: g.email,
+      pictureUrl: g.pic,
+      incognito: isIncognito(session),
+      provider: "google",
+    });
+  }
+
   try {
     const me = await getMe(session);
     return c.json({
@@ -392,6 +584,7 @@ app.get("/auth/me", requireSession, async (c) => {
       email: me.primary_email ?? "",
       pictureUrl: me.picture_url ?? "",
       incognito: isIncognito(session),
+      provider: "schoology",
     });
   } catch {
     return c.json({ error: "schoology_unreachable" }, 502);
@@ -531,6 +724,8 @@ app.get("/data/bundle", requireSession, async (c) => {
     return c.json({ demo: true, generatedAt: new Date().toISOString() });
   }
 
+  if (isGoogle(session)) return classroomBundle(c, session);
+
   try {
     /**
      * One wave for everything that depends on nothing (2026-09-17).
@@ -644,6 +839,47 @@ app.get("/data/bundle", requireSession, async (c) => {
   }
 });
 
+/**
+ * The bundle for a Google Classroom sign-in: same shapes as Schoology's, plus
+ * `platform: "classroom"` (on the bundle, each class and each assignment) so
+ * pages know to send turning in to Classroom, and SUBMITTED, which Classroom
+ * can tell us (Schoology can't). Projected-GPA snapshots work the same way.
+ */
+async function classroomBundle(c: any, session: SessionData) {
+  const tz = studentTimeZone(c);
+  try {
+    const accessToken = await googleAccess(c, session);
+    const budget = new CallBudget(CALL_BUDGET);
+    const [raw, syncRecord] = await Promise.all([
+      fetchClassroomBundle(accessToken, session.g!.sc, budget),
+      isIncognito(session) ? null : loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid).catch(() => null),
+    ]);
+    const bundle = adaptClassroomBundle(raw, Date.now(), tz);
+
+    let gpaVsLastWeek: number | null = null;
+    try {
+      if (syncRecord && syncEnabledIn(syncRecord.settings) && weeklyGradeSummaryEnabledIn(syncRecord.settings)) {
+        const snapshot = recordGpaSnapshot(syncRecord, bundle.projectedGPA);
+        gpaVsLastWeek = snapshot.deltaVsLastWeek;
+        c.executionCtx.waitUntil(saveSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid, snapshot.record));
+      }
+    } catch {
+      // Same rule as Schoology's bundle: bookkeeping never costs the student their grades.
+    }
+
+    c.header("Cache-Control", "private, no-store");
+    return c.json({
+      generatedAt: new Date().toISOString(),
+      platform: "classroom",
+      ...bundle,
+      partial: bundle.partial || budget.cut,
+      gpaVsLastWeek,
+    });
+  } catch (error) {
+    return classroomFailure(c, error);
+  }
+}
+
 /* ────────────────────────────────────────────────────────────────────
  * Assignment detail and Canva (2026-10-05)
  * ──────────────────────────────────────────────────────────────────── */
@@ -740,6 +976,17 @@ app.get("/data/assignment", requireSession, async (c) => {
   }
   const section = c.req.query("section") ?? "";
   const id = c.req.query("id") ?? "";
+  if (isGoogle(session)) {
+    if (!CLASSROOM_ID_RE.test(section) || !CLASSROOM_ID_RE.test(id)) return c.json({ error: "bad_request" }, 400);
+    try {
+      const accessToken = await googleAccess(c, session);
+      const { work, submission } = await fetchClassroomAssignment(section, id, accessToken);
+      c.header("Cache-Control", "private, no-store");
+      return c.json(adaptClassroomAssignment(work, submission, section, studentTimeZone(c)));
+    } catch (error) {
+      return classroomFailure(c, error);
+    }
+  }
   if (!ID_RE.test(section) || !ID_RE.test(id)) {
     return c.json({ error: "bad_request" }, 400);
   }
@@ -765,6 +1012,8 @@ app.get("/data/attachment", async (c) => {
   const session = await sessionFrom(c);
   if (!session) return c.json({ error: "not_authenticated" }, 401);
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  // Google Classroom files live in Google Drive and open there; they never pass through this Worker.
+  if (isGoogle(session)) return c.json({ error: "classroom_files_open_in_drive" }, 404);
   const section = c.req.query("section") ?? "";
   const assignment = c.req.query("assignment") ?? "";
   const fileId = c.req.query("file") ?? "";
@@ -816,6 +1065,23 @@ app.get("/data/files", async (c) => {
   if (!session) return c.json({ error: "not_authenticated" }, 401);
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
   c.header("Cache-Control", "private, no-store");
+  if (isGoogle(session)) {
+    // Google Drive files posted in the student's classes, as links that open in Google Drive.
+    try {
+      const accessToken = await googleAccess(c, session);
+      const budget = new CallBudget(CALL_BUDGET);
+      const { courses, byCourse, complete } = await fetchClassroomFiles(accessToken, session.g!.sc, budget);
+      const { files, partial } = adaptClassroomFiles(byCourse);
+      return c.json({
+        platform: "classroom",
+        courses: courses.map((course) => ({ id: String(course.id), name: plain(course.name, 120) || "Untitled class", color: colorForCourse(String(course.id)) })),
+        files,
+        partial: partial || !complete || budget.cut,
+      });
+    } catch (error) {
+      return classroomFailure(c, error);
+    }
+  }
   try {
     const { COURSES } = adaptCourses(await getSections(session.uid, session), []);
     const courses = COURSES.slice(0, 12).map((course) => ({ id: course.id, name: course.name, color: course.color }));
@@ -931,6 +1197,8 @@ app.post("/canva/edit", requireSession, async (c) => {
   const blocked = canvaGuard(c) ?? notFromOurApp(c);
   if (blocked) return blocked;
   const session = c.get("session");
+  // Edit in Canva copies a file from the school platform; Google Classroom files are in Google Drive instead.
+  if (isGoogle(session)) return c.json({ error: "classroom_not_supported" }, 403);
 
   let body: any;
   try {
