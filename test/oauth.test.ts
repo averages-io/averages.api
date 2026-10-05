@@ -85,7 +85,7 @@ checkTrue(
 );
 checkTrue("header is an OAuth header", header.startsWith('OAuth realm="Schoology API",'));
 
-console.log("\ntwo-legged (Schoolagy's actual flow: no token)");
+console.log("\ntwo-legged (Averages.io's actual flow: no token)");
 const twoLegged = await buildAuthHeader(
   "GET",
   "https://api.schoology.com/v1/users/me",

@@ -1,5 +1,5 @@
 /**
- * Tests for the Schoology -> Schoolagy data adapter.
+ * Tests for the Schoology -> Averages.io data adapter.
  *
  * Run: node --experimental-strip-types test/adapt.test.ts
  *
