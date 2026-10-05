@@ -10,9 +10,9 @@ browser talks to this Worker, and only this Worker talks to Schoology.
 
 > **Naming:** the product is Averages.io. The Worker is `averages-api` and answers on
 > `api.averages.io`, for the app at `app.averages.io` (moved from `schoolagy.io` on
-> 2026-10-05). Code that talks to Schoology may still say Schoolagy internally: the
-> session cookie is still named `schoolagy_session` and the app's storage keys are still
-> `schoolagy_*`. Don't rename those, or existing users lose their sessions and settings.
+> 2026-10-05). Everything else was renamed to Averages on 2026-10-05, except the
+> session cookie (`schoolagy_session`) and the app's storage keys (`schoolagy_*`). Don't
+> rename those, or existing users lose their sessions and settings.
 
 ---
 
