@@ -75,6 +75,10 @@ from the server; it lasts until it expires or the student signs out.
   jurisdiction, separate from Sync (turning Sync off doesn't disconnect Canva).
   Disconnect deletes all of it. Their designs live in their own Canva account;
   attachment files pass through the Worker on their way to Canva and aren't kept.
+- **Google Drive and OneDrive: nothing.** Both connect straight from the
+  student's browser to Google or Microsoft. Their tokens stay in that browser tab
+  and never reach this Worker; the Worker only serves the public app IDs
+  (`/config/cloud`) and the assignment files being copied (`/data/attachment`).
 - **Nothing else.** No analytics, no tracking, no ads.
 
 ## Endpoints
@@ -101,6 +105,7 @@ from the server; it lasts until it expires or the student signs out.
 | `DELETE` | `/canva/drafts/:id` | yes | Removes a draft from Averages.io (the design stays in Canva) |
 | `POST` | `/canva/designs/:id/open` | yes | A fresh editor link with a Return key |
 | `GET` | `/canva/designs` | yes | The student's Canva designs, newest first, 50 a page |
+| `GET` | `/config/cloud` | | Public IDs the app needs to connect Google Drive and OneDrive in the browser (`null` for anything not set up) |
 
 Demo sessions get `403 not_available_in_demo` on the sync, assignment and Canva routes.
 
@@ -126,6 +131,10 @@ feature gets its own route with its own fixed Schoology calls.
   the Return JWT's Ed25519 signature, audience, type and expiry are checked; every
   redirect goes to a fixed app origin plus a checked path. POSTs must be JSON from an
   allowed Origin, so another page can't trigger them.
+- **`/config/cloud`** only serves values that look like the public ID they're
+  meant to be (a Google client ID, an `AIza…` API key, a project number, a
+  Microsoft GUID). If a secret were ever pasted into one of those boxes, it's left
+  out instead of published.
 - **Found a security problem?** Please email help@averages.io instead of opening a
   public issue.
 
@@ -139,6 +148,8 @@ feature gets its own route with its own fixed Schoology calls.
 | `SESSION_SECRET` | Seals session cookies. Required: without it sign-in returns 500 on purpose |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Classroom sign-in (planned) |
 | `CANVA_CLIENT_ID`, `CANVA_CLIENT_SECRET` | Canva Connect app credentials (Developer Portal). Without them Canva reports "not set up" |
+| `GOOGLE_PICKER_API_KEY` | Google Cloud API key for "Add from Google Drive". **Must** be restricted to `https://app.averages.io/*` and the Google Picker API: it's served publicly, and `/config/cloud` can't tell a restricted key from an unrestricted one |
+| `GOOGLE_PROJECT_NUMBER` | Optional. The Google Cloud project number the Picker needs; without it, the number at the start of `GOOGLE_CLIENT_ID` is used |
 
 Make a `SESSION_SECRET` with:
 `node -e "console.log(crypto.randomUUID()+crypto.randomUUID())"`
@@ -149,6 +160,7 @@ Make a `SESSION_SECRET` with:
 |---|---|
 | `GOOGLE_REDIRECT_URI` | `https://api.averages.io/auth/google/callback` |
 | `CANVA_REDIRECT_URI` | `https://api.averages.io/canva/callback` |
+| `MS_CLIENT_ID` | The Microsoft Entra app's Application (client) ID, for OneDrive. A public ID, no client secret (it's a single-page app registration) |
 
 Values entered under **Build** variables don't reach the running Worker. Use the
 runtime ones. If sign-in returns 500, open `/` on the Worker: it says whether
@@ -163,7 +175,7 @@ Cloudflare's local runtime can't pin Durable Objects to the US, so on
 
 ```bash
 npm install
-npm test          # OAuth signing, sessions, data adapters, sync
+npm test          # OAuth signing, sessions, data adapters, sync, Canva, cloud config
 npm run dev       # local Worker on http://localhost:8787
 ```
 
@@ -192,6 +204,8 @@ TypeScript support.
   in flight, Return JWTs (bad signature, audience, type, expiry, unknown key), import
   polling and Canva's error codes, and attachment downloads (no signature sent off
   Schoology, size cap, no http redirects).
+- **Cloud config:** `/config/cloud` serves IDs in the right shapes and leaves out
+  anything that looks like a secret pasted into the wrong box.
 
 The keys and secrets in the test files are the public example values from the
 OAuth spec and made-up strings, not real credentials.
