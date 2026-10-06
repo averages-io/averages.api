@@ -11,7 +11,9 @@
  * Read-only Classroom permissions only. Google lets the student untick
  * permissions on the consent screen, so the callback checks what was actually
  * granted: classes and coursework are required, the rest just switch their
- * feature off.
+ * feature off. A student who signed in before an optional permission was
+ * added (rosters and topics, 2026-10-06) keeps the letters sealed at their
+ * sign-in until they sign in again.
  *
  * The browser never sees a Google token: Classroom calls happen here, in
  * classroom.ts, the same way Schoology calls do.
@@ -39,6 +41,15 @@ export const CLASSROOM_SCOPES = {
   m: SCOPE_BASE + "classroom.courseworkmaterials.readonly",
   /** Class announcements (Home's messages). */
   a: SCOPE_BASE + "classroom.announcements.readonly",
+  /**
+   * Class rosters, for the teachers' names (Contacts, the course cards,
+   * GET /data/people). Optional, added 2026-10-06: without it those just
+   * stay empty and the app says the permission is needed. Averages.io only
+   * reads each class's teachers, never the student list.
+   */
+  r: SCOPE_BASE + "classroom.rosters.readonly",
+  /** Class topics, shown as folders in Materials (GET /data/folders). Optional, added 2026-10-06. */
+  t: SCOPE_BASE + "classroom.topics.readonly",
 } as const;
 
 export type ScopeLetter = keyof typeof CLASSROOM_SCOPES;

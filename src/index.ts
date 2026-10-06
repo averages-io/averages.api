@@ -47,12 +47,16 @@ import {
   adaptCourseFiles,
   adaptCourses,
   adaptMessages,
+  adaptRecentGrades,
+  adaptSchoologyGradebook,
   colorForCourse,
   computeProjectedGPA,
   findAttachment,
 } from "./adapt.ts";
 import {
   canvaConfigured,
+  canvaExportEnabled,
+  EXPORT_SCOPE,
   editUrlWithCorrelation,
   findDesignByTitle,
   getDesign,
@@ -71,14 +75,16 @@ import {
 import {
   deleteSyncRecord,
   loadSyncRecord,
-  recordGpaSnapshot,
   saveSyncRecord,
-  syncEnabledIn,
-  weeklyGradeSummaryEnabledIn,
   kvFromSyncStore,
   type KVLike,
 } from "./sync.ts";
 import { cloudConfig } from "./cloud.ts";
+import { schoolsFor, validateApplication } from "./schools.ts";
+import { EmailMessage } from "cloudflare:email";
+import { autoReplyAllowed, buildMime, cleanEmail, SCHOOLS_ADDRESS } from "./mail.ts";
+import { applicationEmail, autoReplyEmail } from "./schoolsMail.ts";
+import type { SchoolsStore } from "./schoolsStore.ts";
 import {
   accessCookie,
   ACCESS_COOKIE,
@@ -118,22 +124,32 @@ import {
   plain,
   safeTimeZone,
 } from "./classroom.ts";
+import { getRecipients, namesFrom } from "./messages.ts";
+import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
+import { rateLimit } from "./rateLimit.ts";
 import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
+import type { PushStore } from "./pushStore.ts";
+import { forgetPush, pushRoutes } from "./push.ts";
+import { submitRoutes } from "./submitRoutes.ts";
+import { canvaExportRoutes } from "./canvaExport.ts";
 
 // The Durable Object classes have to be exported from the Worker's main module
 // for Cloudflare to find them (see wrangler.jsonc's durable_objects).
 export { SyncStore } from "./syncStore.ts";
 export { CanvaStore } from "./canvaStore.ts";
+export { PushStore } from "./pushStore.ts";
+export { SchoolsStore } from "./schoolsStore.ts";
 
 type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
   SESSION_SECRET: string;
   /**
-   * Backs "Sync Across Devices" and the Projected-GPA snapshot behind the
-   * weekly-report email's "vs last week" line: one SyncStore Durable Object
-   * per student, always opened in the "us" jurisdiction (see syncKV below).
-   * Replaced the SYNC_KV namespace on 2026-10-04; KV copied data outside the US.
+   * Backs "Sync Across Devices": one SyncStore Durable Object per student,
+   * always opened in the "us" jurisdiction (see syncKV below). Replaced the
+   * SYNC_KV namespace on 2026-10-04; KV copied data outside the US. (It also
+   * held a Projected-GPA snapshot for the weekly email until 2026-10-06; see
+   * sync.ts.)
    */
   SYNC: DurableObjectNamespace<SyncStore>;
   /**
@@ -145,6 +161,13 @@ type Bindings = {
   CANVA_CLIENT_ID?: string;
   CANVA_CLIENT_SECRET?: string;
   CANVA_REDIRECT_URI?: string;
+  /**
+   * "1" once design:content:read is enabled for the Canva integration in
+   * Canva's Developer Portal (2026-10-06). Until then Connect doesn't ask for
+   * it and turning in Canva designs answers canva_reconnect_needed. See
+   * canvaScopes() in canva.ts.
+   */
+  CANVA_EXPORT_ENABLED?: string;
   /**
    * Google Drive and OneDrive run in the browser (2026-10-05); these are the
    * PUBLIC values the app needs for that, served by GET /config/cloud.
@@ -163,6 +186,36 @@ type Bindings = {
   GOOGLE_PICKER_API_KEY?: string;
   GOOGLE_PROJECT_NUMBER?: string;
   MS_CLIENT_ID?: string;
+  /**
+   * Browser notifications (2026-10-05, wired in 2026-10-06): one PushStore
+   * Durable Object per student who turned them on, in the "us" jurisdiction
+   * (src/pushStore.ts). PUSH_SECRET and VAPID_PRIVATE_JWK are dashboard
+   * secrets; VAPID_PUBLIC_KEY is a dashboard variable (the browser needs it).
+   * Until all three are set, GET /push/config says null and the app shows
+   * "Coming soon".
+   */
+  PUSH: DurableObjectNamespace<PushStore>;
+  /**
+   * Schools (2026-10-06): applications from app.averages.io/schools/apply
+   * and the auto-reply log, one SchoolsStore Durable Object in the US.
+   * SCHOOLS_MAIL is Email Routing's send_email binding (emails Martin each
+   * application). SCHOOLS_NOTIFY_TO (dashboard secret) is Martin's inbox: a
+   * verified Email Routing destination, never written in this public repo.
+   * SCHOOLS_ADMIN_KEY (dashboard secret) unlocks GET /schools/applications.
+   */
+  SCHOOLS?: DurableObjectNamespace<SchoolsStore>;
+  SCHOOLS_MAIL?: SendEmail;
+  SCHOOLS_NOTIFY_TO?: string;
+  SCHOOLS_ADMIN_KEY?: string;
+  PUSH_SECRET?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_JWK?: string;
+  VAPID_SUBJECT?: string;
+  /**
+   * Optional Workers Rate Limiting bindings (see src/rateLimit.ts). Not
+   * bound yet; the in-memory limits apply without them.
+   */
+  RATE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
 };
 
 /** True only when this Worker is being reached on localhost (`wrangler dev`). */
@@ -201,6 +254,16 @@ function syncKV(env: Bindings, uid: string, requestUrl: string): KVLike {
 function canvaStore(env: Bindings, uid: string, requestUrl: string) {
   const ns = isLocalRequest(requestUrl) ? env.CANVA : env.CANVA.jurisdiction("us" as DurableObjectJurisdiction);
   return ns.get(ns.idFromName(uid));
+}
+
+/**
+ * The one SchoolsStore, in the US (local-dev exception as above). The email
+ * handler has no request URL: email only ever reaches the deployed Worker.
+ */
+function schoolsStoreFor(env: Bindings, requestUrl: string | null) {
+  if (!env.SCHOOLS) return null;
+  const ns = requestUrl && isLocalRequest(requestUrl) ? env.SCHOOLS : env.SCHOOLS.jurisdiction("us" as DurableObjectJurisdiction);
+  return ns.get(ns.idFromName("schools"));
 }
 
 type Variables = {
@@ -277,8 +340,38 @@ app.use("*", async (c, next) => {
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type"],
+    // So the app can read how long to wait after a 429 (rate limits, below).
+    // Content-Disposition: the Canva PDF's file name when turning a design in (2026-10-06 review).
+    exposeHeaders: ["Retry-After", "Content-Disposition"],
   })(c, next);
 });
+
+/**
+ * The session cookie opened once per request (2026-10-06): the rate limiter
+ * needs the student's uid before the route's own requireSession runs, and
+ * opening the cookie is an AES decrypt, so the result is kept for the rest of
+ * the request. Null when there's no cookie, no SESSION_SECRET, or the cookie
+ * isn't a valid session.
+ */
+const openedSessions = new WeakMap<Request, Promise<SessionData | null>>();
+function openedSession(c: any): Promise<SessionData | null> {
+  const raw: Request = c.req.raw;
+  let opened = openedSessions.get(raw);
+  if (!opened) {
+    const token = readCookie(c.req.header("Cookie") ?? null, SESSION_COOKIE);
+    opened = token && c.env.SESSION_SECRET ? openSession(token, c.env.SESSION_SECRET) : Promise.resolve(null);
+    openedSessions.set(raw, opened);
+  }
+  return opened;
+}
+
+/**
+ * Rate limits on our own routes (2026-10-06): per IP for sign-in, per
+ * student for everything that reaches Schoology, Google or our storage.
+ * After CORS, so a 429 still carries the CORS headers the app needs to read
+ * it. See src/rateLimit.ts for the numbers and the optional binding.
+ */
+app.use("*", rateLimit({ studentOf: async (c) => (await openedSession(c))?.uid ?? null }));
 
 /** Resolves the session cookie, or 401s. */
 async function requireSession(c: any, next: any) {
@@ -286,7 +379,7 @@ async function requireSession(c: any, next: any) {
   if (!token) {
     return c.json({ error: "not_authenticated" }, 401);
   }
-  const session = await openSession(token, c.env.SESSION_SECRET);
+  const session = await openedSession(c);
   if (!session) {
     // Expired or tampered — clear it so the browser stops sending a dead cookie.
     c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
@@ -334,6 +427,11 @@ app.get("/", (c) => {
  * silently producing an app full of empty pages.
  */
 app.post("/auth/session", async (c) => {
+  // Only from our own app, as JSON (2026-10-06 review): a form on another
+  // site could otherwise sign a student into someone else's account (login
+  // CSRF), and with turning in live their work would go to that account.
+  const blocked = notFromOurApp(c);
+  if (blocked) return blocked;
   let body: { key?: string; secret?: string; under13?: unknown };
   try {
     body = await c.req.json();
@@ -414,7 +512,13 @@ app.post("/auth/session", async (c) => {
   }
 });
 
-app.delete("/auth/session", (c) => {
+app.delete("/auth/session", async (c) => {
+  // Signing out also deletes the stored sign-in browser notifications use,
+  // and every browser's subscription (2026-10-06). After the answer, and
+  // never in the way: forgetPush never throws, and does nothing without the
+  // PUSH binding.
+  const session = await sessionFrom(c);
+  if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetPush(c.env, session.uid, c.req.url));
   c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
   // A Google sign-in's refreshed access token, if any (see googleAccess).
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
@@ -656,26 +760,15 @@ app.put("/sync/settings", requireSession, async (c) => {
     return c.json({ error: "settings_too_large", maxBytes: MAX_SETTINGS_BYTES }, 413);
   }
 
-  // Preserve any GPA snapshot already on file — this endpoint only owns the
-  // `settings` half of the record; `/data/bundle` below owns `gpaSnapshot`.
-  // The one exception: if this push shows Weekly Grade Summary is now off,
-  // clear the snapshot outright instead of leaving it to sit there unused.
-  // Gating storage on the toggle (see weeklyGradeSummaryEnabledIn in
-  // sync.ts, added 2026-09-12) only means anything if turning the toggle
-  // off actually makes Averages.io stop holding the number, not just stop it
-  // from updating further.
-  const existing = await loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
+  // The whole record is just the settings and two timestamps (2026-10-06:
+  // the GPA snapshot the weekly email used is gone, and a record that still
+  // carries one loses it here, on its next save; see sync.ts).
   const now = new Date().toISOString();
   const record = {
-    ...existing,
     settings: body.settings,
-    gpaSnapshot: weeklyGradeSummaryEnabledIn(body.settings)
-      ? existing.gpaSnapshot
-      : { current: null, previous: null },
     updatedAt: now,
-    // Stamped here, and ONLY here (not by the GPA-snapshot piggyback in
-    // /data/bundle below) — see SyncRecord's own comment in sync.ts for
-    // why settings.html's pull logic needs this separate from updatedAt.
+    // See SyncRecord's own comment in sync.ts for why settings.html's pull
+    // logic compares this rather than updatedAt.
     settingsUpdatedAt: now,
   };
   await saveSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid, record);
@@ -687,14 +780,14 @@ app.put("/sync/settings", requireSession, async (c) => {
  * asking" — added 2026-09-09 per Martin. Before this, the toggle only ever
  * flipped a local flag (`schoolagy_settings_options.syncAcrossDevices`) off;
  * `deleteSyncRecord` already existed in sync.ts but nothing ever called it,
- * so whatever had last been pushed — the settings blob AND the GPA-history
- * snapshots — just sat in KV under the user's uid indefinitely. Turning sync
- * back on later would have silently pulled that stale record back down.
+ * so whatever had last been pushed just sat in KV under the user's uid
+ * indefinitely. Turning sync back on later would have silently pulled that
+ * stale record back down.
  *
  * settings.html calls this the moment the user confirms turning sync off
- * (see its own comment there). Deletes the WHOLE record — both halves,
- * settings and gpaSnapshot — not just the settings half this endpoint's
- * GET/PUT otherwise own, since "delete my data" means all of it.
+ * (see its own comment there). Deletes the WHOLE record (including, on an
+ * old record, the GPA snapshots the weekly email kept until 2026-10-06),
+ * since "delete my data" means all of it.
  */
 app.delete("/sync/settings", requireSession, async (c) => {
   const session = c.get("session");
@@ -732,25 +825,27 @@ app.get("/data/bundle", requireSession, async (c) => {
      *
      * This used to be three separate waits, and two of them didn't need to
      * be: the inbox fetch sat at the bottom of the handler, behind the twelve
-     * assignment calls, and the sync-record read sat below that again — even
-     * though neither needs a single byte from Schoology's sections or grades.
-     * Every bundle paid two full round trips for the ordering alone.
+     * assignment calls. Now there are exactly two waits, and the second one
+     * is the only one that has to be second: assignments are per-section, so
+     * they can't be asked for until wave 1 says which sections exist.
      *
-     * Now there are exactly two waits, and the second one is the only one
-     * that has to be second: assignments are per-section, so they can't be
-     * asked for until wave 1 says which sections exist.
+     * The recipients list (2026-10-06) names the senders on Home's Messages
+     * widget: Schoology's inbox has author ids but no names. (The sync record
+     * read that used to sit here went with the weekly email's GPA snapshot,
+     * 2026-10-06.)
      *
-     * The two `.catch` handlers are load-bearing. `Promise.all` rejects on the
+     * The `.catch` handlers are load-bearing. `Promise.all` rejects on the
      * FIRST rejection, so an unguarded inbox fetch — messaging can be turned
      * off district-wide — would take sections and grades down with it and turn
-     * a working grades page into a 502. Sections and grades are deliberately
-     * left unguarded: without them there is no bundle to return.
+     * a working grades page into a 502. Same for the recipients list, which
+     * some districts and personal keys refuse. Sections and grades are
+     * deliberately left unguarded: without them there is no bundle to return.
      */
-    const [sections, grades, inbox, syncRecord] = await Promise.all([
+    const [sections, grades, inbox, recipients] = await Promise.all([
       getSections(session.uid, session),
       getGrades(session.uid, session),
       getMessages("inbox", session).catch(() => null),
-      isIncognito(session) ? null : loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid).catch(() => null),
+      getRecipients(session).catch(() => null),
     ]);
 
     const { COURSES, HISTORY } = adaptCourses(sections, grades);
@@ -780,56 +875,43 @@ app.get("/data/bundle", requireSession, async (c) => {
     // grades either.
     let MESSAGES: any[] = [];
     try {
-      MESSAGES = inbox ? adaptMessages(inbox) : [];
+      MESSAGES = inbox ? adaptMessages(inbox, namesFrom(recipients)) : [];
     } catch {
       MESSAGES = [];
     }
 
     /**
-     * Projected-GPA snapshot for the weekly-report email's "vs last week"
-     * line — piggybacked on this request rather than its own fetch/cron,
-     * since COURSES (and each course's predicted grade) was just computed
-     * above anyway. Recorded only for a user who (a) is real, not demo —
-     * already true of this whole branch — (b) has Sync Across Devices on,
-     * and (c) has Weekly Grade Summary itself turned on.
-     *
-     * (b) alone used to be the only check here, on the theory that the
-     * client already enforces "no weekly email without sync" so checking
-     * again server-side was redundant — but that meant anyone with sync on
-     * got a GPA snapshot recorded regardless of whether they'd ever turned
-     * the email on, which is more retention than the feature it's for
-     * needs. Fixed 2026-09-12, per Martin, alongside shrinking storage
-     * itself from a 12-week rolling history down to just this week's number
-     * and the one before it — see sync.ts's own top-of-file comment.
-     * Best-effort and non-blocking either way: a KV hiccup here must never
-     * turn into a failed page load for the student who just wants to see
-     * their grades.
+     * Recent Grades and each class's Grades tab (2026-10-06), the same shapes
+     * Classroom's bundle sends, from the grades and assignments already in
+     * hand: no extra Schoology calls. Category weights here come from the
+     * grades payload, which doesn't always carry them; GET /data/gradebook
+     * reads the exact ones for the course the gradebook page opens. Guarded
+     * like the messages: never the reason grades don't load.
      */
-    const projectedGPA = computeProjectedGPA(COURSES);
-    let gpaVsLastWeek: number | null = null;
+    const now = Date.now();
+    let RECENT_GRADES: any[] = [];
+    const GRADEBOOK: Record<string, unknown> = {};
     try {
-      // `syncRecord` was read in wave 1 — it only ever needed session.uid.
-      // Null means the read failed, which is treated the same as sync being
-      // off: no snapshot, no delta, and the grades still render.
-      if (syncRecord && syncEnabledIn(syncRecord.settings) && weeklyGradeSummaryEnabledIn(syncRecord.settings)) {
-        const snapshot = recordGpaSnapshot(syncRecord, projectedGPA);
-        gpaVsLastWeek = snapshot.deltaVsLastWeek;
-        c.executionCtx.waitUntil(saveSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid, snapshot.record));
+      RECENT_GRADES = adaptRecentGrades(grades, assignmentsBySection, now);
+      const gradesBySection = new Map(grades.map((g: any) => [String(g?.section_id ?? g?.id ?? ""), g]));
+      for (const [courseId, assignments] of Object.entries(assignmentsBySection)) {
+        GRADEBOOK[courseId] = adaptSchoologyGradebook({ categories: null, gradeEntry: gradesBySection.get(courseId), assignments });
       }
-    } catch {
-      // Never let GPA-snapshot bookkeeping take the whole bundle down with it.
+    } catch (error) {
+      console.error("bundle_grades_failed", error instanceof Error ? error.message : String(error));
     }
 
     return c.json({
-      generatedAt: new Date().toISOString(),
+      generatedAt: new Date(now).toISOString(),
       COURSES,
       HISTORY,
       OVERDUE,
       UPCOMING,
       TODAY,
       MESSAGES,
-      projectedGPA,
-      gpaVsLastWeek,
+      RECENT_GRADES,
+      GRADEBOOK,
+      projectedGPA: computeProjectedGPA(COURSES),
     });
   } catch (error) {
     if (error instanceof SchoologyError) {
@@ -843,37 +925,21 @@ app.get("/data/bundle", requireSession, async (c) => {
  * The bundle for a Google Classroom sign-in: same shapes as Schoology's, plus
  * `platform: "classroom"` (on the bundle, each class and each assignment) so
  * pages know to send turning in to Classroom, and SUBMITTED, which Classroom
- * can tell us (Schoology can't). Projected-GPA snapshots work the same way.
+ * can tell us (Schoology can't).
  */
 async function classroomBundle(c: any, session: SessionData) {
   const tz = studentTimeZone(c);
   try {
     const accessToken = await googleAccess(c, session);
     const budget = new CallBudget(CALL_BUDGET);
-    const [raw, syncRecord] = await Promise.all([
-      fetchClassroomBundle(accessToken, session.g!.sc, budget),
-      isIncognito(session) ? null : loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid).catch(() => null),
-    ]);
+    const raw = await fetchClassroomBundle(accessToken, session.g!.sc, budget);
     const bundle = adaptClassroomBundle(raw, Date.now(), tz);
-
-    let gpaVsLastWeek: number | null = null;
-    try {
-      if (syncRecord && syncEnabledIn(syncRecord.settings) && weeklyGradeSummaryEnabledIn(syncRecord.settings)) {
-        const snapshot = recordGpaSnapshot(syncRecord, bundle.projectedGPA);
-        gpaVsLastWeek = snapshot.deltaVsLastWeek;
-        c.executionCtx.waitUntil(saveSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid, snapshot.record));
-      }
-    } catch {
-      // Same rule as Schoology's bundle: bookkeeping never costs the student their grades.
-    }
-
     c.header("Cache-Control", "private, no-store");
     return c.json({
       generatedAt: new Date().toISOString(),
       platform: "classroom",
       ...bundle,
       partial: bundle.partial || budget.cut,
-      gpaVsLastWeek,
     });
   } catch (error) {
     return classroomFailure(c, error);
@@ -1114,6 +1180,17 @@ app.get("/data/files", async (c) => {
  * sign-in needed. A missing value comes back as null and the app shows that
  * app as "Coming soon".
  */
+/**
+ * The schools the sign-in page can search (2026-10-06): public, no sign-in
+ * needed (the page asks before anyone is signed in). See src/schools.ts.
+ */
+app.get("/config/schools", (c) => {
+  const schools = schoolsFor(c.req.query("lms"));
+  if (!schools) return c.json({ error: "bad_request" }, 400);
+  c.header("Cache-Control", "public, max-age=3600");
+  return c.json({ schools });
+});
+
 app.get("/config/cloud", (c) => {
   c.header("Cache-Control", "public, max-age=300");
   return c.json(cloudConfig(c.env));
@@ -1129,8 +1206,18 @@ app.get("/canva/status", requireSession, async (c) => {
   if (isIncognito(c.get("session"))) return c.json({ configured: canvaConfigured(c.env), connected: false, name: "", incognito: true });
   if (!canvaConfigured(c.env)) return c.json({ configured: false, connected: false, name: "" });
   try {
-    const status = await canvaStore(c.env, c.get("session").uid, c.req.url).status(c.get("session").uid);
-    return c.json({ configured: true, ...status });
+    const store = canvaStore(c.env, c.get("session").uid, c.req.url);
+    const status = await store.status(c.get("session").uid);
+    // Can this connection turn in designs as PDFs (2026-10-06)? "off" until
+    // CANVA_EXPORT_ENABLED; "reconnect" for a connection made before the
+    // export scope was asked for (Canva didn't grant it), so Settings can
+    // offer Reconnect. Unknown scopes count as ready: Canva decides then.
+    let turnIn: "off" | "ready" | "reconnect" = "off";
+    if (canvaExportEnabled(c.env) && status.connected) {
+      const granted = await store.grantedScopes(c.get("session").uid).catch(() => null);
+      turnIn = !granted || granted.includes(EXPORT_SCOPE) ? "ready" : "reconnect";
+    }
+    return c.json({ configured: true, ...status, turnIn });
   } catch (error) {
     return canvaFailure(c, error, "canva_status_failed");
   }
@@ -1424,4 +1511,139 @@ app.get("/canva/designs", requireSession, async (c) => {
  * allow-list of the exact paths the app needs rather than a wildcard.
  */
 
-export default app;
+/* ────────────────────────────────────────────────────────────────────
+ * Per-page extras, Schoology messages and browser notifications (2026-10-06)
+ * ──────────────────────────────────────────────────────────────────── */
+
+const extrasDeps = { requireSession, fromOurApp: notFromOurApp, googleAccess, classroomFailure, studentTimeZone };
+
+/** GET /data/people, /data/updates, /data/events, /data/folders, /data/gradebook (src/extrasRoutes.ts). */
+app.route("/data", dataExtrasRoutes(extrasDeps));
+
+/** GET /messages, /messages/thread, /messages/recipients; POST /messages, /messages/reply. Schoology only. */
+app.route("/messages", messagesRoutes(extrasDeps));
+
+/** Browser notifications (src/push.ts). */
+app.route("/push", pushRoutes({ requireSession, fromOurApp: notFromOurApp }));
+
+/**
+ * Turning in work on Schoology (2026-10-06): file uploads (streamed straight
+ * through to Schoology), typed answers and the student's submission history.
+ * And Canva designs exported as PDFs to turn in. Both sub-apps attach their
+ * own middleware per route; mounted after the CORS middleware so it applies.
+ */
+app.route("/submit", submitRoutes({ requireSession, fromOurApp: notFromOurApp }));
+app.route(
+  "/canva",
+  canvaExportRoutes({
+    requireSession,
+    canvaGuard,
+    fromOurApp: notFromOurApp,
+    storeFor: (c, uid) => canvaStore(c.env, uid, c.req.url),
+  })
+);
+
+/* ── Schools (2026-10-06) ──────────────────────────────────────────────
+ * A student's Email Template asks their school's IT team to write to
+ * schools@averages.io; they get an automatic reply (handleSchoolsEmail
+ * below) with the link to app.averages.io/schools/apply; the form posts here.
+ */
+
+/**
+ * One application. Public (school IT staff aren't signed in), JSON from our
+ * own app only, rate-limited per IP. Saved first, then emailed to Martin.
+ */
+app.post("/schools/apply", async (c) => {
+  const blocked = notFromOurApp(c);
+  if (blocked) return blocked;
+  c.header("Cache-Control", "no-store");
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_body" }, 400);
+  }
+  const checked = validateApplication(body);
+  if (!checked.ok) return c.json({ error: "invalid", fields: checked.fields }, 400);
+  // The hidden field a person never fills in: a bot. Polite "ok", nothing kept.
+  if (checked.spam) return c.json({ ok: true });
+  const store = schoolsStoreFor(c.env, c.req.url);
+  if (!store) return c.json({ error: "unavailable" }, 503);
+  try {
+    const { app: saved, duplicate } = await store.add(checked.value);
+    if (c.env.SCHOOLS_MAIL && c.env.SCHOOLS_NOTIFY_TO) {
+      const mail = applicationEmail(saved, duplicate);
+      const raw = buildMime({ from: SCHOOLS_ADDRESS, fromName: "Averages.io schools", to: c.env.SCHOOLS_NOTIFY_TO, replyTo: saved.email, ...mail });
+      // After the answer: a slow or failed email never costs the school its "sent".
+      c.executionCtx.waitUntil(
+        c.env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, c.env.SCHOOLS_NOTIFY_TO, raw)).catch((error: unknown) => console.error("schools_notify_failed", error))
+      );
+    }
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error("schools_apply_failed", error);
+    return c.json({ error: "unavailable" }, 503);
+  }
+});
+
+/**
+ * Martin's list of applications: `Authorization: Bearer <SCHOOLS_ADMIN_KEY>`.
+ * Off (404) until that secret is set, and refused for a key under 24
+ * characters. Compared in constant time.
+ */
+app.get("/schools/applications", async (c) => {
+  c.header("Cache-Control", "no-store");
+  const key = c.env.SCHOOLS_ADMIN_KEY ?? "";
+  if (key.length < 24) return c.json({ error: "not_found" }, 404);
+  const given = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  if (!sameString(given, key)) return c.json({ error: "forbidden" }, 403);
+  const store = schoolsStoreFor(c.env, c.req.url);
+  if (!store) return c.json({ error: "unavailable" }, 503);
+  return c.json({ applications: await store.list() });
+});
+
+/**
+ * Email to schools@averages.io (Email Routing sends it to this Worker).
+ * Everything is forwarded to Martin's inbox; a school's first email also gets
+ * the automatic reply with the application link (once per sender per 30
+ * days, never to robots: see autoReplyAllowed in mail.ts). Never throws: a
+ * failure is logged, the email itself was still delivered to Martin.
+ */
+export async function handleSchoolsEmail(message: ForwardableEmailMessage, env: Bindings, _ctx?: ExecutionContext): Promise<void> {
+  const to = cleanEmail(message.to);
+  const from = cleanEmail(message.from);
+  if (env.SCHOOLS_NOTIFY_TO) {
+    try {
+      await message.forward(env.SCHOOLS_NOTIFY_TO);
+    } catch (error) {
+      console.error("schools_forward_failed", error);
+    }
+  }
+  if (to !== SCHOOLS_ADDRESS || !from) return;
+  if (!autoReplyAllowed(message.from, message.headers).ok) return;
+  try {
+    const store = schoolsStoreFor(env, null);
+    if (!store || !(await store.claimReply(from))) return;
+    const mail = autoReplyEmail(message.headers.get("Subject"));
+    const raw = buildMime({
+      from: SCHOOLS_ADDRESS,
+      fromName: "Averages.io",
+      to: from,
+      ...mail,
+      inReplyTo: message.headers.get("Message-ID") ?? undefined,
+      autoReply: true,
+    });
+    await message.reply(new EmailMessage(SCHOOLS_ADDRESS, from, raw));
+  } catch (error) {
+    console.error("schools_reply_failed", error);
+  }
+}
+
+/**
+ * The Worker: HTTP through Hono, email through handleSchoolsEmail. Tests call
+ * `app.fetch` on this object exactly as they did on the Hono app.
+ */
+export default {
+  fetch: app.fetch,
+  email: handleSchoolsEmail,
+};

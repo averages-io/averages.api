@@ -14,7 +14,7 @@
  * same JSON string sync.ts used to write to KV.
  *
  * It only stores and returns strings. All of the rules (what a record looks
- * like, the two-snapshot GPA limit, clearing on email-off) stay in sync.ts.
+ * like) stay in sync.ts.
  */
 
 import { DurableObject } from "cloudflare:workers";

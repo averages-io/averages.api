@@ -15,6 +15,8 @@
  * the whole page.
  */
 
+import type { GradebookCategory } from "./classroom.ts";
+
 /**
  * The muted per-course palette the app already uses (see home.html/courses.html).
  * Assigned by stable hash of the course id so a given course keeps the same
@@ -65,9 +67,8 @@ export function letterFromPct(pct: number | null | undefined): string {
 /**
  * Standard unweighted 4.0 scale — same cutoffs `grades.html`'s own
  * client-side `GPA_SCALE` uses for its (current-grade) Estimated GPA, kept
- * here so the server-side Projected GPA below (used for the weekly-report
- * email's GPA snapshot, not shown elsewhere in the app) uses an identical
- * mapping rather than a second hand-typed copy silently drifting from it.
+ * here so the server-side Projected GPA below uses an identical mapping
+ * rather than a second hand-typed copy silently drifting from it.
  */
 export const GPA_SCALE: Record<string, number> = {
   "A+": 4.0,
@@ -90,12 +91,14 @@ export const GPA_SCALE: Record<string, number> = {
  * (`AdaptedCourse.predicted`), not the current one — "Projected GPA" is
  * meant to answer "where is this trending," matching the per-course
  * Predicted-grade chip's own framing elsewhere in the app. Rounded to 2
- * decimals so a week-over-week delta (`current - lastWeek`) doesn't carry
- * meaningless float noise into the email.
+ * decimals. Sent as the bundle's `projectedGPA`.
  *
- * Returns 0 for no courses rather than NaN — an empty course list producing
- * a silent "0.0" in a snapshot is a far easier bug to spot later than a NaN
- * that poisons every subsequent delta calculation.
+ * (2026-10-06: this used to also feed a weekly-email "vs last week" GPA
+ * snapshot. The Weekly Grade Summary email was replaced by browser
+ * notifications on 2026-10-04 and the snapshot is gone; the number itself
+ * stays in the bundle.)
+ *
+ * Returns 0 for no courses rather than NaN.
  */
 export function computeProjectedGPA(courses: { predicted: string }[]): number {
   if (courses.length === 0) return 0;
@@ -174,10 +177,10 @@ export function formatShortDate(value: string | number | undefined): string {
 }
 
 /** "2h ago" — the format the "Updated" column already renders. */
-export function relativeTime(value: string | number | undefined): string {
+export function relativeTime(value: string | number | undefined, now: number = Date.now()): string {
   const date = toDate(value);
   if (!date) return "";
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  const seconds = Math.floor((now - date.getTime()) / 1000);
   if (seconds < 60) return "just now";
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
@@ -186,6 +189,12 @@ export function relativeTime(value: string | number | undefined): string {
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d ago`;
   return formatShortDate(value);
+}
+
+/** A Schoology timestamp (unix seconds, or "YYYY-MM-DD HH:MM:SS") as ms, or null. */
+export function schoologyTime(value: unknown): number | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  return toDate(value)?.getTime() ?? null;
 }
 
 function toDate(value: string | number | undefined): Date | null {
@@ -220,6 +229,43 @@ export interface AdaptedCourse {
   predictedPct: number;
   trend: "up" | "down" | "flat";
   updated: string;
+  /** Schoology's course code ("ENG10"); "" for Classroom. (2026-10-06) */
+  code: string;
+  /** The class period from the section's title ("Period 3", "P3", "3rd Period"), else "". */
+  period: number | "";
+  /** The section's own name when it says more than the period, else "". */
+  section: string;
+  /** Always "" in the bundle; the app fills it from GET /data/people. */
+  teacher: string;
+}
+
+/**
+ * The class period in a section title, for the course cards (2026-10-06):
+ * "Period 3", "Per. 3", "Pd 3", "P3", "3rd Period", "Period 03" all give 3.
+ * Schools write this many ways and nothing else in Schoology or Classroom
+ * says which period a class meets, so this only reads the obvious forms and
+ * gives "" otherwise (a wrong period is worse than none).
+ */
+const PERIOD_RE = /\b(?:period|per|pd|p)\.?\s*0?(\d{1,2})(?![0-9])|\b0?(\d{1,2})(?:st|nd|rd|th)\s+(?:period|per\b|pd\b)/i;
+
+export function parsePeriod(text: unknown): number | "" {
+  const m = String(text ?? "").match(PERIOD_RE);
+  if (!m) return "";
+  const n = Number(m[1] ?? m[2]);
+  return Number.isInteger(n) && n >= 0 && n <= 15 ? n : "";
+}
+
+/**
+ * What a section title adds beyond the period: "" for "Period 3" or "P3"
+ * alone (the card already shows the period), and "" when it only repeats
+ * the course's own name.
+ */
+export function sectionLabel(text: unknown, courseName: string): string {
+  const label = toPlainText(text ?? "").slice(0, 120);
+  if (!label) return "";
+  if (label.toLowerCase() === courseName.trim().toLowerCase()) return "";
+  const rest = label.replace(PERIOD_RE, "").replace(/[\s\-–—:|,.()#]+/g, "");
+  return rest ? label : "";
 }
 
 export interface AdaptedBundle {
@@ -306,14 +352,20 @@ export function adaptCourses(
     const pct = reportedPct ?? fallbackPct ?? 0;
 
     const { predictedPct, trend } = predict(history.points);
+    const name =
+      section?.course_title ||
+      section?.section_title ||
+      section?.title ||
+      "Untitled course";
+    // The period and section name (2026-10-06): the section title first
+    // ("Period 3", "Biology - Honors"), then the section code when the title
+    // doesn't say ("P3").
+    const period = parsePeriod(section?.section_title);
+    const titleLabel = sectionLabel(section?.section_title, String(name));
 
     COURSES.push({
       id,
-      name:
-        section?.course_title ||
-        section?.section_title ||
-        section?.title ||
-        "Untitled course",
+      name,
       color: colorForCourse(id),
       grade: letterFromPct(pct),
       pct,
@@ -321,6 +373,10 @@ export function adaptCourses(
       predictedPct: predictedPct || pct,
       trend,
       updated: relativeTime(gradeEntry?.timestamp ?? section?.last_updated),
+      code: toPlainText(section?.course_code ?? "").slice(0, 40),
+      period: period === "" ? parsePeriod(section?.section_code) : period,
+      section: titleLabel || (section?.section_title ? "" : sectionLabel(section?.section_code, String(name))),
+      teacher: "",
     });
   }
 
@@ -395,9 +451,18 @@ export function adaptAssignments(
  * ends up with the text "<script>", which the page then escapes on render.
  */
 export function toPlainText(html: unknown): string {
-  const withBreaks = String(html ?? "").replace(/<\s*(br|\/p|\/div|\/li)\b[^>]*>/gi, " ");
-  const noTags = withBreaks.replace(/<[^>]*>/g, "");
-  const decoded = noTags.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, code: string) => {
+  // Linear on any input (2026-10-06 review): a tag can't contain "<", so a
+  // long run of "<" with no ">" (which made /<[^>]*>/ quadratic, a second of
+  // CPU on 40 KB) is passed over in one step. Capped at 100 KB first: nothing
+  // shown anywhere needs more.
+  const withBreaks = String(html ?? "").slice(0, 100_000).replace(/<\s*(br|\/p|\/div|\/li)\b[^<>]*>/gi, " ");
+  const noTags = withBreaks.replace(/<[^<>]*>/g, "");
+  return decodeEntities(noTags).replace(/\s+/g, " ").trim();
+}
+
+/** HTML entities to characters, exactly one level (see toPlainText). Run only on text whose tags are already gone. */
+export function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, code: string) => {
     if (code[0] === "#") {
       const n = code[1].toLowerCase() === "x" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
       return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : whole;
@@ -405,12 +470,27 @@ export function toPlainText(html: unknown): string {
     const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
     return Object.prototype.hasOwnProperty.call(named, code.toLowerCase()) ? named[code.toLowerCase()] : whole;
   });
-  return decoded.replace(/\s+/g, " ").trim();
 }
 
-export function adaptMessages(messages: Raw[]): Raw[] {
+/** The first `max` characters (never half an emoji). */
+export function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return Array.from(text).slice(0, max).join("");
+}
+
+/**
+ * Home's Messages widget. Schoology's message lists carry the author's id
+ * but not their name, so the sender is named from `names` (GET
+ * /messages/recipients, the people this student can message, read in the
+ * bundle's first wave): until 2026-10-06 this showed the raw id. Someone not
+ * on that list, or a district where it can't be read, shows as "Teacher".
+ */
+export function adaptMessages(messages: Raw[], names?: Map<string, string>): Raw[] {
   return messages.slice(0, 25).map((message) => ({
-    from: message?.author_name ?? message?.author_id ?? "Unknown sender",
+    from:
+      (typeof message?.author_name === "string" && toPlainText(message.author_name).slice(0, 120)) ||
+      names?.get(String(message?.author_id ?? "")) ||
+      "Teacher",
     courseId: "",
     // Flattened before truncating, so the 140 characters are visible text and
     // a long opening tag can't use them all up.
@@ -577,4 +657,176 @@ export function adaptCourseFiles(
   files.sort((a, b) => b.at - a.at || a.name.localeCompare(b.name));
   if (files.length > MAX_COURSE_FILES) partial = true;
   return { files: files.slice(0, MAX_COURSE_FILES), partial };
+}
+
+/* ── Recent grades and the gradebook (2026-10-06) ──────────────────────── */
+
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Most graded items listed per category, same as Classroom's. */
+const GRADEBOOK_PER_CATEGORY = 60;
+/** Exceptions that mean "no score": 1 excused, 2 incomplete. (3 is missing.) */
+const NO_SCORE_EXCEPTIONS = new Set([1, 2]);
+
+/** 18 -> "18", 7.5 -> "7.5". */
+function trimNumber(n: number): string {
+  return String(Math.round(n * 100) / 100);
+}
+
+/** Every graded-assignment row in one section's grades entry (all grading periods). */
+function gradeRows(entry: Raw | undefined): Raw[] {
+  const rows: Raw[] = [];
+  for (const period of asArray(entry?.period)) rows.push(...asArray(period?.assignment));
+  return rows;
+}
+
+/** A row's score, when it has a real one: a number, points possible, and not excused/incomplete. */
+function scoreOf(row: Raw | undefined): { earned: number; possible: number } | null {
+  if (!row) return null;
+  const earned = num(row.grade);
+  const possible = num(row.max_points);
+  if (earned === null || possible === null || possible <= 0 || earned < 0) return null;
+  if (NO_SCORE_EXCEPTIONS.has(num(row.exception) ?? 0)) return null;
+  return { earned, possible };
+}
+
+/** Assignment titles by id for one section's assignments list. */
+function titlesOf(assignments: Raw[] | undefined): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const a of assignments ?? []) {
+    const id = String(a?.id ?? "");
+    if (/^\d{1,20}$/.test(id)) titles.set(id, toPlainText(a?.title ?? "").slice(0, 200) || "Untitled");
+  }
+  return titles;
+}
+
+export interface RecentGrade {
+  title: string;
+  courseId: string;
+  letter: string;
+  pct: number;
+  pts: string;
+  when: string;
+  isNew: boolean;
+  id: string;
+}
+
+/**
+ * Home's Recent Grades for Schoology (the same shape Classroom's bundle
+ * sends): the newest scores across every class, at most 10. Built from the
+ * grades and assignments the bundle already fetched, so it costs no extra
+ * Schoology calls. Grades read from Schoology carry no title, so a score is
+ * only listed when its assignment's title is known (the first 12 classes,
+ * whose assignments the bundle reads).
+ */
+export function adaptRecentGrades(grades: Raw[], assignmentsBySection: Record<string, Raw[]>, now: number = Date.now()): RecentGrade[] {
+  const out: { at: number; grade: RecentGrade }[] = [];
+  for (const entry of grades) {
+    const courseId = String(entry?.section_id ?? entry?.id ?? "");
+    if (!courseId || !Object.prototype.hasOwnProperty.call(assignmentsBySection, courseId)) continue;
+    const titles = titlesOf(assignmentsBySection[courseId]);
+    for (const row of gradeRows(entry)) {
+      const id = String(row?.assignment_id ?? "");
+      const title = titles.get(id);
+      const score = scoreOf(row);
+      if (!title || !score) continue;
+      const at = schoologyTime(row?.timestamp) ?? 0;
+      const pct = Math.round((score.earned / score.possible) * 100);
+      out.push({
+        at,
+        grade: {
+          title,
+          courseId,
+          letter: letterFromPct(pct),
+          pct,
+          pts: `${trimNumber(score.earned)}/${trimNumber(score.possible)}`,
+          when: at ? relativeTime(String(Math.floor(at / 1000)), now) : "",
+          isNew: at > now - 2 * DAY_MS,
+          id,
+        },
+      });
+    }
+  }
+  out.sort((a, b) => b.at - a.at);
+  return out.slice(0, 10).map((x) => x.grade);
+}
+
+/**
+ * One course's Grades tab for Schoology (the gradebook page's GRADEBOOK
+ * shape, same as Classroom's): the class's grading categories with their
+ * weights, each holding the work worth points in it, oldest first.
+ *
+ * `categories` is GET /sections/{id}/grading_categories when the gradebook
+ * extra read it (exact names and weights), else the grades payload's own
+ * `grading_category` list (the bundle, which reads nothing extra; weights are
+ * sometimes missing there). A class with no weighted categories counts total
+ * points: one "All work" group worth 100. Work in no known category goes
+ * in "No category" (weight 0), as in Classroom.
+ *
+ * Unpublished work and work that doesn't count toward the grade are left
+ * out; a score is shown only when it's a real one (not excused/incomplete).
+ */
+export function adaptSchoologyGradebook(input: { categories: Raw[] | null; gradeEntry: Raw | undefined; assignments: Raw[] }): { categories: GradebookCategory[] } {
+  const scores = new Map<string, Raw>();
+  for (const row of gradeRows(input.gradeEntry)) {
+    const id = String(row?.assignment_id ?? "");
+    if (/^\d{1,20}$/.test(id)) scores.set(id, row);
+  }
+
+  type Row = { row: GradebookCategory["assignments"][number]; category: string; at: number };
+  const rows: Row[] = [];
+  const seen = new Set<string>();
+  for (const a of input.assignments) {
+    const id = String(a?.id ?? "");
+    if (!/^\d{1,20}$/.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    if (String(a?.published ?? "1") === "0" || String(a?.count_in_grade ?? "1") === "0") continue;
+    const graded = scores.get(id);
+    const points = num(a?.max_points) ?? num(graded?.max_points);
+    if (points === null || points <= 0) continue;
+    const title = toPlainText(a?.title ?? "").slice(0, 200) || "Untitled";
+    const score = scoreOf(graded);
+    rows.push({
+      row: score ? { title, score: score.earned, points, graded: true, id } : { title, points, graded: false, id },
+      category: String(a?.grading_category ?? graded?.category_id ?? ""),
+      at: schoologyTime(a?.due) ?? schoologyTime(graded?.timestamp) ?? Number.MAX_SAFE_INTEGER,
+    });
+  }
+  // Scores for work the assignments list didn't include (a long list's later
+  // pages): they count toward the grade, so they're listed too.
+  for (const [id, row] of scores) {
+    if (seen.has(id)) continue;
+    const score = scoreOf(row);
+    if (!score) continue;
+    rows.push({
+      row: { title: "Assignment", score: score.earned, points: score.possible, graded: true, id },
+      category: String(row?.category_id ?? ""),
+      at: schoologyTime(row?.timestamp) ?? Number.MAX_SAFE_INTEGER,
+    });
+  }
+  rows.sort((a, b) => a.at - b.at);
+  const list = (rs: Row[]) => rs.slice(-GRADEBOOK_PER_CATEGORY).map((r) => r.row);
+
+  const cats: { id: string; name: string; weight: number; order: number }[] = [];
+  const known = new Set<string>();
+  asArray(input.categories ?? input.gradeEntry?.grading_category).forEach((cat, index) => {
+    const id = String(cat?.id ?? "");
+    if (!id || known.has(id)) return;
+    known.add(id);
+    const weight = num(cat?.weight);
+    const delta = num(cat?.delta);
+    cats.push({
+      id,
+      name: toPlainText(cat?.title ?? cat?.name ?? "").slice(0, 80) || "Category",
+      weight: weight !== null && weight > 0 ? Math.round(weight * 100) / 100 : 0,
+      order: delta ?? index,
+    });
+  });
+  if (!cats.some((c) => c.weight > 0)) return { categories: [{ name: "All work", weight: 100, assignments: list(rows) }] };
+
+  cats.sort((a, b) => a.order - b.order);
+  const categories: GradebookCategory[] = cats.map((c) => ({ name: c.name, weight: c.weight, assignments: list(rows.filter((r) => r.category === c.id)) }));
+  const other = rows.filter((r) => !known.has(r.category));
+  if (other.length) categories.push({ name: "No category", weight: 0, assignments: list(other) });
+  return { categories };
 }

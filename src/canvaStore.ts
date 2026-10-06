@@ -39,6 +39,13 @@ export class CanvaStore extends DurableObject<CanvaConfig> {
   accessToken(uid: string): Promise<string> {
     return this.account.accessToken(uid);
   }
+  /** For exporting designs (2026-10-06): refuses a connection made without that scope. */
+  accessTokenWithScope(uid: string, scope: string): Promise<string> {
+    return this.account.accessTokenWithScope(uid, scope);
+  }
+  grantedScopes(uid: string): Promise<string[] | null> {
+    return this.account.grantedScopes(uid);
+  }
   saveReturn(ctx: ReturnContext): Promise<string> {
     return this.account.saveReturn(ctx);
   }

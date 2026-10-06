@@ -29,19 +29,55 @@ export class SchoologyError extends Error {
   }
 }
 
+/** A Schoology API URL for one of our own paths (ids already checked by the caller), with its query. */
+function schoologyUrl(path: string, query: Record<string, string | number | undefined>): URL {
+  const url = new URL(`${SCHOOLOGY_BASE}${path.startsWith("/") ? path : `/${path}`}`);
+  for (const [k, v] of Object.entries(query)) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  return url;
+}
+
+/**
+ * One signed fetch with the upstream timeout. A network failure or timeout
+ * becomes a SchoologyError (503/504) so callers keep their one error type, and
+ * so the route layer answers 502 rather than a bare 500. The message carries
+ * no credential material: `path` is one of our own constants.
+ */
+async function signedFetch(method: string, url: URL, path: string, creds: Credentials, init: { body?: string; redirect: "follow" | "manual" }): Promise<Response> {
+  const auth = await buildAuthHeader(method, url.toString(), creds);
+  const headers: Record<string, string> = { Authorization: auth, Accept: "application/json" };
+  if (init.body !== undefined) headers["Content-Type"] = "application/json";
+  try {
+    return await fetch(url.toString(), {
+      method,
+      headers,
+      body: init.body,
+      redirect: init.redirect,
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+    throw new SchoologyError(
+      timedOut
+        ? `Schoology did not respond within ${UPSTREAM_TIMEOUT_MS}ms for ${path}`
+        : `Could not reach Schoology for ${path}`,
+      timedOut ? 504 : 503
+    );
+  }
+}
+
+async function failure(response: Response, path: string): Promise<SchoologyError> {
+  const body = await response.text().catch(() => "");
+  return new SchoologyError(`Schoology returned ${response.status} for ${path}`, response.status, body.slice(0, 500));
+}
+
 export async function schoologyGet<T = unknown>(
   path: string,
   creds: Credentials,
   query: Record<string, string | number | undefined> = {}
 ): Promise<T> {
-  const url = new URL(
-    `${SCHOOLOGY_BASE}${path.startsWith("/") ? path : `/${path}`}`
-  );
-  for (const [k, v] of Object.entries(query)) {
-    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
-  }
-
-  const auth = await buildAuthHeader("GET", url.toString(), creds);
+  const url = schoologyUrl(path, query);
 
   /**
    * A ceiling on how long one upstream call may hang (2026-09-17).
@@ -57,39 +93,75 @@ export async function schoologyGet<T = unknown>(
    * app's lib/averages.ts, where tearing down the request meant the clearing
    * Set-Cookie never arrived). These are GETs: nothing is left half-done.
    */
-  let response: Response;
-  try {
-    response = await fetch(url.toString(), {
-      method: "GET",
-      headers: {
-        Authorization: auth,
-        Accept: "application/json",
-      },
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    });
-  } catch (error) {
-    // Surfaced as a SchoologyError so callers keep their one error type, and
-    // so the route layer answers 502 rather than a bare 500. The message
-    // carries no credential material — `path` is one of our own constants.
-    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
-    throw new SchoologyError(
-      timedOut
-        ? `Schoology did not respond within ${UPSTREAM_TIMEOUT_MS}ms for ${path}`
-        : `Could not reach Schoology for ${path}`,
-      timedOut ? 504 : 503
-    );
-  }
+  const response = await signedFetch("GET", url, path, creds, { redirect: "follow" });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new SchoologyError(
-      `Schoology returned ${response.status} for ${path}`,
-      response.status,
-      body.slice(0, 500)
-    );
-  }
+  if (!response.ok) throw await failure(response, path);
 
   return (await response.json()) as T;
+}
+
+/**
+ * A signed Schoology call that changes something, with a JSON body
+ * (2026-10-06: sending messages; turning in work uses it too). Same timeout
+ * and errors as schoologyGet.
+ *
+ * Signing: OAuth 1.0a only folds the body into the signature for
+ * form-encoded requests, so a JSON body is sent as-is and the signature
+ * covers the method, URL and query string, exactly as buildAuthHeader builds
+ * it for GETs.
+ *
+ * Redirects are NOT followed: a 303 after a POST would turn into a GET with a
+ * signature made for the POST (a 401), and the change has already happened by
+ * then. A 3xx counts as done. Answers with the parsed JSON body, or null when
+ * there's none (204, a redirect, or a body that isn't JSON).
+ *
+ * `path` must be one of our own paths with ids already checked by the route
+ * (digits only); nothing from the browser goes into it unchecked.
+ */
+export async function schoologyRequest<T = unknown>(
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  creds: Credentials,
+  body?: unknown,
+  query: Record<string, string | number | undefined> = {}
+): Promise<T | null> {
+  const url = schoologyUrl(path, query);
+  const response = await signedFetch(method, url, path, creds, {
+    body: body === undefined ? undefined : JSON.stringify(body),
+    redirect: "manual",
+  });
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!response.ok) throw await failure(response, path);
+  const text = await response.text().catch(() => "");
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** schoologyRequest("POST", ...). */
+export function schoologyPost<T = unknown>(
+  path: string,
+  creds: Credentials,
+  body: unknown,
+  query: Record<string, string | number | undefined> = {}
+): Promise<T | null> {
+  return schoologyRequest<T>("POST", path, creds, body, query);
+}
+
+/** schoologyRequest("PUT", ...). */
+export function schoologyPut<T = unknown>(
+  path: string,
+  creds: Credentials,
+  body: unknown,
+  query: Record<string, string | number | undefined> = {}
+): Promise<T | null> {
+  return schoologyRequest<T>("PUT", path, creds, body, query);
 }
 
 /**
@@ -140,11 +212,17 @@ export async function getAssignments(sectionId: string, creds: Credentials) {
   return listOf(payload, "assignment");
 }
 
+/**
+ * A message folder's threads. `limit` is optional: without it Schoology's own
+ * default page applies (what the bundle and notifications have always read);
+ * the Messages page asks for more (2026-10-06).
+ */
 export async function getMessages(
   folder: "inbox" | "sent",
-  creds: Credentials
+  creds: Credentials,
+  limit?: number
 ) {
-  const payload = await schoologyGet(`/messages/${folder}`, creds);
+  const payload = await schoologyGet(`/messages/${folder}`, creds, limit ? { limit } : {});
   return listOf(payload, "message");
 }
 
@@ -268,11 +346,19 @@ export async function openAttachment(downloadPath: string, creds: Credentials): 
   const get = async (url: string) => {
     const headers: Record<string, string> = {};
     if (isSchoologyApiUrl(url)) headers.Authorization = await buildAuthHeader("GET", url, creds);
+    // The 20 s limit is for Schoology to START answering, not for the whole
+    // file: AbortSignal.timeout would also cut off the body while a big file
+    // is still streaming to the student (2026-10-06). So the timer is cleared
+    // as soon as the response headers arrive.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
     try {
-      return await fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
-    } catch (error) {
-      const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+      return await fetch(url, { headers, redirect: "manual", signal: controller.signal });
+    } catch {
+      const timedOut = controller.signal.aborted;
       throw new SchoologyError(timedOut ? "Attachment download timed out" : "Could not download the attachment", timedOut ? 504 : 503);
+    } finally {
+      clearTimeout(timer);
     }
   };
 

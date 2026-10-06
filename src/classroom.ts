@@ -18,7 +18,7 @@
  * otherwise), so 11:59 PM homework doesn't show as due the next day.
  */
 
-import { colorForCourse, computeProjectedGPA, letterFromPct, predict, type AdaptedCourse } from "./adapt.ts";
+import { colorForCourse, computeProjectedGPA, letterFromPct, parsePeriod, predict, sectionLabel, type AdaptedCourse } from "./adapt.ts";
 
 export const CLASSROOM_API = "https://classroom.googleapis.com/v1";
 
@@ -102,7 +102,8 @@ export async function classroomList(path: string, key: string, params: Record<st
   return { items, next: token };
 }
 
-const COURSE_FIELDS = "courses(id,name,alternateLink,updateTime,gradebookSettings),nextPageToken";
+// `section` and `room` (2026-10-06): the course cards' period and section line.
+const COURSE_FIELDS = "courses(id,name,section,room,alternateLink,updateTime,gradebookSettings),nextPageToken";
 const WORK_FIELDS = "courseWork(id,title,workType,maxPoints,dueDate,dueTime,alternateLink,gradeCategory(id),updateTime,creationTime),nextPageToken";
 const SUB_FIELDS = "studentSubmissions(id,courseWorkId,state,late,assignedGrade,alternateLink,updateTime),nextPageToken";
 const ANN_FIELDS = "announcements(id,text,alternateLink,updateTime),nextPageToken";
@@ -532,6 +533,10 @@ export function adaptClassroomBundle(raw: CourseRaw[], now: number, tz: string) 
       predictedPct: pct === null ? 0 : predictedPct || Math.round(pct),
       trend,
       updated: relativeFrom(latest || null, now, tz),
+      code: "",
+      period: parsePeriod(course.section),
+      section: classroomSection(course.section, course.room, name),
+      teacher: "",
       platform: "classroom",
       graded: pct !== null,
       link: classroomUrl(course.alternateLink),
@@ -626,6 +631,18 @@ export function gradebookCategories(rows: GradebookRow[], settings: Raw | undefi
     return cats;
   }
   return [{ name: "All work", weight: 100, assignments: list(rows) }];
+}
+
+/**
+ * A Classroom class's section line (2026-10-06): its "Section" text when that
+ * says more than the period, else its room ("Room 214" when the room is just
+ * a number).
+ */
+export function classroomSection(section: unknown, room: unknown, name: string): string {
+  const label = sectionLabel(plain(section, 120), name);
+  if (label) return label;
+  const r = plain(room, 60);
+  return /^[0-9][0-9A-Za-z-]*$/.test(r) ? `Room ${r}` : r;
 }
 
 /** 18 -> "18", 7.5 -> "7.5" (Classroom grades have at most two decimals). */

@@ -23,15 +23,32 @@
  *
  * Scopes requested: design:content:write (import a file as a design),
  * design:meta:read (read/list designs) and profile:read (the "Connected as"
- * name). design:content:read is only needed once exporting a design as a PDF
- * ships (turning a draft in), and must be switched on in the Developer Portal
- * first.
+ * name). design:content:read (exporting a design as a PDF to turn it in) is
+ * added only when CANVA_EXPORT_ENABLED is "1": see canvaScopes().
  */
 
 export const CANVA_API = "https://api.canva.com/rest/v1";
 const AUTHORIZE = "https://www.canva.com/api/oauth/authorize";
 
 export const CANVA_SCOPES = ["design:content:write", "design:meta:read", "profile:read"].join(" ");
+
+/** Needed to export a design (a PDF to turn in, 2026-10-06). */
+export const EXPORT_SCOPE = "design:content:read";
+
+/**
+ * Exporting is switched on by the CANVA_EXPORT_ENABLED var (2026-10-06), and
+ * only after design:content:read is ticked for the integration in Canva's
+ * Developer Portal: asking for a scope the integration doesn't have makes
+ * Canva refuse the whole connect, so it can't be requested ahead of time.
+ */
+export function canvaExportEnabled(env: { CANVA_EXPORT_ENABLED?: string }): boolean {
+  return env.CANVA_EXPORT_ENABLED === "1";
+}
+
+/** The scopes a new connection asks for. */
+export function canvaScopes(env: { CANVA_EXPORT_ENABLED?: string }): string {
+  return canvaExportEnabled(env) ? `${CANVA_SCOPES} ${EXPORT_SCOPE}` : CANVA_SCOPES;
+}
 
 /** Every Canva call gives up after 20 seconds, the same rule as the Schoology calls. */
 const TIMEOUT_MS = 20_000;
@@ -49,6 +66,8 @@ export interface CanvaConfig {
   CANVA_REDIRECT_URI?: string;
   /** Also seals the stored Canva tokens (see sealTokens). */
   SESSION_SECRET?: string;
+  /** "1" once design:content:read is enabled in Canva's Developer Portal (see canvaScopes). */
+  CANVA_EXPORT_ENABLED?: string;
 }
 
 export function canvaConfigured(env: CanvaConfig): boolean {
@@ -286,6 +305,11 @@ function prune<T extends { exp?: number }>(map: Record<string, T> | undefined, k
   return Object.assign(Object.create(null), Object.fromEntries(live.slice(-keep)));
 }
 
+/** Canva's space-separated `scope`, as a list; null when it wasn't sent. */
+function scopesOf(tokens: CanvaTokens): string[] | null {
+  return typeof tokens.scope === "string" && tokens.scope.trim() ? tokens.scope.trim().split(/\s+/) : null;
+}
+
 /** An entry that was really stored under `key`, never an inherited property. */
 function own<T>(map: Record<string, T>, key: string): T | null {
   return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : null;
@@ -332,7 +356,7 @@ export class CanvaAccount {
       ["response_type", "code"],
       ["code_challenge", await codeChallenge(verifier)],
       ["code_challenge_method", "S256"],
-      ["scope", CANVA_SCOPES],
+      ["scope", canvaScopes(this.env)],
       ["state", state],
       ["redirect_uri", this.env.CANVA_REDIRECT_URI!],
     ] as [string, string][])
@@ -421,6 +445,9 @@ export class CanvaAccount {
           const fresh = await tokenRequest(this.env, { grant_type: "refresh_token", refresh_token: tokens.refresh_token });
           // Disconnected while this was on its way to Canva: don't bring the connection back.
           if (gen !== this.generation) throw new CanvaError("canva_not_connected", 409);
+          // A refresh keeps the scopes the student granted; if Canva leaves
+          // them out of the answer, keep the ones we knew (2026-10-06).
+          if (!fresh.scope && tokens.scope) fresh.scope = tokens.scope;
           // Save BEFORE using it: the new refresh token is now the only valid one.
           await this.saveTokens(uid, fresh);
           return fresh.access_token;
@@ -438,6 +465,31 @@ export class CanvaAccount {
       })();
     }
     return this.refreshing;
+  }
+
+  /**
+   * The scopes the student actually granted, from Canva's token answer
+   * (2026-10-06). Null when we don't know (Canva didn't say).
+   */
+  async grantedScopes(uid: string): Promise<string[] | null> {
+    const tokens = await this.loadTokens(uid);
+    return tokens ? scopesOf(tokens) : null;
+  }
+
+  /**
+   * An access token that can do `scope`. A connection made before the scope
+   * was asked for can't: the student has to reconnect to grant it, so that's
+   * canva_reconnect_needed (without dropping the connection, which still
+   * works for everything else). Checked before any refresh, so a token that
+   * can't do it never costs a refresh. When Canva never told us the scopes,
+   * the call goes ahead and Canva's own answer decides.
+   */
+  async accessTokenWithScope(uid: string, scope: string): Promise<string> {
+    const tokens = await this.loadTokens(uid);
+    if (!tokens) throw new CanvaError("canva_not_connected", 409);
+    const granted = scopesOf(tokens);
+    if (granted && !granted.includes(scope)) throw new CanvaError("canva_reconnect_needed", 409);
+    return this.accessToken(uid);
   }
 
   /* ── Return contexts ── */
