@@ -31,7 +31,9 @@ Schoology and Classroom.
 | Assignment details and attachment downloads | Built (2026-10-05) |
 | Course files (`/data/files`): every class's Materials documents and assignment attachments | Built (2026-10-05) |
 | Google Drive and OneDrive | Built (2026-10-05), entirely in the student's browser; the Worker only serves public app IDs |
-| Rate limiting | Planned |
+| Per-page extras (`/data/people`, `/data/updates`, `/data/events`, `/data/folders`, `/data/gradebook`) and Schoology messages (read, send, reply) | Built (2026-10-06) |
+| Browser notifications (`/push/*`) | Built (2026-10-05), wired in 2026-10-06; switched on once `PUSH_SECRET` and the VAPID keys are set |
+| Rate limiting | Built (2026-10-06): per student and per IP, counted in memory; an optional Workers Rate Limiting binding can be added (see `src/rateLimit.ts`) |
 
 ## How sign-in works
 
@@ -53,8 +55,13 @@ the same session cookie as a Schoology sign-in, and the browser goes back to the
 page with `?google=ok` (or `cancelled`, `permissions`, `expired`, `failed`,
 `unavailable`). All Classroom permissions are read-only:
 `classroom.courses.readonly`, `classroom.coursework.me.readonly`,
-`classroom.courseworkmaterials.readonly`, `classroom.announcements.readonly`, plus
-`openid email profile`.
+`classroom.courseworkmaterials.readonly`, `classroom.announcements.readonly`,
+`classroom.rosters.readonly` (teachers' names, 2026-10-06) and
+`classroom.topics.readonly` (topics as folders in Materials, 2026-10-06), plus
+`openid email profile`. Only courses and coursework are required. The permissions a
+student granted are sealed into their session at sign-in, so a student who signed in
+before rosters and topics were added gets them by signing in again; until then those
+extras answer empty with `needsPermission: true`.
 
 Classroom's API only lets an app turn in work that the same app created, so students
 turn work in on Classroom; the app shows the status and links there.
@@ -91,9 +98,9 @@ signs them out.
   browser on each request.
 - **Sync Across Devices** (off by default) stores one record per student, keyed by
   their Schoology user ID: their Averages.io settings (name, photo, background,
-  colors, course nicknames) and, only if the Weekly Grade Summary email is also on,
-  at most two Projected GPA numbers (this week's and last week's). Turning sync off
-  deletes the record. Each student's record lives in their own Durable Object,
+  colors, course nicknames). Turning sync off deletes the record. (Until 2026-10-06
+  it could also hold two Projected GPA numbers for the Weekly Grade Summary email,
+  which browser notifications replaced; an old record drops them on its next save.) Each student's record lives in their own Durable Object,
   created in Cloudflare's `us` jurisdiction, so it is stored and handled only in
   the United States. (It used Workers KV until 2026-10-04; KV copies data
   worldwide, so it was replaced.)
@@ -105,6 +112,11 @@ signs them out.
   jurisdiction, separate from Sync (turning Sync off doesn't disconnect Canva).
   Disconnect deletes all of it. Their designs live in their own Canva account;
   attachment files pass through the Worker on their way to Canva and aren't kept.
+- **Browser notifications** (only if the student turns them on): up to 5 browsers'
+  push subscriptions, which kinds of notification are on, their sign-in sealed with
+  `PUSH_SECRET` (expiring with the session), and a snapshot of short keyed hashes to
+  tell what changed. One Durable Object per student, in the `us` jurisdiction.
+  Turning notifications off, or signing out, deletes all of it.
 - **Google Classroom: nothing.** Classes, coursework, grades and announcements are
   read with the student's own token on each request and passed to the browser.
   Class files stay in Google Drive: the app gets their Drive links, and nothing is
@@ -113,6 +125,10 @@ signs them out.
   student's browser to Google or Microsoft. Their tokens stay in that browser tab
   and never reach this Worker; the Worker only serves the public app IDs
   (`/config/cloud`) and the assignment files being copied (`/data/attachment`).
+- **School applications** (from school staff, not students): the school's name, its
+  Canvas address, the contact email and anything they typed, at most 500, in one US
+  Durable Object; plus when each address that wrote to schools@averages.io last got the
+  automatic reply (30 days).
 - **Nothing else.** No analytics, no tracking, no ads.
 
 ## Endpoints
@@ -121,11 +137,23 @@ signs them out.
 |---|---|---|---|
 | `GET` | `/` | | Health and setup check. Says whether `SESSION_SECRET` reaches the running Worker, never any part of it |
 | `POST` | `/auth/session` | | Sign in with `{key, secret}`; sets the session cookie |
-| `DELETE` | `/auth/session` | | Sign out; clears the cookie |
+| `DELETE` | `/auth/session` | | Sign out; clears the cookie and deletes the student's notification subscriptions and stored sign-in |
 | `GET` | `/auth/google/start?under13=` | | Sign in with Google (browser navigation): sets the 10-minute state cookie and sends the browser to Google. `under13` is the login page's 13+ box; anything but `0` seals Incognito in |
 | `GET` | `/auth/google/callback` | | Where Google sends the student back; sets the session cookie and returns to the login page with `?google=<outcome>` |
 | `GET` | `/auth/me` | yes | The signed-in student (`provider`: `schoology` or `google`) |
-| `GET` | `/data/bundle?tz=` | yes | Everything the app's pages show, in one call. For Google Classroom, `tz` (the device's time zone) puts UTC due dates on the right day, and the bundle also carries `platform: "classroom"`, `SUBMITTED`, `RECENT_GRADES`, `COURSE_UPDATES` (announcements) and `GRADEBOOK` |
+| `GET` | `/data/bundle?tz=` | yes | Everything the app's pages show, in one call: classes (with `code`, `period`, `section`, `teacher`), grades, assignments, Home's messages, `RECENT_GRADES` and each class's `GRADEBOOK`. For Google Classroom, `tz` (the device's time zone) puts UTC due dates on the right day, and the bundle also carries `platform: "classroom"`, `SUBMITTED` and `COURSE_UPDATES` (announcements) |
+| `GET` | `/data/people` | yes | The student's teachers: `TEACHERS`, `CONTACTS`, `courseTeachers`. Schoology: each class's admins (never students). Classroom: needs the rosters permission (`needsPermission` otherwise) |
+| `GET` | `/data/updates` | yes | Teachers' posts in each class, newest first (Schoology; Classroom's are in the bundle) |
+| `GET` | `/data/events?start=&end=&course=` | yes | Calendar events in a range of at most 400 days (`YYYY-MM-DD`), optionally one class's |
+| `GET` | `/data/folders?course=` | yes | A class's folders and which items sit in them (Schoology folders; Classroom topics, with the topics permission) |
+| `GET` | `/data/gradebook?course=` | yes | One class's grading categories with exact weights (Schoology; Classroom's bundle is exact already) |
+| `GET` | `/messages` | yes | Schoology inbox and sent threads, merged, newest first, with names |
+| `GET` | `/messages/thread?id=` | yes | One thread, oldest message first (marks it read on Schoology) |
+| `GET` | `/messages/recipients` | yes | The people the student can message |
+| `POST` | `/messages` | yes | `{recipientIds, subject, message}`: a new message, only to people `/messages/recipients` lists |
+| `POST` | `/messages/reply` | yes | `{id, message}`: a reply to the thread's own participants |
+| `GET` | `/push/config` | | The notification public key (`null` until set up) |
+| `POST`, `PUT`, `DELETE` | `/push/...` | yes | Turn browser notifications on or off, choose kinds, send a test (see `src/push.ts`) |
 | `GET` | `/sync/settings` | yes | Read the synced settings |
 | `PUT` | `/sync/settings` | yes | Save the synced settings (2 MB max) |
 | `DELETE` | `/sync/settings` | yes | Delete everything sync stored |
@@ -143,8 +171,25 @@ signs them out.
 | `POST` | `/canva/designs/:id/open` | yes | A fresh editor link with a Return key |
 | `GET` | `/canva/designs` | yes | The student's Canva designs, newest first, 50 a page |
 | `GET` | `/config/cloud` | | Public IDs the app needs to connect Google Drive and OneDrive in the browser (`null` for anything not set up) |
+| `POST` | `/submit/upload` | yes | Turning in (Schoology): `{section, assignment, filename, filesize, md5}` starts an upload; answers with a sealed upload token (Schoology's upload address never reaches the browser) |
+| `PUT` | `/submit/upload/:token` | yes | The file's bytes (95 MB max), streamed straight through to Schoology |
+| `POST` | `/submit/file` | yes | `{section, assignment, fileIds}`: turns the uploaded files in |
+| `POST` | `/submit/text` | yes | `{section, assignment, body}`: turns in a typed answer (HTML, cleaned to a short allow-list) |
+| `GET` | `/submit/history?section=&assignment=` | yes | The student's own turn-ins for that assignment, newest first |
+| `POST` | `/canva/designs/:id/export` | yes | Starts a PDF export of the student's design (to turn in). 409 `canva_reconnect_needed` until `CANVA_EXPORT_ENABLED` is `"1"` and the connection has the export permission |
+| `GET` | `/canva/exports/:job` and `/canva/exports/:job/file?design=` | yes | The export's status, then the PDF itself (streamed) |
+| `GET` | `/config/schools?lms=schoology\|canvas` | | The schools the sign-in page lists (`src/schools.ts`) |
+| `POST` | `/schools/apply` | | A school's application from `app.averages.io/schools/apply`: `{school, canvas, email, name?, note?}`. Saved, then emailed to Martin. 5 per 10 minutes per network |
+| `GET` | `/schools/applications` | key | Every application, newest first. Needs `Authorization: Bearer <SCHOOLS_ADMIN_KEY>`; doesn't exist until that secret is set |
 
-Demo sessions get `403 not_available_in_demo` on the sync, assignment and Canva routes.
+Demo sessions get `403 not_available_in_demo` on the sync, assignment, extras, messages,
+notification and Canva routes. Messages are Schoology only: a Google session gets
+`404 not_available`.
+
+**Rate limits** (per minute): sign-in 30 per IP; `/data/*` and reading messages 60 per
+student; sending messages 10; `/submit/*` 40; `/push/*` 20; `/canva/*` 30. Over the
+limit: `429 {"error":"rate_limited"}` with `Retry-After`. Preflights, `GET /` and the
+public config reads are never limited.
 Google sessions get `404 classroom_files_open_in_drive` from `/data/attachment` and
 `403 classroom_not_supported` from `/canva/edit` (their files are in Google Drive).
 
@@ -205,6 +250,10 @@ feature gets its own route with its own fixed Schoology calls.
 | `CANVA_CLIENT_SECRET` | Canva Connect app secret (Developer Portal). Without it Canva reports "not set up" |
 | `GOOGLE_PICKER_API_KEY` | Google Cloud API key for "Add from Google Drive". **Must** be restricted to `https://app.averages.io/*` and the Google Picker API: it's served publicly, and `/config/cloud` can't tell a restricted key from an unrestricted one |
 | `GOOGLE_PROJECT_NUMBER` | Optional. The Google Cloud project number the Picker needs; without it, the number at the start of `GOOGLE_CLIENT_ID` is used |
+| `PUSH_SECRET` | Browser notifications: seals each student's stored sign-in. A new random value, never the same as `SESSION_SECRET` (notifications stay off if it is) |
+| `VAPID_PRIVATE_JWK` | Browser notifications: the private half of the VAPID key pair, as JWK JSON text |
+| `SCHOOLS_NOTIFY_TO` | Schools: the inbox that gets every email to schools@averages.io and every school application. Must be a verified destination in Email Routing. A secret so the address isn't in this public repo |
+| `SCHOOLS_ADMIN_KEY` | Schools: unlocks `GET /schools/applications`. A long random value (24+ characters) |
 
 Make a `SESSION_SECRET` with:
 `node -e "console.log(crypto.randomUUID()+crypto.randomUUID())"`
@@ -219,6 +268,30 @@ Make a `SESSION_SECRET` with:
 | `CANVA_REDIRECT_URI` | `https://api.averages.io/canva/callback` |
 | `MS_CLIENT_ID` | The Microsoft Entra app's Application (client) ID, for OneDrive. A public ID, no client secret (it's a single-page app registration) |
 | `GOOGLE_DRIVE_CLIENT_ID` | Optional. A separate Google OAuth client (same Google Cloud project) used only for Google Drive in the browser; its only setting is the JavaScript origin `https://app.averages.io`. Without it, Google Drive uses `GOOGLE_CLIENT_ID` |
+| `VAPID_PUBLIC_KEY` | Browser notifications: the public half of the VAPID key pair (base64url). Set in the dashboard, not in `wrangler.jsonc` |
+| `VAPID_SUBJECT` | Optional. Contact for push services, default `mailto:help@averages.io` |
+| `CANVA_EXPORT_ENABLED` | `"1"` once the `design:content:read` scope is enabled for the Canva integration (turning in Canva designs as PDFs). Leave `"0"` until then: asking Canva for a scope it hasn't approved breaks Connect |
+
+### Schools email (schools@averages.io)
+
+A student's Email Template (sign-in page, Canvas) asks their school's IT team to write to
+schools@averages.io. The Worker's `email` handler forwards every message to
+`SCHOOLS_NOTIFY_TO` and answers a school's first email (once per sender per 30 days, never
+to auto-replies, bounces or mailing lists) with a formatted reply linking to
+`app.averages.io/schools/apply`. To switch it on:
+
+1. Cloudflare dashboard, averages.io, **Email > Email Routing**: enable it (it adds MX and
+   SPF records; if averages.io already receives mail somewhere else, move those addresses
+   into Email Routing first).
+2. **Destination addresses**: add your inbox and click the link Cloudflare emails you.
+3. **Routing rules > Custom address**: `schools@averages.io` → **Send to a Worker** →
+   `averages-api`.
+4. Set the secrets `SCHOOLS_NOTIFY_TO` (that inbox) and `SCHOOLS_ADMIN_KEY`.
+5. Uncomment the `send_email` block in `wrangler.jsonc` and deploy (the application
+   emails need it; the auto-reply and forwarding don't).
+
+Read the saved applications with
+`curl -H "Authorization: Bearer $SCHOOLS_ADMIN_KEY" https://api.averages.io/schools/applications`.
 
 `keep_vars` is on, so a variable added only in the dashboard survives deploys; one that's
 also in `wrangler.jsonc` takes the file's value.
@@ -236,7 +309,7 @@ Cloudflare's local runtime can't pin Durable Objects to the US, so on
 
 ```bash
 npm install
-npm test          # OAuth signing, sessions, data adapters, sync, Canva, cloud config, course files, Google Classroom
+npm test          # OAuth signing, sessions, adapters, sync, Canva, cloud config, files, Classroom, notifications, extras, messages, rate limits, routes
 npm run dev       # local Worker on http://localhost:8787
 ```
 
@@ -257,8 +330,8 @@ TypeScript support.
 - **Adapters** run against realistic Schoology responses, including its quirks:
   single results sent as a bare object instead of a list, two timestamp formats, and
   excused work that must not pull a grade trend down.
-- **Sync:** records stay separate per student, the GPA snapshot never holds more
-  than two numbers, and the weekly email switch is read correctly.
+- **Sync:** records stay separate per student, and an old record's GPA snapshot
+  (from the removed weekly email) is ignored on load and dropped on the next save.
 - **Canva:** PKCE against the RFC 7636 test vector, forged and reused states
   (including names like `constructor`), sealed tokens that only open for their own
   student, one refresh for many simultaneous requests, Disconnect beating a refresh
@@ -281,6 +354,29 @@ TypeScript support.
   the session's contents, token refresh into its own cookie, revoked access, Classroom
   errors, Schoology-only routes refusing a Google session, forged sessions, and the
   42-call budget.
+- **Notifications** (`webpush.test.ts`, `push.test.ts`): Web Push encryption and VAPID
+  signing, what counts as a change, the per-student store and its routes.
+- **Extras and messages** (`extras.test.ts`, `messages.test.ts`): period parsing,
+  recent grades and gradebooks, teachers from admin enrollments only, course updates,
+  calendar events in both platforms, folders and topics, message threads, text both
+  ways, and checking what the browser sends.
+- **Rate limits** (`ratelimit.test.ts`) and **routes** (`routes.test.ts`, the real
+  Worker with Schoology and Google faked): demo and Classroom answers, input checks,
+  the recipient allow-list, replies going only to the thread's participants, no
+  student names from rosters, at most 3 Schoology calls in flight, 429s, and sign-out
+  deleting notification data.
+- **Turning in** (`submit.test.ts`): Schoology's upload, attach and answer calls exactly
+  as documented, the sealed upload token (tampered, expired, someone else's, wrong
+  size), the PUT streamed through byte for byte, the OAuth header only ever sent to
+  api.schoology.com, the answer cleaner (script, event handlers and `javascript:` links
+  out; real editor output with `<div>` lines kept readable; a fuzz run), and Canva PDF
+  exports (permission, ownership, download hosts, size cap). `canvastatus.test.ts`
+  covers when Settings offers Reconnect.
+- **Schools** (`schools.test.ts`, `schoolsApply.test.ts`): the sign-in page's lists, the
+  application's checks and spam trap, saving and duplicates, Martin's list behind its
+  key, the email builder (no header injection, encoded subjects, both parts decode),
+  and the schools@ handler: forwarded, answered once per sender, never to robots or
+  mailing lists, and never throwing.
 
 The keys and secrets in the test files are the public example values from the
 OAuth spec and made-up strings, not real credentials.

@@ -27,7 +27,12 @@
     "CANVA_REDIRECT_URI": "https://api.averages.io/canva/callback",
     // OneDrive (Microsoft Entra app "Averages.io", single-page app, no secret).
     // Public: it's sent to the browser by GET /config/cloud.
-    "MS_CLIENT_ID": "c006202b-180f-4d4c-b03c-c0f43048c8e9"
+    "MS_CLIENT_ID": "c006202b-180f-4d4c-b03c-c0f43048c8e9",
+    // Turning in Canva designs as PDFs (2026-10-06) needs the Canva scope
+    // design:content:read. Change to "1" only AFTER that scope is turned on
+    // for the integration in Canva's Developer Portal: Connect asks for it
+    // then, and asking for a scope Canva hasn't approved breaks Connect.
+    "CANVA_EXPORT_ENABLED": "0"
   },
   // Sync Across Devices: one SyncStore Durable Object per student (src/syncStore.ts).
   // The code always opens them in the "us" jurisdiction, so the stored record
@@ -39,17 +44,36 @@
   // in the "us" jurisdiction (src/canvaStore.ts). Holds their Canva tokens
   // (encrypted), drafts and short-lived Return contexts. Separate from SyncStore
   // so turning Sync off never disconnects Canva.
+  //
+  // Browser notifications (2026-10-06): one PushStore Durable Object per
+  // student who turns them on, also in the "us" jurisdiction (src/pushStore.ts).
+  // Holds their browsers' push subscriptions, their sealed sign-in and a
+  // snapshot of short hashes; its alarm checks for changes every ~20 minutes.
+  // Turning notifications off (or signing out) deletes it all.
   "durable_objects": {
     "bindings": [
       { "name": "SYNC", "class_name": "SyncStore" },
-      { "name": "CANVA", "class_name": "CanvaStore" }
+      { "name": "CANVA", "class_name": "CanvaStore" },
+      { "name": "PUSH", "class_name": "PushStore" },
+      // School applications and the schools@ auto-reply log (2026-10-06):
+      // one object for the whole app, opened in the "us" jurisdiction.
+      { "name": "SCHOOLS", "class_name": "SchoolsStore" }
     ]
   },
+  // Schools email (2026-10-06): emails Martin each school application, from
+  // schools@averages.io. Turn on Email Routing for averages.io FIRST (and add
+  // Martin's inbox as a verified destination), then uncomment this; a
+  // send_email binding on an account without Email Routing can fail the deploy.
+  // "send_email": [
+  //   { "name": "SCHOOLS_MAIL" }
+  // ],
   // One-time setup Cloudflare runs on the first deploy that includes SyncStore.
   // Never edit or remove a tag once deployed; later changes get a new tag.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SyncStore"] },
-    { "tag": "v2", "new_sqlite_classes": ["CanvaStore"] }
+    { "tag": "v2", "new_sqlite_classes": ["CanvaStore"] },
+    { "tag": "v3", "new_sqlite_classes": ["PushStore"] },
+    { "tag": "v4", "new_sqlite_classes": ["SchoolsStore"] }
   ]
   // Allowed CORS origins and the session cookie's domain are hardcoded as
   // ALLOWED_ORIGINS/COOKIE_DOMAIN constants in src/index.ts rather than
@@ -57,7 +81,22 @@
   //
   // Secrets (dashboard or `npx wrangler secret put`, never in this file):
   // SESSION_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-  // CANVA_CLIENT_ID, CANVA_CLIENT_SECRET
+  // CANVA_CLIENT_ID, CANVA_CLIENT_SECRET,
+  // PUSH_SECRET (browser notifications: a random value, NOT the same as
+  // SESSION_SECRET; it seals the stored sign-in), VAPID_PRIVATE_JWK (the
+  // notification key pair's private half, as JWK JSON text).
+  //
+  // Dashboard variable (plain text, not a secret; keep_vars keeps it on
+  // deploy): VAPID_PUBLIC_KEY, the key pair's public half (base64url). It's
+  // deliberately not under "vars" above: that would overwrite the dashboard
+  // value with this file's on every deploy. VAPID_SUBJECT is optional
+  // (default mailto:help@averages.io). Until PUSH_SECRET and both VAPID keys
+  // are set, notifications show as "Coming soon".
+  //
+  // Rate limits (2026-10-06) run in memory with nothing to set up. A shared
+  // Workers Rate Limiting binding (RATE_LIMITER) can be added later; it's
+  // left out here because this repo's wrangler 3.x doesn't know the
+  // "ratelimits" key. See src/rateLimit.ts for how to add it.
   //
   // Also set in the dashboard (as a secret, so a deploy keeps it, even though
   // it ends up public): GOOGLE_PICKER_API_KEY, a Google Cloud API key that MUST
