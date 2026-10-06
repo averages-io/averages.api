@@ -25,7 +25,6 @@
     "CANVA_CLIENT_ID": "OC-AaDPpElswNe6",
     "GOOGLE_REDIRECT_URI": "https://api.averages.io/auth/google/callback",
     "CANVA_REDIRECT_URI": "https://api.averages.io/canva/callback",
-    "VAPID_PUBLIC_KEY": "BL3oWE3nt_phnXKit4vdx5RQsMQV85rK8Vc7HjYJiulzJ681RRE8qmZpyyuqB738mz4hWtvDgnaQesyQ2JulH8M",
     // OneDrive (Microsoft Entra app "Averages.io", single-page app, no secret).
     // Public: it's sent to the browser by GET /config/cloud.
     "MS_CLIENT_ID": "c006202b-180f-4d4c-b03c-c0f43048c8e9",
@@ -33,7 +32,11 @@
     // design:content:read. Change to "1" only AFTER that scope is turned on
     // for the integration in Canva's Developer Portal: Connect asks for it
     // then, and asking for a scope Canva hasn't approved breaks Connect.
-    "CANVA_EXPORT_ENABLED": "1"
+    "CANVA_EXPORT_ENABLED": "0",
+    // Canva folders on the Files page (2026-10-06) need folder:read and
+    // folder:write. Same rule: "1" only AFTER both are enabled (and approved)
+    // for the integration in Canva's Developer Portal.
+    "CANVA_FOLDERS_ENABLED": "0"
   },
   // Sync Across Devices: one SyncStore Durable Object per student (src/syncStore.ts).
   // The code always opens them in the "us" jurisdiction, so the stored record
@@ -65,9 +68,9 @@
   // schools@averages.io. Turn on Email Routing for averages.io FIRST (and add
   // Martin's inbox as a verified destination), then uncomment this; a
   // send_email binding on an account without Email Routing can fail the deploy.
-   "send_email": [
-     { "name": "SCHOOLS_MAIL" }
-   ],
+  // "send_email": [
+  //   { "name": "SCHOOLS_MAIL" }
+  // ],
   // One-time setup Cloudflare runs on the first deploy that includes SyncStore.
   // Never edit or remove a tag once deployed; later changes get a new tag.
   "migrations": [

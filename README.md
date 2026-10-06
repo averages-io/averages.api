@@ -178,6 +178,8 @@ signs them out.
 | `GET` | `/submit/history?section=&assignment=` | yes | The student's own turn-ins for that assignment, newest first |
 | `POST` | `/canva/designs/:id/export` | yes | Starts a PDF export of the student's design (to turn in). 409 `canva_reconnect_needed` until `CANVA_EXPORT_ENABLED` is `"1"` and the connection has the export permission |
 | `GET` | `/canva/exports/:job` and `/canva/exports/:job/file?design=` | yes | The export's status, then the PDF itself (streamed) |
+| `GET` | `/canva/folders/:id/items` | yes | A Canva folder's folders and designs for the Files page (`root` is the top of Projects), 100 a page. 409 `canva_reconnect_needed` until `CANVA_FOLDERS_ENABLED` is `"1"` and the connection has the folder permissions |
+| `POST` | `/canva/folders`, `/canva/folders/:id/rename`, `/canva/folders/move` | yes | New folder `{name, parentId}`, rename `{name}`, move a design or folder `{itemId, toFolderId}`. No delete (Canva would put the contents in the Trash) |
 | `GET` | `/config/schools?lms=schoology\|canvas` | | The schools the sign-in page lists (`src/schools.ts`) |
 | `POST` | `/schools/apply` | | A school's application from `app.averages.io/schools/apply`: `{school, canvas, email, name?, note?}`. Saved, then emailed to Martin. 5 per 10 minutes per network |
 | `GET` | `/schools/applications` | key | Every application, newest first. Needs `Authorization: Bearer <SCHOOLS_ADMIN_KEY>`; doesn't exist until that secret is set |
@@ -271,6 +273,7 @@ Make a `SESSION_SECRET` with:
 | `VAPID_PUBLIC_KEY` | Browser notifications: the public half of the VAPID key pair (base64url). Set in the dashboard, not in `wrangler.jsonc` |
 | `VAPID_SUBJECT` | Optional. Contact for push services, default `mailto:help@averages.io` |
 | `CANVA_EXPORT_ENABLED` | `"1"` once the `design:content:read` scope is enabled for the Canva integration (turning in Canva designs as PDFs). Leave `"0"` until then: asking Canva for a scope it hasn't approved breaks Connect |
+| `CANVA_FOLDERS_ENABLED` | `"1"` once `folder:read` and `folder:write` are enabled (and approved) for the Canva integration: Connect asks for them and the Files page shows Canva folders. Leave `"0"` until then, for the same reason. Students connected before then see Reconnect |
 
 ### Schools email (schools@averages.io)
 
@@ -372,6 +375,10 @@ TypeScript support.
   out; real editor output with `<div>` lines kept readable; a fuzz run), and Canva PDF
   exports (permission, ownership, download hosts, size cap). `canvastatus.test.ts`
   covers when Settings offers Reconnect.
+- **Canva folders** (`canvaFolders.test.ts`): the switch and scopes, listing (images
+  skipped, odd ids and paging tokens refused), new folder, rename and move with their
+  Canva errors (in several folders, not allowed, busy), other-site and form posts
+  refused, and `/canva/status`'s `folders`.
 - **Schools** (`schools.test.ts`, `schoolsApply.test.ts`): the sign-in page's lists, the
   application's checks and spam trap, saving and duplicates, Martin's list behind its
   key, the email builder (no header injection, encoded subjects, both parts decode),
