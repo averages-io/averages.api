@@ -139,7 +139,7 @@ const sessionCookieHeader = setCookies(ok).find((c) => c.startsWith(SESSION_COOK
 check("session cookie on .averages.io for 30 days", sessionCookieHeader.split("; ").slice(1), ["Path=/", "Domain=.averages.io", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=2592000"]);
 const token = cookieValue(ok, SESSION_COOKIE)!;
 const opened = await openSession(token, SECRET);
-check("session: Google uid, no Schoology keys, 13+ not Incognito", [opened?.uid, opened?.key, opened?.secret, opened?.inc, opened?.g?.sc, opened?.g?.rt], ["g:109876543210", "", "", undefined, "cwma", "1//refresh-token"]);
+check("session: Google uid, no Schoology keys, 13+ not Incognito", [opened?.uid, opened?.key, opened?.secret, opened?.inc, opened?.g?.sc, opened?.g?.rt], ["g:109876543210", "", "", undefined, "cwmart", "1//refresh-token"]);
 check("the token never appears in the redirect", (ok.headers.get("Location") ?? "").includes("ya29"), false);
 
 const me = await call("/auth/me", { cookie: `${SESSION_COOKIE}=${token}` });

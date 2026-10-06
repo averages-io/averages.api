@@ -248,7 +248,7 @@ check("a class that failed marks partial", files.partial, true);
 
 console.log("\nsign-in helpers");
 const all = Object.values(CLASSROOM_SCOPES).join(" ") + " openid https://www.googleapis.com/auth/userinfo.email";
-check("granted letters", grantedLetters(all), "cwma");
+check("granted letters (rosters and topics added 2026-10-06)", grantedLetters(all), "cwmart");
 check("required present", hasRequiredScopes("cwma"), true);
 check("coursework unticked: refused", hasRequiredScopes(grantedLetters(CLASSROOM_SCOPES.c + " " + CLASSROOM_SCOPES.a)), false);
 check("letters ignore look-alikes", grantedLetters(CLASSROOM_SCOPES.c + "x " + CLASSROOM_SCOPES.w.toUpperCase()), "");

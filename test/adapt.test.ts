@@ -19,7 +19,9 @@ import {
   letterFromPct,
   predict,
   relativeTime,
+  toPlainText,
 } from "../src/adapt.ts";
+import { messageText } from "../src/messages.ts";
 import { listOf } from "../src/schoology.ts";
 
 let passed = 0;
@@ -241,6 +243,22 @@ console.log("\nmessage bodies are flattened to plain text (they arrive as HTML)"
     long[0].preview,
     "Hello there"
   );
+}
+
+// 2026-10-06 review: a long run of "<" with no ">" used to take quadratic time
+// (a second of CPU for 40 KB). Linear now, so it's milliseconds.
+{
+  const nasty = "<".repeat(40000) + "x";
+  let t0 = performance.now();
+  const plain = toPlainText(nasty);
+  const tPlain = performance.now() - t0;
+  t0 = performance.now();
+  messageText("<br".repeat(13000) + "<" .repeat(1000));
+  const tMsg = performance.now() - t0;
+  check("toPlainText: 40 KB of '<' is fast", tPlain < 50, true);
+  check("messageText: a flood of unclosed tags is fast", tMsg < 50, true);
+  check("...and still plain text", plain.endsWith("x"), true);
+  check("normal markup still flattened", toPlainText("<p>Hi <b>there</b></p><br>next &amp; last"), "Hi there next & last");
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

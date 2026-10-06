@@ -1,5 +1,7 @@
 /**
- * Tests for the Sync Across Devices / Projected-GPA-snapshot storage layer.
+ * Tests for the Sync Across Devices storage layer. (The Projected-GPA
+ * snapshot for the weekly email lived here too until 2026-10-06; the tests
+ * below now check that an old record's snapshot is ignored and dropped.)
  *
  * Run: node --experimental-strip-types test/sync.test.ts
  *
@@ -12,12 +14,8 @@
 
 import {
   deleteSyncRecord,
-  isoWeekOf,
   loadSyncRecord,
-  recordGpaSnapshot,
   saveSyncRecord,
-  syncEnabledIn,
-  weeklyGradeSummaryEnabledIn,
   kvFromSyncStore,
   type KVLike,
   type SyncStoreLike,
@@ -38,9 +36,10 @@ function check(name: string, actual: unknown, expected: unknown) {
 }
 const checkTrue = (name: string, v: boolean) => check(name, v, true);
 
-function fakeKV(): KVLike {
+function fakeKV(): KVLike & { store: Map<string, string> } {
   const store = new Map<string, string>();
   return {
+    store,
     async get(key, type) {
       const raw = store.get(key);
       if (raw === undefined) return null;
@@ -61,14 +60,12 @@ console.log("\nloadSyncRecord / saveSyncRecord");
   const empty = await loadSyncRecord(kv, "u1");
   check("no record yet -> empty shape, not null/undefined", empty, {
     settings: null,
-    gpaSnapshot: { current: null, previous: null },
     updatedAt: "",
     settingsUpdatedAt: "",
   });
 
   await saveSyncRecord(kv, "u1", {
     settings: { syncAcrossDevices: true, accent: "#d94a2b" },
-    gpaSnapshot: { current: null, previous: null },
     updatedAt: "2026-09-08T00:00:00.000Z",
     settingsUpdatedAt: "2026-09-08T00:00:00.000Z",
   });
@@ -91,175 +88,38 @@ console.log("\nloadSyncRecord defensiveness against malformed/pre-migration stor
   const kv = fakeKV();
   // @ts-ignore — deliberately writing something not shaped like a SyncRecord,
   // simulating either an old format or hand-edited KV data.
-  await kv.put("sync:u3", JSON.stringify({ settings: { a: 1 } })); // no gpaSnapshot/updatedAt at all
+  await kv.put("sync:u3", JSON.stringify({ settings: { a: 1 } })); // no updatedAt at all
   const loaded = await loadSyncRecord(kv, "u3");
-  check("missing gpaSnapshot falls back to {current: null, previous: null}", loaded.gpaSnapshot, {
-    current: null,
-    previous: null,
-  });
   check("missing updatedAt falls back to ''", loaded.updatedAt, "");
   check("missing settingsUpdatedAt falls back to '' — an old, pre-migration record", loaded.settingsUpdatedAt, "");
   check("settings still comes through", loaded.settings, { a: 1 });
+}
 
-  // A record written by the PRE-2026-09-12 code — the old multi-week
-  // `gpaHistory` array — must not be carried forward into the new shape.
-  // That's the whole point of shrinking retention: an old record with
-  // months of entries sitting in KV should read back with none of them,
-  // not have them silently translated into `current`/`previous`.
-  const kv2 = fakeKV();
-  await kv2.put(
+console.log("\nan old record's GPA snapshot (weekly email, removed 2026-10-06) is ignored and dropped");
+{
+  const kv = fakeKV();
+  await kv.put(
     "sync:u4",
     JSON.stringify({
-      settings: { syncAcrossDevices: true },
-      gpaHistory: [
-        { isoWeek: "2026-W20", date: "2026-05-11", gpa: 3.4 },
-        { isoWeek: "2026-W21", date: "2026-05-18", gpa: 3.5 },
-      ],
-      updatedAt: "2026-05-18T00:00:00.000Z",
-      settingsUpdatedAt: "2026-05-18T00:00:00.000Z",
+      settings: { syncAcrossDevices: true, settingsOptions: { weeklyGradeSummary: true } },
+      gpaSnapshot: {
+        current: { isoWeek: "2026-W40", date: "2026-10-01", gpa: 3.6 },
+        previous: { isoWeek: "2026-W39", date: "2026-09-24", gpa: 3.5 },
+      },
+      gpaHistory: [{ isoWeek: "2026-W20", date: "2026-05-11", gpa: 3.4 }],
+      updatedAt: "2026-10-01T00:00:00.000Z",
+      settingsUpdatedAt: "2026-09-30T00:00:00.000Z",
     })
   );
-  const loaded2 = await loadSyncRecord(kv2, "u4");
-  check("an old gpaHistory array is dropped, not translated, on load", loaded2.gpaSnapshot, {
-    current: null,
-    previous: null,
-  });
-}
-
-console.log("\nisoWeekOf");
-{
-  // 2026-09-08 is a Tuesday. Spot-check against a known ISO week rather than
-  // re-deriving the algorithm in the test.
-  check("2026-09-08 (Tue) is week 37", isoWeekOf(new Date("2026-09-08T12:00:00Z")), "2026-W37");
-  check(
-    "same calendar week, different weekday, same ISO week (ISO weeks run Mon-Sun)",
-    isoWeekOf(new Date("2026-09-07T12:00:00Z")), // that week's Monday
-    isoWeekOf(new Date("2026-09-13T12:00:00Z")) // that week's Sunday
-  );
-  check("Jan 1 2026 (a Thursday) is week 01", isoWeekOf(new Date("2026-01-01T12:00:00Z")), "2026-W01");
-}
-
-console.log("\nrecordGpaSnapshot");
-{
-  const empty = { settings: null, gpaSnapshot: { current: null, previous: null }, updatedAt: "", settingsUpdatedAt: "" };
-  const first = recordGpaSnapshot(empty, 3.45, new Date("2026-09-01T12:00:00Z"));
-  check("first-ever snapshot has no 'last week' to compare against", first.lastWeek, null);
-  check("...so no delta either", first.deltaVsLastWeek, null);
-  check("current is exactly what was passed in", first.current, 3.45);
-  check("record now holds exactly one snapshot, as 'current'", first.record.gpaSnapshot, {
-    current: { isoWeek: "2026-W36", date: "2026-09-01", gpa: 3.45 },
-    previous: null,
-  });
-
-  const second = recordGpaSnapshot(first.record, 3.52, new Date("2026-09-08T12:00:00Z"));
-  check("second week's 'last week' is the first snapshot", second.lastWeek, 3.45);
-  check("delta is current minus last week", second.deltaVsLastWeek, 0.07);
-  check("a new week rotates current into previous — never more than two on file", second.record.gpaSnapshot, {
-    current: { isoWeek: "2026-W37", date: "2026-09-08", gpa: 3.52 },
-    previous: { isoWeek: "2026-W36", date: "2026-09-01", gpa: 3.45 },
-  });
-
-  const sameWeekAgain = recordGpaSnapshot(second.record, 3.6, new Date("2026-09-09T09:00:00Z"));
-  check(
-    "a reload later in the SAME ISO week updates 'current' in place, still only two snapshots total",
-    sameWeekAgain.record.gpaSnapshot,
-    {
-      current: { isoWeek: "2026-W37", date: "2026-09-09", gpa: 3.6 },
-      previous: { isoWeek: "2026-W36", date: "2026-09-01", gpa: 3.45 },
-    }
-  );
-  check("...and 'last week' still means the prior week, not the earlier same-week value", sameWeekAgain.lastWeek, 3.45);
-  check("delta reflects the overwritten value", sameWeekAgain.deltaVsLastWeek, Math.round((3.6 - 3.45) * 100) / 100);
-
-  // A gap: no snapshot recorded for several weeks, then one more.
-  const gapped = recordGpaSnapshot(sameWeekAgain.record, 3.8, new Date("2026-10-20T12:00:00Z"));
-  check(
-    "after a multi-week gap, 'last week' is still the most recent PRIOR snapshot, not null",
-    gapped.lastWeek,
-    3.6
-  );
-  check("...and the gap-week entry itself is gone — only ever two on file, never a longer trail", gapped.record.gpaSnapshot, {
-    current: { isoWeek: "2026-W43", date: "2026-10-20", gpa: 3.8 },
-    previous: { isoWeek: "2026-W37", date: "2026-09-09", gpa: 3.6 },
-  });
-
-  // settingsUpdatedAt must survive every GPA-snapshot write untouched — the
-  // whole point of splitting it from updatedAt (see sync.ts's own comment)
-  // is that /data/bundle's snapshot piggyback runs on nearly every page
-  // load and must never look, to a client comparing settingsUpdatedAt, like
-  // a settings change happened.
-  const withStamp = recordGpaSnapshot(
-    {
-      settings: { accent: "#2e8ae5" },
-      gpaSnapshot: { current: null, previous: null },
-      updatedAt: "",
-      settingsUpdatedAt: "2026-09-08T00:00:00.000Z",
-    },
-    3.9,
-    new Date("2026-09-09T12:00:00Z")
-  );
-  check(
-    "recordGpaSnapshot leaves settingsUpdatedAt exactly as it found it",
-    withStamp.record.settingsUpdatedAt,
-    "2026-09-08T00:00:00.000Z"
-  );
-  checkTrue(
-    "...even though updatedAt itself does move",
-    withStamp.record.updatedAt !== "2026-09-08T00:00:00.000Z" && withStamp.record.updatedAt.length > 0
-  );
-}
-
-console.log("\nrecordGpaSnapshot never grows past two snapshots");
-{
-  let record = { settings: null, gpaSnapshot: { current: null, previous: null } as any, updatedAt: "", settingsUpdatedAt: "" };
-  let date = new Date("2026-01-05T12:00:00Z"); // a Monday
-  for (let i = 0; i < 17; i++) {
-    const result = recordGpaSnapshot(record, 3.0 + i * 0.01, date);
-    record = result.record;
-    date = new Date(date.getTime() + 7 * 86400000); // +1 week
-  }
-  const entryCount = [record.gpaSnapshot.current, record.gpaSnapshot.previous].filter(Boolean).length;
-  check("never holds more than 2 snapshots, no matter how many weeks pass", entryCount, 2);
-  checkTrue(
-    "current is the most recent value, previous the one right before it",
-    record.gpaSnapshot.current.gpa > record.gpaSnapshot.previous.gpa
-  );
-}
-
-console.log("\nsyncEnabledIn");
-{
-  checkTrue("explicit true", syncEnabledIn({ syncAcrossDevices: true }));
-  check("explicit false", syncEnabledIn({ syncAcrossDevices: false }), false);
-  check("missing key defaults to NOT enabled — an unconfirmed blob should never trigger snapshotting", syncEnabledIn({}), false);
-  check("null settings (never synced)", syncEnabledIn(null), false);
-  check("settings that isn't even an object", syncEnabledIn("nonsense"), false);
-  check("truthy-but-not-literally-true doesn't count", syncEnabledIn({ syncAcrossDevices: "true" }), false);
-}
-
-console.log("\nweeklyGradeSummaryEnabledIn");
-{
-  checkTrue(
-    "explicit true, nested under settingsOptions (the real collectSyncedSettings() shape)",
-    weeklyGradeSummaryEnabledIn({ settingsOptions: { weeklyGradeSummary: true } })
-  );
-  check(
-    "explicit false",
-    weeklyGradeSummaryEnabledIn({ settingsOptions: { weeklyGradeSummary: false } }),
-    false
-  );
-  check("missing settingsOptions entirely", weeklyGradeSummaryEnabledIn({ syncAcrossDevices: true }), false);
-  check("settingsOptions present but missing the key", weeklyGradeSummaryEnabledIn({ settingsOptions: {} }), false);
-  check("null settings", weeklyGradeSummaryEnabledIn(null), false);
-  check("settings that isn't even an object", weeklyGradeSummaryEnabledIn("nonsense"), false);
-  check(
-    "truthy-but-not-literally-true doesn't count",
-    weeklyGradeSummaryEnabledIn({ settingsOptions: { weeklyGradeSummary: "true" } }),
-    false
-  );
-  checkTrue(
-    "sync being on doesn't imply the email is on — the two are checked independently",
-    !weeklyGradeSummaryEnabledIn({ syncAcrossDevices: true, settingsOptions: {} })
-  );
+  const loaded = await loadSyncRecord(kv, "u4");
+  check("loads only settings and the two timestamps", Object.keys(loaded), ["settings", "updatedAt", "settingsUpdatedAt"]);
+  check("the timestamps come through as they were", [loaded.updatedAt, loaded.settingsUpdatedAt], ["2026-10-01T00:00:00.000Z", "2026-09-30T00:00:00.000Z"]);
+  await saveSyncRecord(kv, "u4", { ...loaded, updatedAt: "2026-10-06T00:00:00.000Z" });
+  const stored = JSON.parse(kv.store.get("sync:u4")!);
+  check("the next save writes the record without gpaSnapshot or gpaHistory", Object.keys(stored), ["settings", "updatedAt", "settingsUpdatedAt"]);
+  // Even when something passes a record that still has one (a caller spreading an old object).
+  await saveSyncRecord(kv, "u4", { ...(loaded as any), gpaSnapshot: { current: 1 } });
+  check("saveSyncRecord writes exactly the three fields, whatever it's given", Object.keys(JSON.parse(kv.store.get("sync:u4")!)), ["settings", "updatedAt", "settingsUpdatedAt"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -282,9 +142,9 @@ console.log("\nkvFromSyncStore (Durable Object storage)");
   const store = fakeStore();
   const kv = kvFromSyncStore(() => store);
   check("nothing saved yet reads as an empty record", await loadSyncRecord(kv, "77"), {
-    settings: null, gpaSnapshot: { current: null, previous: null }, updatedAt: "", settingsUpdatedAt: "",
+    settings: null, updatedAt: "", settingsUpdatedAt: "",
   });
-  const rec = { settings: { theme: "dark" }, gpaSnapshot: { current: null, previous: null }, updatedAt: "t1", settingsUpdatedAt: "t1" };
+  const rec = { settings: { theme: "dark" }, updatedAt: "t1", settingsUpdatedAt: "t1" };
   await saveSyncRecord(kv, "77", rec);
   check("a saved record comes back exactly as written", await loadSyncRecord(kv, "77"), rec);
   checkTrue("it's stored as a JSON string, same as KV was", typeof [...store.data.values()][0] === "string");
@@ -299,7 +159,7 @@ console.log("\nkvFromSyncStore (Durable Object storage)");
   check("making the wrapper doesn't touch the Durable Object yet", opened, 0);
   let rejected = false;
   await loadSyncRecord(kv, "77").catch(() => { rejected = true; });
-  checkTrue("a missing binding is a rejected promise (so /data/bundle's .catch keeps grades working), not a thrown error", rejected);
+  checkTrue("a missing binding is a rejected promise the caller can catch, not a thrown error", rejected);
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
