@@ -172,41 +172,115 @@ resetRateLimits();
 
 /* ── Email to schools@ ──────────────────────────────────────────────── */
 console.log("\nemail handler");
-function incoming(from: string, headers: Record<string, string> = {}, to = SCHOOLS_ADDRESS) {
+const enc = (t: string) => new TextEncoder().encode(t);
+const RAW_REPLY = [
+  'From: "Jane Doe" <jane@nmusd.us>',
+  "To: schools@averages.io",
+  "Subject: Re: Averages.io for our students",
+  "Message-ID: <m2@mail.nmusd.us>",
+  "MIME-Version: 1.0",
+  'Content-Type: multipart/alternative; boundary="b1"',
+  "",
+  "--b1",
+  'Content-Type: text/plain; charset="utf-8"',
+  "Content-Transfer-Encoding: quoted-printable",
+  "",
+  "Hi! We applied =E2=80=94 our Canvas is nmusd.instructure.com.=",
+  "",
+  "Thanks, Jane",
+  "--b1",
+  "Content-Type: text/html; charset=utf-8",
+  "",
+  "<p>Hi! We applied</p>",
+  "--b1--",
+  "",
+].join("\r\n");
+function incoming(from: string, headers: Record<string, string> = {}, to = SCHOOLS_ADDRESS, raw = "") {
   const log = { forwards: [] as string[], replies: [] as any[] };
+  const bytes = enc(raw);
   const msg: any = {
-    from, to, headers: new Headers({ Subject: "Averages.io for our students", "Message-ID": "<m1@mail.nmusd.us>", ...headers }), raw: null, rawSize: 0,
+    from, to, headers: new Headers({ Subject: "Averages.io for our students", "Message-ID": "<m1@mail.nmusd.us>", ...headers }),
+    raw: raw ? new Response(bytes).body : null, rawSize: bytes.length,
     setReject() {}, async forward(addr: string) { log.forwards.push(addr); }, async reply(m: any) { log.replies.push(m); },
   };
   return { msg, log };
 }
 {
-  const env = { ...ENV, SCHOOLS: fakeSchools() };
+  const env = { ...ENV, SCHOOLS: fakeSchools(), SCHOOLS_NOTIFY_TO: " Martin@Example.org " };
+  sent.length = 0;
   const a = incoming("Jane IT <jane@nmusd.us>");
   await handleSchoolsEmail(a.msg, env);
-  check("forwarded to Martin", a.log.forwards, ["martin@example.org"]);
+  check("a copy to Martin from schools@ (not a forward), address cleaned", [sent.length, sent[0]?.from, sent[0]?.to, a.log.forwards.length], [1, SCHOOLS_ADDRESS, "Martin@example.org", 0]);
+  check("copy: Reply-To the sender", headerOf(sent[0]?.raw ?? "", "Reply-To"), "jane@nmusd.us");
+  check("copy: subject says who (encoded, it has a middle dot)", (headerOf(sent[0]?.raw ?? "", "Subject") ?? "").startsWith("=?UTF-8?B?"), true);
   check("one automatic reply, to the sender, from schools@", [a.log.replies.length, a.log.replies[0]?.from, a.log.replies[0]?.to], [1, SCHOOLS_ADDRESS, "jane@nmusd.us"]);
   const r = a.log.replies[0]?.raw ?? "";
   check("threaded, marked automatic, Re: subject", [headerOf(r, "In-Reply-To"), headerOf(r, "Auto-Submitted"), headerOf(r, "Subject")], ["<m1@mail.nmusd.us>", "auto-replied", "Re: Averages.io for our students"]);
   check("the reply has the apply link", part(r, "text/html").includes(APPLY_URL), true);
-  const b = incoming("jane@nmusd.us");
+
+  // Her reply, with a real body: its text is in Martin's copy and the original is attached.
+  sent.length = 0;
+  const b = incoming('"Jane Doe" <jane@nmusd.us>', { From: '"Jane Doe" <jane@nmusd.us>', Subject: "Re: Averages.io for our students", "Message-ID": "<m2@mail.nmusd.us>" }, SCHOOLS_ADDRESS, RAW_REPLY);
   await handleSchoolsEmail(b.msg, env);
-  check("her second email: forwarded, no second reply", [b.log.forwards.length, b.log.replies.length], [1, 0]);
+  const copy = sent[0]?.raw ?? "";
+  check("her second email: copied, no second reply", [sent.length, b.log.replies.length, b.log.forwards.length], [1, 0, 0]);
+  check("copy shows her words (quoted-printable, utf-8)", part(copy, "text/plain").includes("Hi! We applied \u2014 our Canvas is nmusd.instructure.com.\r\nThanks, Jane".replace("\r\n", "\n")) || part(copy, "text/plain").includes("Hi! We applied \u2014 our Canvas is nmusd.instructure.com."), true);
+  check("copy names her", part(copy, "text/plain").includes("From: Jane Doe (jane@nmusd.us)"), true);
+  check("copy is multipart/mixed with the original attached", [/^Content-Type: multipart\/mixed;/m.test(copy.split("\r\n\r\n")[0]), copy.includes('filename="original-email.eml"')], [true, true]);
+  const att = copy.slice(copy.indexOf('filename="original-email.eml"'));
+  const b64 = att.slice(att.indexOf("\r\n\r\n") + 4, att.indexOf("\r\n--"));
+  check("the attachment is the original, byte for byte", new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\r\n/g, "")), (c) => c.charCodeAt(0))), RAW_REPLY);
+
   const c = incoming("noreply@nmusd.us");
+  sent.length = 0;
   await handleSchoolsEmail(c.msg, env);
-  check("a robot: forwarded, never answered", [c.log.forwards.length, c.log.replies.length], [1, 0]);
+  check("a robot: copied, never answered", [sent.length, c.log.replies.length], [1, 0]);
   const d = incoming("bob@other.org", {}, "help@averages.io");
+  sent.length = 0;
   await handleSchoolsEmail(d.msg, env);
-  check("another address routed here: forwarded only", [d.log.forwards.length, d.log.replies.length], [1, 0]);
+  check("another address routed here: copied only", [sent.length, d.log.replies.length], [1, 0]);
+
+  // No send binding: a plain forward, as before.
+  const g = incoming("gina@school.org");
+  await handleSchoolsEmail(g.msg, { ...env, SCHOOLS_MAIL: undefined });
+  check("no SCHOOLS_MAIL: forwarded instead", g.log.forwards, ["Martin@example.org"]);
+  // The copy fails: falls back to forwarding.
+  const h = incoming("hal@school.org");
+  await handleSchoolsEmail(h.msg, { ...env, SCHOOLS_MAIL: { send: async () => { throw new Error("not verified"); } } });
+  check("copy failed: forwarded instead", h.log.forwards, ["Martin@example.org"]);
+  // A huge email: the text only, no attachment.
+  sent.length = 0;
+  const big = incoming("ivy@school.org", {}, SCHOOLS_ADDRESS, RAW_REPLY);
+  big.msg.rawSize = 11 * 1024 * 1024;
+  await handleSchoolsEmail(big.msg, env);
+  check("too big to attach: sent without it, and says so", [sent.length, (sent[0]?.raw ?? "").includes("original-email.eml"), part(sent[0]?.raw ?? "", "text/plain").includes("too big to attach")], [1, false, true]);
+
   const e = incoming("amy@school.org");
   e.msg.forward = async () => { throw new Error("unverified destination"); };
   e.msg.reply = async () => { throw new Error("DMARC failed"); };
   let crashed = false;
-  try { await handleSchoolsEmail(e.msg, env); } catch { crashed = true; }
+  try { await handleSchoolsEmail(e.msg, { ...env, SCHOOLS_MAIL: { send: async () => { throw new Error("x"); } } }); } catch { crashed = true; }
   check("failures are logged, never thrown", crashed, false);
   const f = incoming("zed@school.org");
+  sent.length = 0;
   await handleSchoolsEmail(f.msg, { ...env, SCHOOLS_NOTIFY_TO: undefined });
-  check("no inbox set: still answers", [f.log.forwards.length, f.log.replies.length], [0, 1]);
+  check("no inbox set: still answers, sends no copy", [f.log.forwards.length, sent.length, f.log.replies.length], [0, 0, 1]);
+}
+
+console.log("\nreading emails");
+{
+  const { readEmailText, htmlToText, MAX_TEXT } = await import("../src/mailRead.ts");
+  check("plain text preferred", readEmailText(enc(RAW_REPLY)).startsWith("Hi! We applied \u2014"), true);
+  const htmlOnly = ["Content-Type: text/html; charset=utf-8", "Content-Transfer-Encoding: base64", "", btoa("<div>Hello<br>there &amp; <b>you</b></div><script>x()</script>")].join("\r\n");
+  check("HTML only, base64: readable text", readEmailText(enc(htmlOnly)), "Hello\nthere & you");
+  const nested = ['Content-Type: multipart/mixed; boundary="o"', "", "--o", 'Content-Type: multipart/alternative; boundary="i"', "", "--i", "Content-Type: text/plain; charset=iso-8859-1", "Content-Transfer-Encoding: quoted-printable", "", "Caf=E9 menu", "--i--", "--o", "Content-Type: application/pdf", "Content-Disposition: attachment; filename=a.pdf", "", "JVBERi0=", "--o--", ""].join("\r\n");
+  check("nested parts, latin-1, attachment skipped", readEmailText(enc(nested)), "Caf\u00e9 menu");
+  check("no text at all", readEmailText(enc("Content-Type: image/png\r\n\r\nxx")), "");
+  check("long text cut, says so", readEmailText(enc("Content-Type: text/plain\r\n\r\n" + "a".repeat(MAX_TEXT + 50))).endsWith("[cut short: the full email is attached]"), true);
+  const t0 = Date.now();
+  htmlToText("<script>".repeat(20000) + "x");
+  readEmailText(enc("Content-Type: text/html\r\n\r\n" + "<a ".repeat(100000)));
+  check("hostile HTML stays fast", Date.now() - t0 < 2000, true);
 }
 check("the Worker exports an email handler", typeof (worker as any).email, "function");
 
