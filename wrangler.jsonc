@@ -65,9 +65,9 @@
   // schools@averages.io. Turn on Email Routing for averages.io FIRST (and add
   // Martin's inbox as a verified destination), then uncomment this; a
   // send_email binding on an account without Email Routing can fail the deploy.
-  // "send_email": [
+   "send_email": [
      { "name": "SCHOOLS_MAIL" }
-  // ],
+   ],
   // One-time setup Cloudflare runs on the first deploy that includes SyncStore.
   // Never edit or remove a tag once deployed; later changes get a new tag.
   "migrations": [
