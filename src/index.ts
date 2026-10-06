@@ -86,7 +86,8 @@ import { cloudConfig } from "./cloud.ts";
 import { schoolsFor, validateApplication } from "./schools.ts";
 import { EmailMessage } from "cloudflare:email";
 import { autoReplyAllowed, buildMime, cleanEmail, SCHOOLS_ADDRESS } from "./mail.ts";
-import { applicationEmail, autoReplyEmail } from "./schoolsMail.ts";
+import { applicationEmail, autoReplyEmail, inboundCopyEmail } from "./schoolsMail.ts";
+import { readEmailText } from "./mailRead.ts";
 import type { SchoolsStore } from "./schoolsStore.ts";
 import {
   accessCookie,
@@ -1597,12 +1598,13 @@ app.post("/schools/apply", async (c) => {
   if (!store) return c.json({ error: "unavailable" }, 503);
   try {
     const { app: saved, duplicate } = await store.add(checked.value);
-    if (c.env.SCHOOLS_MAIL && c.env.SCHOOLS_NOTIFY_TO) {
+    const notifyTo = cleanEmail(c.env.SCHOOLS_NOTIFY_TO);
+    if (c.env.SCHOOLS_MAIL && notifyTo) {
       const mail = applicationEmail(saved, duplicate);
-      const raw = buildMime({ from: SCHOOLS_ADDRESS, fromName: "Averages.io schools", to: c.env.SCHOOLS_NOTIFY_TO, replyTo: saved.email, ...mail });
+      const raw = buildMime({ from: SCHOOLS_ADDRESS, fromName: "Averages.io schools", to: notifyTo, replyTo: saved.email, ...mail });
       // After the answer: a slow or failed email never costs the school its "sent".
       c.executionCtx.waitUntil(
-        c.env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, c.env.SCHOOLS_NOTIFY_TO, raw)).catch((error: unknown) => console.error("schools_notify_failed", error))
+        c.env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, notifyTo, raw)).catch((error: unknown) => console.error("schools_notify_failed", error))
       );
     }
     return c.json({ ok: true });
@@ -1630,19 +1632,68 @@ app.get("/schools/applications", async (c) => {
 
 /**
  * Email to schools@averages.io (Email Routing sends it to this Worker).
- * Everything is forwarded to Martin's inbox; a school's first email also gets
- * the automatic reply with the application link (once per sender per 30
- * days, never to robots: see autoReplyAllowed in mail.ts). Never throws: a
- * failure is logged, the email itself was still delivered to Martin.
+ * Martin gets a copy of every email; a school's first email also gets the
+ * automatic reply with the application link (once per sender per 30 days,
+ * never to robots: see autoReplyAllowed in mail.ts). Never throws: a failure
+ * is logged.
+ *
+ * The copy (2026-10-06, Martin: "I am only getting the ... form ... emails
+ * but not the emails they send after"): with SCHOOLS_MAIL bound, Martin's
+ * copy is a new email from schools@averages.io (the sender's text inside,
+ * the original attached, Reply-To the sender), sent the same way as the
+ * application emails that do arrive. A plain forward keeps the sender's own
+ * From and Message-ID, which Gmail can drop (his own test emails look like
+ * copies of mail he sent) or file as spam. Without the binding, or if the
+ * copy fails, it falls back to forwarding.
  */
+/** The biggest original attached to Martin's copy; bigger ones send the text only. */
+const COPY_ATTACH_MAX = 10 * 1024 * 1024;
+
 export async function handleSchoolsEmail(message: ForwardableEmailMessage, env: Bindings, _ctx?: ExecutionContext): Promise<void> {
   const to = cleanEmail(message.to);
   const from = cleanEmail(message.from);
-  if (env.SCHOOLS_NOTIFY_TO) {
-    try {
-      await message.forward(env.SCHOOLS_NOTIFY_TO);
-    } catch (error) {
-      console.error("schools_forward_failed", error);
+  // The same clean address the application emails go to (a stray space or
+  // capital in the secret mustn't stop one and not the other).
+  const notifyTo = cleanEmail(env.SCHOOLS_NOTIFY_TO);
+  if (notifyTo) {
+    let copied = false;
+    if (env.SCHOOLS_MAIL) {
+      try {
+        const size = Number(message.rawSize) || 0;
+        const tooBig = size > COPY_ATTACH_MAX;
+        const bytes = !tooBig && message.raw ? new Uint8Array(await new Response(message.raw).arrayBuffer()) : null;
+        const fromHeader = String(message.headers.get("From") ?? "");
+        const fromName = (/^\s*"?([^"<]{1,80}?)"?\s*</.exec(fromHeader)?.[1] ?? "").trim();
+        const mail = inboundCopyEmail({
+          from: from || String(message.from ?? "").slice(0, 254) || "unknown sender",
+          fromName,
+          to: to || SCHOOLS_ADDRESS,
+          subject: String(message.headers.get("Subject") ?? ""),
+          text: bytes ? readEmailText(bytes) : "",
+          receivedAt: Date.now(),
+          attached: !!bytes,
+          tooBig,
+        });
+        const raw = buildMime({
+          from: SCHOOLS_ADDRESS,
+          fromName: "Averages.io schools",
+          to: notifyTo,
+          replyTo: from || undefined,
+          ...mail,
+          attachments: bytes ? [{ filename: "original-email.eml", contentType: "application/octet-stream", data: bytes }] : [],
+        });
+        await env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, notifyTo, raw));
+        copied = true;
+      } catch (error) {
+        console.error("schools_copy_failed", String(error));
+      }
+    }
+    if (!copied) {
+      try {
+        await message.forward(notifyTo);
+      } catch (error) {
+        console.error("schools_forward_failed", String(error));
+      }
     }
   }
   if (to !== SCHOOLS_ADDRESS || !from) return;

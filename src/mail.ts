@@ -90,9 +90,26 @@ export interface MailParts {
   inReplyTo?: string;
   /** Marks it as an automatic reply (RFC 3834), so other robots don't answer it. */
   autoReply?: boolean;
+  /** Files sent along (2026-10-06: the original email, on Martin's copy of a school's email). */
+  attachments?: MailAttachment[];
   /** For tests: a fixed date and boundary. */
   now?: Date;
   boundary?: string;
+}
+
+export interface MailAttachment {
+  filename: string;
+  contentType: string;
+  data: Uint8Array;
+}
+
+/** An attachment's name, safe inside a quoted header parameter. */
+function attachmentName(name: string): string {
+  return headerText(name, 120).replace(/["\\]/g, "").replace(/[^\x20-\x7e]/g, "_") || "attachment";
+}
+
+function b64Bytes(bytes: Uint8Array): string {
+  return (b64(bytes).match(/.{1,76}/g) ?? [""]).join("\r\n");
 }
 
 /** A complete raw message, CRLF line endings, ready for EmailMessage. */
@@ -116,10 +133,37 @@ export function buildMime(p: MailParts): string {
   const parent = /^<[^<>\s]{1,250}>$/.test(headerText(p.inReplyTo ?? "")) ? headerText(p.inReplyTo) : "";
   if (parent) headers.push(`In-Reply-To: ${parent}`, `References: ${parent}`);
   if (p.autoReply) headers.push("Auto-Submitted: auto-replied", "X-Auto-Response-Suppress: All", "Precedence: auto_reply");
+  const files = (p.attachments ?? []).filter((a) => a && a.data instanceof Uint8Array);
+  if (files.length) {
+    // multipart/mixed: the text and HTML (as before) first, then each file.
+    const outer = `${boundary}_mixed`;
+    headers.push(`Content-Type: multipart/mixed; boundary="${outer}"`);
+    return [
+      ...headers,
+      "",
+      `--${outer}`,
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      "",
+      ...alternative(boundary, p),
+      ...files.flatMap((f) => [
+        `--${outer}`,
+        `Content-Type: ${/^[a-z]+\/[a-z0-9.+-]+$/i.test(f.contentType) ? f.contentType : "application/octet-stream"}; name="${attachmentName(f.filename)}"`,
+        "Content-Transfer-Encoding: base64",
+        `Content-Disposition: attachment; filename="${attachmentName(f.filename)}"`,
+        "",
+        b64Bytes(f.data),
+      ]),
+      `--${outer}--`,
+      "",
+    ].join("\r\n");
+  }
   headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+  return [...headers, "", ...alternative(boundary, p), ""].join("\r\n");
+}
+
+/** The text and HTML versions, as the lines of a multipart/alternative body. */
+function alternative(boundary: string, p: MailParts): string[] {
   return [
-    ...headers,
-    "",
     `--${boundary}`,
     "Content-Type: text/plain; charset=utf-8",
     "Content-Transfer-Encoding: base64",
@@ -131,8 +175,7 @@ export function buildMime(p: MailParts): string {
     "",
     b64Body(p.html),
     `--${boundary}--`,
-    "",
-  ].join("\r\n");
+  ];
 }
 
 /** Anything that only reads headers (the incoming message's are a Headers object). */

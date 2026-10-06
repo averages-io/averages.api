@@ -134,3 +134,63 @@ ${rows
   ].join("\r\n");
   return { subject, text, html: frame(subject, inner, footer) };
 }
+
+/**
+ * Martin's copy of an email someone sent to schools@averages.io (2026-10-06).
+ * Sent from schools@averages.io with Reply-To set to the sender, so Reply in
+ * his inbox answers them. Replaces a plain forward: forwarded mail kept the
+ * sender's own Message-ID and From, so Gmail could drop it (a copy of mail he
+ * sent himself) or file it as spam (the school's own email rules), while mail
+ * from our own domain arrives like the application emails do.
+ */
+export function inboundCopyEmail(m: {
+  from: string;
+  fromName: string;
+  to: string;
+  subject: string;
+  text: string;
+  receivedAt: number;
+  attached: boolean;
+  tooBig: boolean;
+}): { subject: string; text: string; html: string } {
+  const who = m.fromName ? `${m.fromName} (${m.from})` : m.from;
+  const original = String(m.subject || "").replace(/[\r\n\t]+/g, " ").trim();
+  const subject = `${original || "(no subject)"} · from ${m.from}`.slice(0, 200);
+  const when = new Date(m.receivedAt).toUTCString();
+  const note = m.attached
+    ? "The original email is attached (original-email.eml), with any files they sent."
+    : m.tooBig
+      ? "The original email was too big to attach. Its text is above; ask them to resend any files."
+      : "";
+  const body = m.text || "(This email has no text. Open the attached original to see it.)";
+  const rows: [string, string][] = [
+    ["From", who],
+    ["To", m.to],
+    ["Subject", original || "(no subject)"],
+    ["Received", when],
+  ];
+  const inner = `
+<p style="margin:0 0 14px;font-size:20px;font-weight:800;color:${INK};">New email to schools@averages.io</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;margin:0 0 16px;">
+${rows
+  .map(
+    ([k, v]) => `<tr><td valign="top" style="padding:6px 12px 6px 0;border-bottom:1px solid #e6e8ef;font-family:${FONT};font-size:13px;font-weight:800;color:${MUTED};white-space:nowrap;">${escapeHtml(k)}</td>
+<td style="padding:6px 0;border-bottom:1px solid #e6e8ef;font-family:${FONT};font-size:14px;color:${INK};word-break:break-word;">${escapeHtml(v)}</td></tr>`
+  )
+  .join("\n")}
+</table>
+<div style="padding:14px 16px;border-radius:12px;background:#f4f5f9;font-family:${FONT};font-size:14px;line-height:1.55;color:${INK};white-space:pre-wrap;word-break:break-word;">${escapeHtml(body)}</div>
+<p style="margin:16px 0 0;">Reply to this email to answer ${escapeHtml(m.from)}.${note ? " " + escapeHtml(note) : ""}</p>`;
+  const footer = "Sent by the Averages.io API: a copy of an email to schools@averages.io.";
+  const text = [
+    "New email to schools@averages.io",
+    "",
+    ...rows.map(([k, v]) => `${k}: ${v}`),
+    "",
+    body,
+    "",
+    `Reply to this email to answer ${m.from}.${note ? " " + note : ""}`,
+    "",
+  ].join("\r\n");
+  return { subject, text, html: frame(subject, inner, footer) };
+}
