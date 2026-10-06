@@ -33,7 +33,7 @@
     // design:content:read. Change to "1" only AFTER that scope is turned on
     // for the integration in Canva's Developer Portal: Connect asks for it
     // then, and asking for a scope Canva hasn't approved breaks Connect.
-    "CANVA_EXPORT_ENABLED": "0"
+    "CANVA_EXPORT_ENABLED": "1"
   },
   // Sync Across Devices: one SyncStore Durable Object per student (src/syncStore.ts).
   // The code always opens them in the "us" jurisdiction, so the stored record
