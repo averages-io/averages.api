@@ -278,8 +278,10 @@ Make a `SESSION_SECRET` with:
 ### Schools email (schools@averages.io)
 
 A student's Email Template (sign-in page, Canvas) asks their school's IT team to write to
-schools@averages.io. The Worker's `email` handler forwards every message to
-`SCHOOLS_NOTIFY_TO` and answers a school's first email (once per sender per 30 days, never
+schools@averages.io. The Worker's `email` handler sends `SCHOOLS_NOTIFY_TO` a copy of every message (from
+schools@averages.io, with the sender's text inside, the original attached as
+`original-email.eml` and Reply-To set to the sender; a plain forward when `SCHOOLS_MAIL`
+isn't bound or the copy fails) and answers a school's first email (once per sender per 30 days, never
 to auto-replies, bounces or mailing lists) with a formatted reply linking to
 `app.averages.io/schools/apply`. To switch it on:
 
@@ -290,8 +292,9 @@ to auto-replies, bounces or mailing lists) with a formatted reply linking to
 3. **Routing rules > Custom address**: `schools@averages.io` → **Send to a Worker** →
    `averages-api`.
 4. Set the secrets `SCHOOLS_NOTIFY_TO` (that inbox) and `SCHOOLS_ADMIN_KEY`.
-5. Uncomment the `send_email` block in `wrangler.jsonc` and deploy (the application
-   emails need it; the auto-reply and forwarding don't).
+5. Make sure the `send_email` block in `wrangler.jsonc` is on (it is since 2026-10-06) and
+   deploy. The application emails and Martin's copies of school emails need it; the
+   auto-reply doesn't.
 
 Read the saved applications with
 `curl -H "Authorization: Bearer $SCHOOLS_ADMIN_KEY" https://api.averages.io/schools/applications`.

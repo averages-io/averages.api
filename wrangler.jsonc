@@ -25,7 +25,6 @@
     "CANVA_CLIENT_ID": "OC-AaDPpElswNe6",
     "GOOGLE_REDIRECT_URI": "https://api.averages.io/auth/google/callback",
     "CANVA_REDIRECT_URI": "https://api.averages.io/canva/callback",
-    "VAPID_PUBLIC_KEY": "BL3oWE3nt_phnXKit4vdx5RQsMQV85rK8Vc7HjYJiulzJ681RRE8qmZpyyuqB738mz4hWtvDgnaQesyQ2JulH8M"
     // OneDrive (Microsoft Entra app "Averages.io", single-page app, no secret).
     // Public: it's sent to the browser by GET /config/cloud.
     "MS_CLIENT_ID": "c006202b-180f-4d4c-b03c-c0f43048c8e9",
