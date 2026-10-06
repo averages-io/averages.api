@@ -10,11 +10,14 @@
  * Limits, per minute (a sliding 60-second window):
  *
  *   sign-in   POST /auth/session, GET /auth/google/start   30 per IP
- *   data      /data/*, GET /messages*                      60 per student
+ *   data      /data/*, GET /messages*, /auth/me, /sync     90 per student
  *   send      POST /messages*                              10 per student
- *   submit    /submit/*                                    40 per student
+ *   submit    /submit/*                                    90 per student
  *   push      /push/* (not GET /push/config)               20 per student
  *   canva     /canva/*                                     30 per student
+ *   canvaPoll GET /canva/exports/:job                     120 per student
+ *   canvaBrowse GET /canva/folders/:id/items               90 per student
+ *   apply     POST /schools/apply                  5 per 10 min per IP
  *
  * Sign-in is per IP because there's no student yet. It's 30 rather than 10
  * because a whole class usually signs in from one school IP at the start of
@@ -56,7 +59,7 @@ import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
 
 export interface RateRule {
-  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "apply";
+  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "apply";
   limit: number;
   windowMs: number;
   by: "ip" | "student";
@@ -78,6 +81,9 @@ export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   // Checking on a PDF export: the app asks every 1.5 s for up to 2 minutes
   // (2026-10-06 review). Its own rule, so it can't use up the Canva one.
   canvaPoll: { name: "canvaPoll", limit: 120, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CANVA_POLL" },
+  // Opening Canva folders on the Files page (2026-10-06): one call per folder
+  // opened. Canva allows 100 a minute; this stays under it.
+  canvaBrowse: { name: "canvaBrowse", limit: 90, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CANVA_BROWSE" },
   // School applications (2026-10-06): a few per school network per 10 minutes is plenty.
   apply: { name: "apply", limit: 5, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY" },
 };
@@ -100,6 +106,7 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (under(path, "/submit")) return RATE_RULES.submit;
   if (under(path, "/push")) return method === "GET" && path === "/push/config" ? null : RATE_RULES.push;
   if (method === "GET" && /^\/canva\/exports\/[^/]+$/.test(path)) return RATE_RULES.canvaPoll;
+  if (method === "GET" && /^\/canva\/folders\/[^/]+\/items$/.test(path)) return RATE_RULES.canvaBrowse;
   if (under(path, "/canva")) return RATE_RULES.canva;
   return null;
 }

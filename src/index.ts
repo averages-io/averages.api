@@ -56,7 +56,10 @@ import {
 import {
   canvaConfigured,
   canvaExportEnabled,
+  canvaFoldersEnabled,
   EXPORT_SCOPE,
+  FOLDER_READ_SCOPE,
+  FOLDER_WRITE_SCOPE,
   editUrlWithCorrelation,
   findDesignByTitle,
   getDesign,
@@ -133,6 +136,7 @@ import type { PushStore } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
 import { submitRoutes } from "./submitRoutes.ts";
 import { canvaExportRoutes } from "./canvaExport.ts";
+import { canvaFolderRoutes } from "./canvaFolders.ts";
 
 // The Durable Object classes have to be exported from the Worker's main module
 // for Cloudflare to find them (see wrangler.jsonc's durable_objects).
@@ -168,6 +172,12 @@ type Bindings = {
    * canvaScopes() in canva.ts.
    */
   CANVA_EXPORT_ENABLED?: string;
+  /**
+   * "1" once folder:read and folder:write are enabled for the Canva
+   * integration (2026-10-06): Connect asks for them and the Files page shows
+   * Canva folders. Until then it lists designs without folders.
+   */
+  CANVA_FOLDERS_ENABLED?: string;
   /**
    * Google Drive and OneDrive run in the browser (2026-10-05); these are the
    * PUBLIC values the app needs for that, served by GET /config/cloud.
@@ -1213,11 +1223,17 @@ app.get("/canva/status", requireSession, async (c) => {
     // export scope was asked for (Canva didn't grant it), so Settings can
     // offer Reconnect. Unknown scopes count as ready: Canva decides then.
     let turnIn: "off" | "ready" | "reconnect" = "off";
-    if (canvaExportEnabled(c.env) && status.connected) {
+    // Canva folders on the Files page (2026-10-06): the same three answers.
+    let folders: "off" | "ready" | "reconnect" = "off";
+    const exportOn = canvaExportEnabled(c.env);
+    const foldersOn = canvaFoldersEnabled(c.env);
+    if ((exportOn || foldersOn) && status.connected) {
       const granted = await store.grantedScopes(c.get("session").uid).catch(() => null);
-      turnIn = !granted || granted.includes(EXPORT_SCOPE) ? "ready" : "reconnect";
+      const has = (scope: string) => !granted || granted.includes(scope);
+      if (exportOn) turnIn = has(EXPORT_SCOPE) ? "ready" : "reconnect";
+      if (foldersOn) folders = has(FOLDER_READ_SCOPE) && has(FOLDER_WRITE_SCOPE) ? "ready" : "reconnect";
     }
-    return c.json({ configured: true, ...status, turnIn });
+    return c.json({ configured: true, ...status, turnIn, folders });
   } catch (error) {
     return canvaFailure(c, error, "canva_status_failed");
   }
@@ -1536,6 +1552,16 @@ app.route("/submit", submitRoutes({ requireSession, fromOurApp: notFromOurApp })
 app.route(
   "/canva",
   canvaExportRoutes({
+    requireSession,
+    canvaGuard,
+    fromOurApp: notFromOurApp,
+    storeFor: (c, uid) => canvaStore(c.env, uid, c.req.url),
+  })
+);
+/** Canva folders on the Files page (src/canvaFolders.ts), off until CANVA_FOLDERS_ENABLED. */
+app.route(
+  "/canva",
+  canvaFolderRoutes({
     requireSession,
     canvaGuard,
     fromOurApp: notFromOurApp,

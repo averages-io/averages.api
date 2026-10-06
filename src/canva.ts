@@ -45,9 +45,25 @@ export function canvaExportEnabled(env: { CANVA_EXPORT_ENABLED?: string }): bool
   return env.CANVA_EXPORT_ENABLED === "1";
 }
 
+/** Canva folders on the Files page (2026-10-06): browse, and new / rename / move. */
+export const FOLDER_READ_SCOPE = "folder:read";
+export const FOLDER_WRITE_SCOPE = "folder:write";
+
+/**
+ * Folders are switched on by CANVA_FOLDERS_ENABLED (2026-10-06), only after
+ * folder:read and folder:write are ticked for the integration in Canva's
+ * Developer Portal (and approved): same rule as exporting.
+ */
+export function canvaFoldersEnabled(env: { CANVA_FOLDERS_ENABLED?: string }): boolean {
+  return env.CANVA_FOLDERS_ENABLED === "1";
+}
+
 /** The scopes a new connection asks for. */
-export function canvaScopes(env: { CANVA_EXPORT_ENABLED?: string }): string {
-  return canvaExportEnabled(env) ? `${CANVA_SCOPES} ${EXPORT_SCOPE}` : CANVA_SCOPES;
+export function canvaScopes(env: { CANVA_EXPORT_ENABLED?: string; CANVA_FOLDERS_ENABLED?: string }): string {
+  const scopes = [CANVA_SCOPES];
+  if (canvaExportEnabled(env)) scopes.push(EXPORT_SCOPE);
+  if (canvaFoldersEnabled(env)) scopes.push(FOLDER_READ_SCOPE, FOLDER_WRITE_SCOPE);
+  return scopes.join(" ");
 }
 
 /** Every Canva call gives up after 20 seconds, the same rule as the Schoology calls. */
@@ -68,6 +84,8 @@ export interface CanvaConfig {
   SESSION_SECRET?: string;
   /** "1" once design:content:read is enabled in Canva's Developer Portal (see canvaScopes). */
   CANVA_EXPORT_ENABLED?: string;
+  /** "1" once folder:read and folder:write are enabled there (see canvaScopes). */
+  CANVA_FOLDERS_ENABLED?: string;
 }
 
 export function canvaConfigured(env: CanvaConfig): boolean {
@@ -92,6 +110,9 @@ export class CanvaError extends Error {
 export function statusForCode(code: string): number {
   if (code === "canva_not_configured") return 503;
   if (code === "canva_not_connected" || code === "canva_reconnect_needed" || code === "canva_duplicate_import") return 409;
+  if (code === "canva_item_in_multiple_folders" || code === "canva_folder_full") return 409;
+  if (code === "canva_folder_gone") return 404;
+  if (code === "canva_folder_not_allowed") return 403;
   if (code === "canva_missing_permission") return 403;
   if (code === "canva_rate_limited") return 429;
   if (code === "canva_invalid_file" || code === "canva_import_failed") return 422;
