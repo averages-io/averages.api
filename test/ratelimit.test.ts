@@ -44,6 +44,7 @@ check("the numbers", Object.values(RATE_RULES).map((r) => [r.name, r.limit, r.wi
   ["push", 20, 60000, "student"],
   ["canva", 30, 60000, "student"],
   ["canvaPoll", 120, 60000, "student"],
+  ["canvaBrowse", 90, 60000, "student"],
   ["apply", 5, 600000, "ip"],
 ]);
 check("school applications per IP; Martin's list like sign-in", [name("POST", "/schools/apply"), name("GET", "/schools/applications")], ["apply", "signin"]);
