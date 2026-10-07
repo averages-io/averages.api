@@ -201,7 +201,7 @@ type Bindings = {
    * Browser notifications (2026-10-05, wired in 2026-10-06): one PushStore
    * Durable Object per student who turned them on, in the "us" jurisdiction
    * (src/pushStore.ts). PUSH_SECRET and VAPID_PRIVATE_JWK are dashboard
-   * secrets; VAPID_PUBLIC_KEY is a dashboard variable (the browser needs it).
+   * secrets; VAPID_PUBLIC_KEY is a var in wrangler.jsonc (the browser needs it).
    * Until all three are set, GET /push/config says null and the app shows
    * "Coming soon".
    */
