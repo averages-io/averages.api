@@ -112,10 +112,19 @@ export function turnstileOn(env: { TURNSTILE_SITE_KEY?: string; TURNSTILE_SECRET
   return !!(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET);
 }
 
+/** Where the form lives. The widget (site key 0x4AAAAAAFP990oRx5vTqbEf) is set
+ *  up for averages.io and its subdomains; localhost is for local testing. */
+const TURNSTILE_HOSTS = new Set(["app.averages.io", "localhost", "127.0.0.1"]);
+const TURNSTILE_ACTION = "school-apply";
+
 /**
  * Is this Turnstile token real, fresh and from our form? "ok", "failed"
  * (missing, used, expired, or made somewhere else) or "unavailable"
- * (Cloudflare couldn't be asked: the school is told to try again).
+ * (Cloudflare couldn't be asked, or our secret is wrong: the school is told
+ * to try again, and a wrong secret is logged so it gets noticed).
+ *
+ * Tokens work once: Cloudflare answers a replayed token with
+ * "timeout-or-duplicate", which is a "failed" here.
  */
 export async function checkTurnstile(
   token: unknown,
@@ -125,7 +134,8 @@ export async function checkTurnstile(
 ): Promise<"ok" | "failed" | "unavailable"> {
   if (typeof token !== "string" || !token || token.length > 2048) return "failed";
   const form = new FormData();
-  form.append("secret", secret);
+  // Trimmed: a secret pasted into the dashboard with a stray newline is otherwise "invalid".
+  form.append("secret", secret.trim());
   form.append("response", token);
   if (ip) form.append("remoteip", ip);
   let json: any;
@@ -136,10 +146,18 @@ export async function checkTurnstile(
   } catch {
     return "unavailable";
   }
-  if (json?.success !== true) return "failed";
-  // Made on our own form, not one copied to another site.
-  if (json.action && json.action !== "school-apply") return "failed";
-  const host = String(json.hostname ?? "");
-  if (host && host !== "app.averages.io" && host !== "localhost" && host !== "127.0.0.1") return "failed";
+  if (json?.success !== true) {
+    const codes: string[] = Array.isArray(json?.["error-codes"]) ? json["error-codes"].map(String) : [];
+    // Our side's fault, not the school's: don't make them redo the check forever.
+    if (codes.some(c => c === "invalid-input-secret" || c === "missing-input-secret")) {
+      console.error("turnstile_secret_rejected", codes.join(","));
+      return "unavailable";
+    }
+    return "failed";
+  }
+  // Made on our own form (this action, this host), not a token from another
+  // form or site. Both must be present: siteverify always returns them.
+  if (json.action !== TURNSTILE_ACTION) return "failed";
+  if (!TURNSTILE_HOSTS.has(String(json.hostname ?? ""))) return "failed";
   return "ok";
 }
