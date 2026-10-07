@@ -158,6 +158,7 @@ signs them out.
 | `PUT` | `/sync/settings` | yes | Save the synced settings (2 MB max) |
 | `DELETE` | `/sync/settings` | yes | Delete everything sync stored |
 | `GET` | `/data/assignment?section=&id=` | yes | One assignment's description and attachments (file ids and names only, never download links). Classroom: materials as links (Drive, YouTube, Forms, web), the student's submission state and grade, and the Classroom link to turn it in |
+| `GET` | `/data/assignment/locate?id=` | yes | Which class an assignment is in: `{section, title}` or 404. The app's links are `assignment?id=<id>` (2026-10-07); the assignment page asks this for work that isn't in the bundle. Every class is asked at once |
 | `GET` | `/data/attachment?section=&assignment=&file=` | yes | Download one attachment, streamed from Schoology. `document=` instead of `assignment=` for a file a teacher posted in Materials |
 | `GET` | `/data/files` | yes | Every file in the student's classes (Materials documents and assignment attachments): ids, names, class, newest first, `partial: true` if a class didn't answer. No download paths. Classroom: the Google Drive files posted in class materials and assignments, with their Drive links |
 | `GET` | `/canva/status` | yes | Whether Canva is set up and connected, and the account name |
@@ -182,7 +183,7 @@ signs them out.
 | `POST` | `/canva/folders`, `/canva/folders/:id/rename`, `/canva/folders/move` | yes | New folder `{name, parentId}`, rename `{name}`, move a design or folder `{itemId, toFolderId}`. No delete (Canva would put the contents in the Trash) |
 | `GET` | `/config/apply` | no | What the school application page needs: `{turnstileSiteKey, emailEndings, verifyEmail}` (site key or `null`; allowed email endings, `[]` = any; whether the email must be verified with a code) |
 | `GET` | `/config/schools?lms=schoology\|canvas` | | The schools the sign-in page lists (`src/schools.ts`) |
-| `POST` | `/schools/apply/code` | | "Verify your email": `{email, turnstileToken?}` emails a 6-digit code (only when `SCHOOLS_VERIFY_EMAIL` is `"1"`). 3 per address per 10 minutes, 45 s apart; 5 per 10 minutes per network |
+| `POST` | `/schools/apply/code` | | "Verify your email": `{email, turnstileToken?}` emails a 6-digit code from `no-reply@averages.io` (only when `SCHOOLS_VERIFY_EMAIL` is `"1"`). 3 per address per 10 minutes, 45 s apart; 5 per 10 minutes per network |
 | `POST` | `/schools/apply/verify` | | `{email, code}` → `{ok, emailProof}` (2 hours). 5 tries per code, codes last 10 minutes; 20 per 10 minutes per network |
 | `POST` | `/schools/apply` | | A school's application from `app.averages.io/schools/apply`: `{school, canvas, email, name?, note?, emailProof?}`. The email must end in one of `SCHOOLS_EMAIL_ENDINGS`, and carry an `emailProof` when verification is on. Saved, then emailed to Martin. 5 per 10 minutes per network |
 | `GET` | `/schools/applications` | key | Every application, newest first. Needs `Authorization: Bearer <SCHOOLS_ADMIN_KEY>`; doesn't exist until that secret is set |
@@ -283,6 +284,8 @@ Make a `SESSION_SECRET` with:
 | `TURNSTILE_SITE_KEY` | The Turnstile widget's site key (public; the apply page gets it from `GET /config/apply`). In `wrangler.jsonc` under `vars`, with `TURNSTILE_SECRET` as a secret; without both, there's no check |
 | `SCHOOLS_EMAIL_ENDINGS` | In `wrangler.jsonc`: the email endings the school application accepts, comma-separated (`"edu,org,us,net"`; `us` covers `k12.ca.us` and the like). Empty = any |
 | `SCHOOLS_VERIFY_EMAIL` | In `wrangler.jsonc`: `"1"` makes applicants verify their email with a 6-digit code. Turn on only after averages.io is onboarded for sending in Cloudflare Email Service (Compute > Email Service > Email Sending > Onboard Domain), which needs Workers Paid: before that, codes only reach verified addresses. Uses `SCHOOLS_MAIL` and `SESSION_SECRET` |
+| `SCHOOLS_EMAIL_ALLOW` | Dashboard **secret** (not in this public repo): exact email addresses that may apply whatever their ending, comma-separated. Never shown by `GET /config/apply` |
+| `REVIEW_KEY`, `REVIEW_SECRET` | Dashboard **secrets**, 16+ characters each (e.g. `openssl rand -hex 16`). Typed into the hidden API-key sign-in (`app.averages.io/?keys`), they open the reviewer account: six sample classes served by `src/reviewSandbox.ts` (a pretend Schoology inside the Worker, nothing sent to Schoology) in the app's normal live mode, so Canva, Google Drive, OneDrive, notifications and Sync all work. For app reviewers and testing. Unset = off |
 | `CANVA_FOLDERS_ENABLED` | `"1"` once `folder:read` and `folder:write` are enabled (and approved) for the Canva integration: Connect asks for them and the Files page shows Canva folders. Leave `"0"` until then, for the same reason. Students connected before then see Reconnect |
 
 ### Schools email (schools@averages.io)

@@ -50,11 +50,12 @@
     // endings an applicant's email may have, comma-separated ("us" also covers
     // k12.ca.us and the like). Empty = any.
     "SCHOOLS_EMAIL_ENDINGS": "edu,org,us,net",
-    // "1" = "Verify your email" with a 6-digit code before applying. Leave "0"
-    // until averages.io is onboarded for sending (Compute > Email Service >
-    // Email Sending > Onboard Domain) on the Workers Paid plan: before that,
-    // Cloudflare only delivers to verified addresses and codes won't arrive.
-    "SCHOOLS_VERIFY_EMAIL": "0"
+    // "1" = "Verify your email" with a 6-digit code before applying, sent from
+    // no-reply@averages.io. Needs averages.io onboarded in Email Service
+    // (Compute > Email Service > Email Sending; done 2026-10-07) on Workers
+    // Paid. Exact addresses allowed whatever their ending go in the
+    // SCHOOLS_EMAIL_ALLOW dashboard secret, never here (this repo is public).
+    "SCHOOLS_VERIFY_EMAIL": "1"
   },
   // Sync Across Devices: one SyncStore Durable Object per student (src/syncStore.ts).
   // The code always opens them in the "us" jurisdiction, so the stored record
