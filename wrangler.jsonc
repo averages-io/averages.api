@@ -36,7 +36,12 @@
     // Canva folders on the Files page (2026-10-06) need folder:read and
     // folder:write. Same rule: "1" only AFTER both are enabled (and approved)
     // for the integration in Canva's Developer Portal.
-    "CANVA_FOLDERS_ENABLED": "1"
+    "CANVA_FOLDERS_ENABLED": "1",
+    // Browser notifications: the VAPID key pair's PUBLIC half (base64url), the
+    // one browsers subscribe with. Public by design (GET /push/config serves
+    // it). Its private half is the VAPID_PRIVATE_JWK secret; the two must be
+    // the same pair. Moved here from the dashboard 2026-10-07 (Martin).
+    "VAPID_PUBLIC_KEY": "BL3oWE3nt_phnXKit4vdx5RQsMQV85rK8Vc7HjYJiulzJ681RRE8qmZpyyuqB738mz4hWtvDgnaQesyQ2JulH8M"
     // TURNSTILE_SITE_KEY (2026-10-07): the school application's Cloudflare
     // Turnstile widget. Public; set it in the dashboard as a variable (or add
     // it here) with TURNSTILE_SECRET as a secret. Without both, no check.
@@ -113,12 +118,10 @@
   // SESSION_SECRET; it seals the stored sign-in), VAPID_PRIVATE_JWK (the
   // notification key pair's private half, as JWK JSON text).
   //
-  // Dashboard variable (plain text, not a secret; keep_vars keeps it on
-  // deploy): VAPID_PUBLIC_KEY, the key pair's public half (base64url). It's
-  // deliberately not under "vars" above: that would overwrite the dashboard
-  // value with this file's on every deploy. VAPID_SUBJECT is optional
-  // (default mailto:help@averages.io). Until PUSH_SECRET and both VAPID keys
-  // are set, notifications show as "Coming soon".
+  // VAPID_PUBLIC_KEY is under "vars" above (since 2026-10-07), so every
+  // deploy sets it from this file. VAPID_SUBJECT is optional (default
+  // mailto:help@averages.io). Until PUSH_SECRET and both VAPID keys are set,
+  // notifications show as "Coming soon".
   //
   // Rate limits (2026-10-06) run in memory with nothing to set up. A shared
   // Workers Rate Limiting binding (RATE_LIMITER) can be added later; it's

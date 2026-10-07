@@ -275,7 +275,7 @@ Make a `SESSION_SECRET` with:
 | `CANVA_REDIRECT_URI` | `https://api.averages.io/canva/callback` |
 | `MS_CLIENT_ID` | The Microsoft Entra app's Application (client) ID, for OneDrive. A public ID, no client secret (it's a single-page app registration) |
 | `GOOGLE_DRIVE_CLIENT_ID` | Optional. A separate Google OAuth client (same Google Cloud project) used only for Google Drive in the browser; its only setting is the JavaScript origin `https://app.averages.io`. Without it, Google Drive uses `GOOGLE_CLIENT_ID` |
-| `VAPID_PUBLIC_KEY` | Browser notifications: the public half of the VAPID key pair (base64url). Set in the dashboard, not in `wrangler.jsonc` |
+| `VAPID_PUBLIC_KEY` | Browser notifications: the public half of the VAPID key pair (base64url). In `wrangler.jsonc` under `vars` (since 2026-10-07); must pair with `VAPID_PRIVATE_JWK` |
 | `VAPID_SUBJECT` | Optional. Contact for push services, default `mailto:help@averages.io` |
 | `CANVA_EXPORT_ENABLED` | `"1"` once the `design:content:read` scope is enabled for the Canva integration (turning in Canva designs as PDFs). Leave `"0"` until then: asking Canva for a scope it hasn't approved breaks Connect |
 | `TURNSTILE_SITE_KEY` | The Turnstile widget's site key (public; the apply page gets it from `GET /config/apply`). Set it as a dashboard variable, with `TURNSTILE_SECRET` as a secret; without both, there's no check |
