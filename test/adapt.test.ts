@@ -157,6 +157,36 @@ check("quiz type maps to assessment", UPCOMING[0].type, "assessment");
 check("undated work is in neither bucket", OVERDUE.length + UPCOMING.length, 2);
 check("items carry their course id", OVERDUE[0].courseId, "101");
 
+console.log("\ndue times in the student's zone (2026-10-07)");
+{
+  const { schoologyLocalMs, timeLabel } = await import("../src/adapt.ts");
+  const LA = "America/Los_Angeles";
+  // 11:59 PM in California on Oct 9 (PDT, UTC-7) is 06:59 UTC on Oct 10.
+  check("local wall time read in the student's zone", new Date(schoologyLocalMs("2026-10-09 23:59:00", LA)!).toISOString(), "2026-10-10T06:59:00.000Z");
+  check("and in winter (PST, UTC-8)", new Date(schoologyLocalMs("2026-12-09 23:59:00", LA)!).toISOString(), "2026-12-10T07:59:00.000Z");
+  check("New York", new Date(schoologyLocalMs("2026-10-09 08:00:00", "America/New_York")!).toISOString(), "2026-10-09T12:00:00.000Z");
+  check("unknown zone: UTC", new Date(schoologyLocalMs("2026-10-09 08:00:00", "Not/AZone")!).toISOString(), "2026-10-09T08:00:00.000Z");
+  check("just after the spring-forward gap", new Date(schoologyLocalMs("2026-03-08 03:30:00", LA)!).toISOString(), "2026-03-08T10:30:00.000Z");
+  check("unix seconds pass through", schoologyLocalMs("1791000000", LA), 1791000000000);
+  check("date only: end of that day", new Date(schoologyLocalMs("2026-10-09", LA)!).toISOString(), "2026-10-10T06:59:00.000Z");
+  check("junk: null", [schoologyLocalMs("soon", LA), schoologyLocalMs("", LA), schoologyLocalMs(undefined, LA)], [null, null, null]);
+  check("time label", timeLabel(Date.parse("2026-10-10T06:59:00Z"), LA), "11:59 PM");
+
+  // It's 5 PM in California on Oct 9: work due 11:59 PM tonight is NOT overdue yet (it was, read as UTC).
+  const now = Date.parse("2026-10-10T00:00:00Z");
+  const r = adaptAssignments({ "101": [
+    { id: 1, title: "Tonight", due: "2026-10-09 23:59:00", type: "assignment" },
+    { id: 2, title: "This morning", due: "2026-10-09 08:00:00", type: "assignment" },
+    { id: 3, title: "Next week", due: "2026-10-16 23:59:00", type: "assignment" },
+    { id: 4, title: "Monday", due: "2026-10-12 08:00:00", type: "assignment" },
+  ] }, LA, now);
+  check("due tonight is upcoming in its own zone", r.UPCOMING.map((x: any) => x.title), ["Tonight", "Monday", "Next week"]);
+  check("sorted by real time, not by the label's words", r.UPCOMING.map((x: any) => x.due), ["Fri Oct 9", "Mon Oct 12", "Fri Oct 16"]);
+  check("earlier today is overdue", r.OVERDUE.map((x: any) => x.title), ["This morning"]);
+  check("items carry dueAt and time", [r.UPCOMING[0].dueAt, r.UPCOMING[0].time], ["2026-10-10T06:59:00.000Z", "11:59 PM"]);
+  check("today is the student's today", r.TODAY.map((x: any) => x.title).sort(), ["This morning", "Tonight"]);
+}
+
 console.log("\nmessages");
 const messages = adaptMessages([
   {
