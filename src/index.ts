@@ -83,10 +83,10 @@ import {
   type KVLike,
 } from "./sync.ts";
 import { cloudConfig } from "./cloud.ts";
-import { checkTurnstile, schoolsFor, turnstileOn, validateApplication } from "./schools.ts";
+import { checkTurnstile, emailEndings, emailKey, emailProblem, schoolsFor, turnstileOn, validateApplication } from "./schools.ts";
 import { EmailMessage } from "cloudflare:email";
 import { autoReplyAllowed, buildMime, cleanEmail, SCHOOLS_ADDRESS } from "./mail.ts";
-import { applicationEmail, autoReplyEmail, inboundCopyEmail } from "./schoolsMail.ts";
+import { applicationEmail, autoReplyEmail, inboundCopyEmail, verifyCodeEmail } from "./schoolsMail.ts";
 import { readEmailText } from "./mailRead.ts";
 import type { SchoolsStore } from "./schoolsStore.ts";
 import {
@@ -221,6 +221,16 @@ type Bindings = {
   /** Cloudflare Turnstile on the school application (2026-10-07): the site key (public, a var) and its secret. */
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET?: string;
+  /**
+   * The application's email rules (2026-10-07, vars): SCHOOLS_EMAIL_ENDINGS
+   * is the allowed endings ("edu,org,us,net"; unset = any), and
+   * SCHOOLS_VERIFY_EMAIL "1" asks for a 6-digit code sent to that address
+   * before applying. Turn that on only once averages.io is set up for sending
+   * in Cloudflare Email Service (Workers Paid): until then SCHOOLS_MAIL can
+   * only reach verified addresses and the codes wouldn't arrive.
+   */
+  SCHOOLS_EMAIL_ENDINGS?: string;
+  SCHOOLS_VERIFY_EMAIL?: string;
   PUSH_SECRET?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_JWK?: string;
@@ -1198,10 +1208,18 @@ app.get("/data/files", async (c) => {
  * The schools the sign-in page can search (2026-10-06): public, no sign-in
  * needed (the page asks before anyone is signed in). See src/schools.ts.
  */
-/** What the school application page needs: the Turnstile site key, or null when it's off. Public. */
+/**
+ * What the school application page needs (public): the Turnstile site key
+ * (null when it's off), the allowed email endings ([] = any), and whether
+ * the email has to be verified with a code.
+ */
 app.get("/config/apply", (c) => {
   c.header("Cache-Control", "public, max-age=300");
-  return c.json({ turnstileSiteKey: turnstileOn(c.env) ? c.env.TURNSTILE_SITE_KEY : null });
+  return c.json({
+    turnstileSiteKey: turnstileOn(c.env) ? c.env.TURNSTILE_SITE_KEY : null,
+    emailEndings: emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS),
+    verifyEmail: verifyEmailOn(c.env),
+  });
 });
 
 app.get("/config/schools", (c) => {
@@ -1585,6 +1603,85 @@ app.route(
  * below) with the link to app.averages.io/schools/apply; the form posts here.
  */
 
+/* ── "Verify your email" on the application (2026-10-07, Martin) ───────
+ * POST /schools/apply/code emails a 6-digit code (Turnstile-checked, at most
+ * 3 per address per 10 minutes, 45 s apart, plus per-IP limits); POST
+ * /schools/apply/verify checks it (5 tries, 10 minutes) and hands back an
+ * emailProof, sealed with SESSION_SECRET for 2 hours, that POST
+ * /schools/apply needs. Only a hash of each code is kept (SchoolsStore).
+ */
+const EMAIL_PROOF_PURPOSE = "schools-email-proof";
+const EMAIL_PROOF_TTL_SECONDS = 2 * 60 * 60;
+
+function verifyEmailOn(env: Bindings): boolean {
+  return env.SCHOOLS_VERIFY_EMAIL === "1" && !!env.SCHOOLS_MAIL && !!env.SCHOOLS && !!env.SESSION_SECRET;
+}
+
+async function applyJson(c: any): Promise<Record<string, unknown> | null> {
+  try {
+    const body = await c.req.json();
+    return body && typeof body === "object" ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+app.post("/schools/apply/code", async (c) => {
+  const blocked = notFromOurApp(c);
+  if (blocked) return blocked;
+  c.header("Cache-Control", "no-store");
+  if (!verifyEmailOn(c.env)) return c.json({ error: "verify_off" }, 404);
+  const body = await applyJson(c);
+  if (!body) return c.json({ error: "invalid_body" }, 400);
+  const problem = emailProblem(body.email, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS));
+  if (problem) return c.json({ error: "invalid", fields: { email: problem } }, 400);
+  const email = String(body.email).trim();
+  if (turnstileOn(c.env)) {
+    const apiHost = new URL(c.req.url).hostname;
+    const local = apiHost === "localhost" || apiHost === "127.0.0.1";
+    const verdict = await checkTurnstile(body.turnstileToken, c.env.TURNSTILE_SECRET!, c.req.header("CF-Connecting-IP") ?? null, fetch, local);
+    if (verdict === "failed") return c.json({ error: "captcha_failed" }, 400);
+    if (verdict === "unavailable") return c.json({ error: "captcha_unavailable" }, 503);
+  }
+  const store = schoolsStoreFor(c.env, c.req.url);
+  if (!store) return c.json({ error: "unavailable" }, 503);
+  const issued = await store.issueCode(emailKey(email));
+  if ("wait" in issued) {
+    c.header("Retry-After", String(issued.wait));
+    return c.json({ error: "code_wait", retryAfter: issued.wait }, 429);
+  }
+  const mail = verifyCodeEmail(issued.code);
+  const raw = buildMime({ from: SCHOOLS_ADDRESS, fromName: "Averages.io", to: email, ...mail });
+  try {
+    await c.env.SCHOOLS_MAIL!.send(new EmailMessage(SCHOOLS_ADDRESS, email, raw));
+  } catch (error) {
+    console.error("schools_code_send_failed", error);
+    return c.json({ error: "code_send_failed" }, 502);
+  }
+  return c.json({ ok: true });
+});
+
+app.post("/schools/apply/verify", async (c) => {
+  const blocked = notFromOurApp(c);
+  if (blocked) return blocked;
+  c.header("Cache-Control", "no-store");
+  if (!verifyEmailOn(c.env)) return c.json({ error: "verify_off" }, 404);
+  const body = await applyJson(c);
+  if (!body) return c.json({ error: "invalid_body" }, 400);
+  if (emailProblem(body.email, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS))) return c.json({ error: "code_expired" }, 400);
+  const email = emailKey(String(body.email));
+  const code = String(body.code ?? "").replace(/\s+/g, "");
+  const store = schoolsStoreFor(c.env, c.req.url);
+  if (!store) return c.json({ error: "unavailable" }, 503);
+  const checked = await store.checkCode(email, code);
+  if (checked.result === "ok") {
+    const emailProof = await sealValue({ e: email }, c.env.SESSION_SECRET, EMAIL_PROOF_PURPOSE, EMAIL_PROOF_TTL_SECONDS);
+    return c.json({ ok: true, emailProof });
+  }
+  if (checked.result === "wrong") return c.json({ error: "code_wrong", triesLeft: checked.left }, 400);
+  return c.json({ error: checked.result === "too_many" ? "code_too_many" : "code_expired" }, 400);
+});
+
 /**
  * One application. Public (school IT staff aren't signed in), JSON from our
  * own app only, rate-limited per IP. Saved first, then emailed to Martin.
@@ -1599,10 +1696,15 @@ app.post("/schools/apply", async (c) => {
   } catch {
     return c.json({ error: "invalid_body" }, 400);
   }
-  const checked = validateApplication(body);
+  const checked = validateApplication(body, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS));
   if (!checked.ok) return c.json({ error: "invalid", fields: checked.fields }, 400);
   // The hidden field a person never fills in: a bot. Polite "ok", nothing kept.
   if (checked.spam) return c.json({ ok: true });
+  // Verified email (2026-10-07): the proof POST /schools/apply/verify handed out, for this address.
+  if (verifyEmailOn(c.env)) {
+    const proof = await openValue(String((body as any)?.emailProof ?? ""), c.env.SESSION_SECRET, EMAIL_PROOF_PURPOSE);
+    if (!proof || (proof as any).e !== emailKey(checked.value.email)) return c.json({ error: "email_unverified" }, 400);
+  }
   // Cloudflare Turnstile (2026-10-07), when it's set up.
   if (turnstileOn(c.env)) {
     // Tokens from a localhost page only count when this API is running locally too.

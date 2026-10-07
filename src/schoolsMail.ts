@@ -99,6 +99,37 @@ ${button(APPLY_URL, "Apply for your school")}
   return { subject, text, html: frame(subject, inner, footer) };
 }
 
+/**
+ * The "Verify your email" code (2026-10-07). The code is in the subject too,
+ * so it shows in the notification without opening the email.
+ */
+export function verifyCodeEmail(code: string): { subject: string; text: string; html: string } {
+  const safe = /^\d{6}$/.test(code) ? code : "";
+  const subject = `Your Averages.io code: ${safe}`;
+  const inner = `
+<p style="margin:0 0 14px;font-size:20px;font-weight:800;color:${INK};">Your verification code</p>
+<p style="margin:0 0 14px;">Enter this code on the Averages.io school application to verify your email:</p>
+<p style="margin:0 0 18px;font-family:${FONT};font-size:34px;font-weight:800;letter-spacing:0.18em;color:${BLUE};">${safe}</p>
+<p style="margin:0 0 6px;color:${MUTED};">It works for 10 minutes. If you didn't ask for it, you can ignore this email.</p>`;
+  const footer = `Sent because this address was entered at ${APPLY_URL.replace("https://", "")}. Averages.io is an independent app made by a student. It isn't made by or affiliated with your school or Instructure.<br>
+<a href="${PRIVACY_URL}" style="color:${MUTED};">Privacy Policy</a> &nbsp;·&nbsp; <a href="${TERMS_URL}" style="color:${MUTED};">Terms of Use</a>`;
+  const text = [
+    "Your verification code",
+    "",
+    "Enter this code on the Averages.io school application to verify your email:",
+    "",
+    safe,
+    "",
+    "It works for 10 minutes. If you didn't ask for it, you can ignore this email.",
+    "",
+    `Sent because this address was entered at ${APPLY_URL.replace("https://", "")}. Averages.io is an independent app made by a student. It isn't made by or affiliated with your school or Instructure.`,
+    `Privacy Policy: ${PRIVACY_URL}`,
+    `Terms of Use: ${TERMS_URL}`,
+    "",
+  ].join("\r\n");
+  return { subject, text, html: frame(subject, inner, footer) };
+}
+
 /** Martin's copy of one application. Reply-To is the school's address. */
 export function applicationEmail(app: Application, duplicate: boolean): { subject: string; text: string; html: string } {
   const subject = `${duplicate ? "Updated" : "New"} school application: ${app.school}`.slice(0, 180);

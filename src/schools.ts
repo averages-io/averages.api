@@ -76,7 +76,7 @@ const EMAIL_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-
  * field the page should point at. `spam` is the hidden field a person never
  * sees: filled in means a bot, which gets a polite "ok" and nothing stored.
  */
-export function validateApplication(body: unknown): { ok: true; value: ApplicationInput; spam: boolean } | { ok: false; fields: Record<string, string> } {
+export function validateApplication(body: unknown, endings: readonly string[] = []): { ok: true; value: ApplicationInput; spam: boolean } | { ok: false; fields: Record<string, string> } {
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
   const fields: Record<string, string> = {};
   const school = line(b.school, 120);
@@ -87,8 +87,8 @@ export function validateApplication(body: unknown): { ok: true; value: Applicati
   if (!canvasRaw) fields.canvas = "missing";
   else if (!canvas) fields.canvas = "invalid";
   const emailRaw = String(b.email ?? "").trim();
-  if (!emailRaw) fields.email = "missing";
-  else if (emailRaw.length > 254 || !EMAIL_RE.test(emailRaw)) fields.email = "invalid";
+  const emailBad = emailProblem(emailRaw, endings);
+  if (emailBad) fields.email = emailBad;
   const name = line(b.name, 80);
   if (name.length > 80) fields.name = "too_long";
   const note = String(b.note ?? "").replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim();
@@ -98,6 +98,42 @@ export function validateApplication(body: unknown): { ok: true; value: Applicati
   const email = emailRaw.slice(0, at) + "@" + emailRaw.slice(at + 1).toLowerCase();
   const spam = typeof b.website === "string" && b.website.trim() !== "";
   return { ok: true, value: { school, canvas, email, name, note }, spam };
+}
+
+/* ── Which email addresses can apply (2026-10-07, Martin) ──────────────
+ * Only school-style addresses: the endings listed in SCHOOLS_EMAIL_ENDINGS
+ * (wrangler.jsonc vars, comma-separated, e.g. "edu,org,us,net"). ".us" also
+ * covers state-style school domains like k12.ca.us. Unset or empty: any
+ * ending is allowed.
+ */
+export function emailEndings(raw: unknown): string[] {
+  const list = String(raw ?? "")
+    .split(/[\s,]+/)
+    .map((e) => e.trim().replace(/^\.+/, "").toLowerCase())
+    .filter((e) => /^[a-z]{2,24}$/.test(e));
+  return [...new Set(list)];
+}
+
+/** True when the address ends in one of `endings` (or there's no list). */
+export function emailEndingAllowed(email: string, endings: readonly string[]): boolean {
+  if (!endings.length) return true;
+  const domain = email.slice(email.lastIndexOf("@") + 1).toLowerCase();
+  const last = domain.slice(domain.lastIndexOf(".") + 1);
+  return endings.includes(last);
+}
+
+/** The one email check the form, the code and the application all share: "" when fine. */
+export function emailProblem(value: unknown, endings: readonly string[]): "" | "missing" | "invalid" | "ending" {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "missing";
+  if (raw.length > 254 || !EMAIL_RE.test(raw)) return "invalid";
+  if (!emailEndingAllowed(raw, endings)) return "ending";
+  return "";
+}
+
+/** Lowercased for comparing and keying (the form keeps what was typed). */
+export function emailKey(email: string): string {
+  return email.trim().toLowerCase();
 }
 
 /* ── Cloudflare Turnstile on the application (2026-10-07, Martin) ──────
