@@ -6,9 +6,9 @@
  */
 import worker, { handleSchoolsEmail } from "../src/index.ts";
 import { autoReplyAllowed, buildMime, cleanEmail, encodeHeaderWord, SCHOOLS_ADDRESS } from "../src/mail.ts";
-import { canvasHost, validateApplication } from "../src/schools.ts";
-import { SchoolsBook, MAX_APPS, REPLY_EVERY_MS } from "../src/schoolsStore.ts";
-import { APPLY_URL, autoReplyEmail, replySubject } from "../src/schoolsMail.ts";
+import { canvasHost, emailEndingAllowed, emailEndings, validateApplication } from "../src/schools.ts";
+import { SchoolsBook, MAX_APPS, REPLY_EVERY_MS, CODE_GAP_MS, CODE_SEND_WINDOW_MS, CODE_TTL_MS, newCode } from "../src/schoolsStore.ts";
+import { APPLY_URL, autoReplyEmail, replySubject, verifyCodeEmail } from "../src/schoolsMail.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 
 let passed = 0;
@@ -119,7 +119,7 @@ console.log("\nroutes");
 const sent: { from: string; to: string; raw: string }[] = [];
 function fakeSchools() {
   const book = new SchoolsBook(memStorage());
-  const stub = { add: (v: any) => book.add(v), list: () => book.list(), claimReply: (s: string) => book.claimReply(s) };
+  const stub = { add: (v: any) => book.add(v), list: () => book.list(), claimReply: (s: string) => book.claimReply(s), issueCode: (e: string) => book.issueCode(e), checkCode: (e: string, c: string) => book.checkCode(e, c), book };
   const ns: any = { idFromName: (n: string) => n, get: () => stub, jurisdiction: () => ns };
   return ns;
 }
@@ -335,6 +335,88 @@ console.log("\nreading emails");
   check("hostile HTML stays fast", Date.now() - t0 < 2000, true);
 }
 check("the Worker exports an email handler", typeof (worker as any).email, "function");
+
+/* ── Email endings and "Verify your email" (2026-10-07) ───────────────── */
+console.log("\nemail endings and codes");
+{
+  check("endings parsed: dots, spaces, junk, repeats", emailEndings(" .edu, org ,US,net,,k12!,edu"), ["edu", "org", "us", "net"]);
+  check("endings: unset is any", emailEndings(undefined), []);
+  const E = ["edu", "org", "us", "net"];
+  check("allowed endings", ["it@lincoln.k12.ca.us", "a@b.edu", "a@district.org", "a@x.net", "a@gmail.com", "a@school.co.uk"].map((e) => emailEndingAllowed(e, E)), [true, true, true, true, false, false]);
+  check("no list allows anything", emailEndingAllowed("a@gmail.com", []), true);
+  const v = validateApplication({ school: "Lincoln", canvas: "lincoln.instructure.com", email: "it@gmail.com" }, E);
+  check("application with a .com email: field error 'ending'", v.ok ? null : (v as any).fields, { email: "ending" });
+
+  // The store's code rules, on a Map.
+  const book = new SchoolsBook(memStorage());
+  const t = 1_000_000_000_000;
+  const first = await book.issueCode("it@x.org", t, "123456");
+  check("code issued", first, { code: "123456" });
+  check("again right away: wait the gap", await book.issueCode("it@x.org", t + 1000, "222222"), { wait: Math.ceil((CODE_GAP_MS - 1000) / 1000) });
+  await book.issueCode("it@x.org", t + CODE_GAP_MS, "333333");
+  await book.issueCode("it@x.org", t + 2 * CODE_GAP_MS, "444444");
+  const fourth = await book.issueCode("it@x.org", t + 3 * CODE_GAP_MS, "555555");
+  check("4th in 10 minutes: wait for the window", "wait" in fourth && fourth.wait === Math.ceil((CODE_SEND_WINDOW_MS - 3 * CODE_GAP_MS) / 1000), true);
+  check("old code replaced by the newest", (await book.checkCode("it@x.org", "123456", t + 2 * CODE_GAP_MS + 1)).result, "wrong");
+  check("newest code works once", [(await book.checkCode("it@x.org", "444444", t + 2 * CODE_GAP_MS + 2)).result, (await book.checkCode("it@x.org", "444444", t + 2 * CODE_GAP_MS + 3)).result], ["ok", "expired"]);
+  await book.issueCode("b@x.org", t, "111111");
+  const tries = [];
+  for (let i = 0; i < 5; i++) tries.push(await book.checkCode("b@x.org", "000000", t + 10));
+  check("5 wrong tries, then locked", tries.map((r: any) => r.result + (r.left ?? "")), ["wrong4", "wrong3", "wrong2", "wrong1", "too_many"]);
+  check("right code after lock: still locked", (await book.checkCode("b@x.org", "111111", t + 20)).result, "too_many");
+  await book.issueCode("c@x.org", t, "777777");
+  check("expired after 10 minutes", (await book.checkCode("c@x.org", "777777", t + CODE_TTL_MS + 1)).result, "expired");
+  check("no code for that address", (await book.checkCode("nobody@x.org", "123456", t)).result, "expired");
+  const codes = new Set(Array.from({ length: 200 }, () => newCode()));
+  check("codes are 6 digits and vary", [[...codes].every((c) => /^\d{6}$/.test(c)), codes.size > 190], [true, true]);
+  const m = verifyCodeEmail("042917");
+  check("code email: code in subject and both parts", [m.subject, m.text.includes("042917"), m.html.includes("042917")], ["Your Averages.io code: 042917", true, true]);
+  check("code email: never anything but digits", verifyCodeEmail("<b>1</b>").html.includes("<b>1</b>"), false);
+
+  // The routes.
+  const mails: { to: string; raw: string }[] = [];
+  const VENV: any = { ...ENV, SCHOOLS: fakeSchools(), SCHOOLS_EMAIL_ENDINGS: "edu,org,us,net", SCHOOLS_VERIFY_EMAIL: "1", SCHOOLS_MAIL: { send: async (m: any) => { mails.push({ to: m.to, raw: m.raw }); } } };
+  const call = (path: string, body: unknown, ip = "198.51.100.70", env: any = VENV) =>
+    worker.fetch(new Request("https://api.averages.io" + path, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://app.averages.io", "CF-Connecting-IP": ip }, body: JSON.stringify(body) }), env, CTX);
+  const cfg = async (env: any) => (await (await worker.fetch(new Request("https://api.averages.io/config/apply"), env, CTX)).json()) as any;
+  resetRateLimits();
+  check("config: endings and verify on", [(await cfg(VENV)).emailEndings, (await cfg(VENV)).verifyEmail], [["edu", "org", "us", "net"], true]);
+  check("config: verify off without the switch or mail", [(await cfg({ ...VENV, SCHOOLS_VERIFY_EMAIL: "0" })).verifyEmail, (await cfg({ ...VENV, SCHOOLS_MAIL: undefined })).verifyEmail], [false, false]);
+  check("code: off = 404", (await call("/schools/apply/code", { email: "it@x.org" }, "198.51.100.71", { ...VENV, SCHOOLS_VERIFY_EMAIL: "0" })).status, 404);
+  let r = await call("/schools/apply/code", { email: "it@gmail.com" });
+  check("code: .com refused before anything is sent", [r.status, (await r.json() as any).fields, mails.length], [400, { email: "ending" }, 0]);
+  r = await call("/schools/apply/code", { email: "IT@Lincoln.ORG" });
+  const sentCode = /code: (\d{6})/.exec(headerOf(mails[0]?.raw ?? "", "Subject") ?? "")?.[1] ?? "";
+  check("code: sent to the address typed", [r.status, mails.length, mails[0]?.to, sentCode.length], [200, 1, "IT@Lincoln.ORG", 6]);
+  r = await call("/schools/apply/code", { email: "it@lincoln.org" }, "198.51.100.72");
+  check("code: again too soon (any case) = 429 with seconds", [r.status, (await r.json() as any).error, Number(r.headers.get("Retry-After")) > 0], [429, "code_wait", true]);
+  r = await call("/schools/apply/verify", { email: "it@lincoln.org", code: sentCode === "000000" ? "000001" : "000000" });
+  check("verify: wrong code, tries left", [r.status, await r.json()], [400, { error: "code_wrong", triesLeft: 4 }]);
+  const lincoln = { school: "Lincoln USD", canvas: "lincoln.instructure.com", email: "IT@Lincoln.ORG" };
+  r = await call("/schools/apply", lincoln, "198.51.100.73");
+  check("apply without verifying: refused", [r.status, (await r.json() as any).error], [400, "email_unverified"]);
+  r = await call("/schools/apply/verify", { email: "it@lincoln.org", code: sentCode.slice(0, 3) + " " + sentCode.slice(3) });
+  const ver = await r.json() as any;
+  check("verify: right code (spaces ok) gives a proof", [r.status, ver.ok, typeof ver.emailProof], [200, true, "string"]);
+  r = await call("/schools/apply", { ...lincoln, email: "other@lincoln.org", emailProof: ver.emailProof }, "198.51.100.74");
+  check("proof for another address: refused", (await r.json() as any).error, "email_unverified");
+  r = await call("/schools/apply", { ...lincoln, emailProof: "x.y" }, "198.51.100.75");
+  check("forged proof: refused", (await r.json() as any).error, "email_unverified");
+  r = await call("/schools/apply", { ...lincoln, emailProof: ver.emailProof }, "198.51.100.76");
+  check("apply with the proof: saved", [r.status, await r.json()], [200, { ok: true }]);
+  r = await call("/schools/apply/code", { email: "it@x.org" }, "198.51.100.77", { ...VENV, SCHOOLS_MAIL: { send: async () => { throw new Error("not a verified destination"); } } });
+  check("code: Cloudflare won't send = 502 code_send_failed", [r.status, (await r.json() as any).error], [502, "code_send_failed"]);
+  r = await call("/schools/apply", { ...lincoln }, "198.51.100.78", { ...VENV, SCHOOLS_VERIFY_EMAIL: "0" });
+  check("verify off: apply works without a proof", r.status, 200);
+  const TS: any = { ...VENV, TURNSTILE_SITE_KEY: "0x4AAA", TURNSTILE_SECRET: "sek" };
+  r = await call("/schools/apply/code", { email: "it@y.org" }, "198.51.100.79", TS);
+  check("code with Turnstile on: needs a token", [r.status, (await r.json() as any).error], [400, "captcha_failed"]);
+  resetRateLimits();
+  const ips = [];
+  for (let i = 0; i < 6; i++) ips.push((await call("/schools/apply/code", { email: `a${i}@z.org` }, "198.51.100.90")).status);
+  check("code: 5 per IP per 10 minutes", ips, [200, 200, 200, 200, 200, 429]);
+  resetRateLimits();
+}
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);

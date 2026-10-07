@@ -46,8 +46,11 @@ check("the numbers", Object.values(RATE_RULES).map((r) => [r.name, r.limit, r.wi
   ["canvaPoll", 120, 60000, "student"],
   ["canvaBrowse", 90, 60000, "student"],
   ["apply", 5, 600000, "ip"],
+  ["applyCode", 5, 600000, "ip"],
+  ["applyVerify", 20, 600000, "ip"],
 ]);
 check("school applications per IP; Martin's list like sign-in", [name("POST", "/schools/apply"), name("GET", "/schools/applications")], ["apply", "signin"]);
+check("verify-email codes have their own rules", [name("POST", "/schools/apply/code"), name("POST", "/schools/apply/verify")], ["applyCode", "applyVerify"]);
 
 console.log("\nsliding window");
 {
