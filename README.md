@@ -33,7 +33,7 @@ Schoology and Classroom.
 | Google Drive and OneDrive | Built (2026-10-05), entirely in the student's browser; the Worker only serves public app IDs |
 | Per-page extras (`/data/people`, `/data/updates`, `/data/events`, `/data/folders`, `/data/gradebook`) and Schoology messages (read, send, reply) | Built (2026-10-06) |
 | Browser notifications (`/push/*`) | Built (2026-10-05), wired in 2026-10-06; switched on once `PUSH_SECRET` and the VAPID keys are set |
-| Rate limiting | Built (2026-10-06): per student and per IP, counted in memory; an optional Workers Rate Limiting binding can be added (see `src/rateLimit.ts`) |
+| Rate limiting | Built (2026-10-06): per student and per IP, counted in memory and (2026-10-07) by Cloudflare's Rate Limiting bindings in `wrangler.jsonc` |
 
 ## How sign-in works
 
@@ -180,6 +180,7 @@ signs them out.
 | `GET` | `/canva/exports/:job` and `/canva/exports/:job/file?design=` | yes | The export's status, then the PDF itself (streamed) |
 | `GET` | `/canva/folders/:id/items` | yes | A Canva folder's folders and designs for the Files page (`root` is the top of Projects), 100 a page. 409 `canva_reconnect_needed` until `CANVA_FOLDERS_ENABLED` is `"1"` and the connection has the folder permissions |
 | `POST` | `/canva/folders`, `/canva/folders/:id/rename`, `/canva/folders/move` | yes | New folder `{name, parentId}`, rename `{name}`, move a design or folder `{itemId, toFolderId}`. No delete (Canva would put the contents in the Trash) |
+| `GET` | `/config/apply` | no | The school application page's Turnstile site key, or `null` when Turnstile isn't set up |
 | `GET` | `/config/schools?lms=schoology\|canvas` | | The schools the sign-in page lists (`src/schools.ts`) |
 | `POST` | `/schools/apply` | | A school's application from `app.averages.io/schools/apply`: `{school, canvas, email, name?, note?}`. Saved, then emailed to Martin. 5 per 10 minutes per network |
 | `GET` | `/schools/applications` | key | Every application, newest first. Needs `Authorization: Bearer <SCHOOLS_ADMIN_KEY>`; doesn't exist until that secret is set |
@@ -188,8 +189,11 @@ Demo sessions get `403 not_available_in_demo` on the sync, assignment, extras, m
 notification and Canva routes. Messages are Schoology only: a Google session gets
 `404 not_available`.
 
-**Rate limits** (per minute): sign-in 30 per IP; `/data/*` and reading messages 60 per
-student; sending messages 10; `/submit/*` 40; `/push/*` 20; `/canva/*` 30. Over the
+**Rate limits** (per minute): sign-in 30 per IP; `/data/*`, `/auth/me`, `/sync` and reading
+messages 90 per student; sending messages 10; `/submit/*` 90; `/push/*` 20; `/canva/*` 30
+(export polling 120, browsing folders 90); school applications 5 per 10 minutes per IP.
+Counted twice: in memory per Worker copy, and by Cloudflare's Rate Limiting bindings
+(`RATE_LIMIT_*` in `wrangler.jsonc`, shared per location; since 2026-10-07). Over the
 limit: `429 {"error":"rate_limited"}` with `Retry-After`. Preflights, `GET /` and the
 public config reads are never limited.
 Google sessions get `404 classroom_files_open_in_drive` from `/data/attachment` and
@@ -255,6 +259,7 @@ feature gets its own route with its own fixed Schoology calls.
 | `PUSH_SECRET` | Browser notifications: seals each student's stored sign-in. A new random value, never the same as `SESSION_SECRET` (notifications stay off if it is) |
 | `VAPID_PRIVATE_JWK` | Browser notifications: the private half of the VAPID key pair, as JWK JSON text |
 | `SCHOOLS_NOTIFY_TO` | Schools: the inbox that gets every email to schools@averages.io and every school application. Must be a verified destination in Email Routing. A secret so the address isn't in this public repo |
+| `TURNSTILE_SECRET` | Schools: the secret key of the Cloudflare Turnstile widget on app.averages.io/schools/apply. With `TURNSTILE_SITE_KEY` set too, applications need a passed check |
 | `SCHOOLS_ADMIN_KEY` | Schools: unlocks `GET /schools/applications`. A long random value (24+ characters) |
 
 Make a `SESSION_SECRET` with:
@@ -273,6 +278,7 @@ Make a `SESSION_SECRET` with:
 | `VAPID_PUBLIC_KEY` | Browser notifications: the public half of the VAPID key pair (base64url). Set in the dashboard, not in `wrangler.jsonc` |
 | `VAPID_SUBJECT` | Optional. Contact for push services, default `mailto:help@averages.io` |
 | `CANVA_EXPORT_ENABLED` | `"1"` once the `design:content:read` scope is enabled for the Canva integration (turning in Canva designs as PDFs). Leave `"0"` until then: asking Canva for a scope it hasn't approved breaks Connect |
+| `TURNSTILE_SITE_KEY` | The Turnstile widget's site key (public; the apply page gets it from `GET /config/apply`). Set it as a dashboard variable, with `TURNSTILE_SECRET` as a secret; without both, there's no check |
 | `CANVA_FOLDERS_ENABLED` | `"1"` once `folder:read` and `folder:write` are enabled (and approved) for the Canva integration: Connect asks for them and the Files page shows Canva folders. Leave `"0"` until then, for the same reason. Students connected before then see Reconnect |
 
 ### Schools email (schools@averages.io)

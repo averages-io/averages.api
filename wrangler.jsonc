@@ -37,6 +37,9 @@
     // folder:write. Same rule: "1" only AFTER both are enabled (and approved)
     // for the integration in Canva's Developer Portal.
     "CANVA_FOLDERS_ENABLED": "1"
+    // TURNSTILE_SITE_KEY (2026-10-07): the school application's Cloudflare
+    // Turnstile widget. Public; set it in the dashboard as a variable (or add
+    // it here) with TURNSTILE_SECRET as a secret. Without both, no check.
   },
   // Sync Across Devices: one SyncStore Durable Object per student (src/syncStore.ts).
   // The code always opens them in the "us" jurisdiction, so the stored record
@@ -71,6 +74,26 @@
   "send_email": [
     { "name": "SCHOOLS_MAIL" }
   ],
+  // Rate limits (2026-10-07): Cloudflare's own counters, shared by every copy
+  // of the Worker in a location, on top of the per-copy counts in
+  // src/rateLimit.ts. Declared under "unsafe" because this repo's Wrangler 3
+  // doesn't know the newer "ratelimits" key (Cloudflare documents both). Each
+  // needs its own namespace_id; a window ("period") can only be 10 or 60 s.
+  // The numbers match RATE_RULES in src/rateLimit.ts; applications are
+  // 5 per 10 minutes there and at most 3 a minute here.
+  "unsafe": {
+    "bindings": [
+      { "name": "RATE_LIMIT_SIGNIN", "type": "ratelimit", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
+      { "name": "RATE_LIMIT_DATA", "type": "ratelimit", "namespace_id": "1002", "simple": { "limit": 90, "period": 60 } },
+      { "name": "RATE_LIMIT_SEND", "type": "ratelimit", "namespace_id": "1003", "simple": { "limit": 10, "period": 60 } },
+      { "name": "RATE_LIMIT_SUBMIT", "type": "ratelimit", "namespace_id": "1004", "simple": { "limit": 90, "period": 60 } },
+      { "name": "RATE_LIMIT_PUSH", "type": "ratelimit", "namespace_id": "1005", "simple": { "limit": 20, "period": 60 } },
+      { "name": "RATE_LIMIT_CANVA", "type": "ratelimit", "namespace_id": "1006", "simple": { "limit": 30, "period": 60 } },
+      { "name": "RATE_LIMIT_CANVA_POLL", "type": "ratelimit", "namespace_id": "1007", "simple": { "limit": 120, "period": 60 } },
+      { "name": "RATE_LIMIT_CANVA_BROWSE", "type": "ratelimit", "namespace_id": "1008", "simple": { "limit": 90, "period": 60 } },
+      { "name": "RATE_LIMIT_APPLY", "type": "ratelimit", "namespace_id": "1009", "simple": { "limit": 3, "period": 60 } }
+    ]
+  },
   // One-time setup Cloudflare runs on the first deploy that includes SyncStore.
   // Never edit or remove a tag once deployed; later changes get a new tag.
   "migrations": [
