@@ -45,7 +45,16 @@
     // The school application's Cloudflare Turnstile widget ("Chaptcha App",
     // hostname averages.io), 2026-10-07. Public (GET /config/apply serves it).
     // Its secret is the TURNSTILE_SECRET dashboard secret; without both, no check.
-    "TURNSTILE_SITE_KEY": "0x4AAAAAAFP990oRx5vTqbEf"
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAFP990oRx5vTqbEf",
+    // School application email rules (2026-10-07). SCHOOLS_EMAIL_ENDINGS: the
+    // endings an applicant's email may have, comma-separated ("us" also covers
+    // k12.ca.us and the like). Empty = any.
+    "SCHOOLS_EMAIL_ENDINGS": "edu,org,us,net",
+    // "1" = "Verify your email" with a 6-digit code before applying. Leave "0"
+    // until averages.io is onboarded for sending (Compute > Email Service >
+    // Email Sending > Onboard Domain) on the Workers Paid plan: before that,
+    // Cloudflare only delivers to verified addresses and codes won't arrive.
+    "SCHOOLS_VERIFY_EMAIL": "0"
   },
   // Sync Across Devices: one SyncStore Durable Object per student (src/syncStore.ts).
   // The code always opens them in the "us" jurisdiction, so the stored record
@@ -97,7 +106,9 @@
       { "name": "RATE_LIMIT_CANVA", "type": "ratelimit", "namespace_id": "1006", "simple": { "limit": 30, "period": 60 } },
       { "name": "RATE_LIMIT_CANVA_POLL", "type": "ratelimit", "namespace_id": "1007", "simple": { "limit": 120, "period": 60 } },
       { "name": "RATE_LIMIT_CANVA_BROWSE", "type": "ratelimit", "namespace_id": "1008", "simple": { "limit": 90, "period": 60 } },
-      { "name": "RATE_LIMIT_APPLY", "type": "ratelimit", "namespace_id": "1009", "simple": { "limit": 3, "period": 60 } }
+      { "name": "RATE_LIMIT_APPLY", "type": "ratelimit", "namespace_id": "1009", "simple": { "limit": 3, "period": 60 } },
+      { "name": "RATE_LIMIT_APPLY_CODE", "type": "ratelimit", "namespace_id": "1010", "simple": { "limit": 3, "period": 60 } },
+      { "name": "RATE_LIMIT_APPLY_VERIFY", "type": "ratelimit", "namespace_id": "1011", "simple": { "limit": 10, "period": 60 } }
     ]
   },
   // One-time setup Cloudflare runs on the first deploy that includes SyncStore.

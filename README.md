@@ -180,9 +180,11 @@ signs them out.
 | `GET` | `/canva/exports/:job` and `/canva/exports/:job/file?design=` | yes | The export's status, then the PDF itself (streamed) |
 | `GET` | `/canva/folders/:id/items` | yes | A Canva folder's folders and designs for the Files page (`root` is the top of Projects), 100 a page. 409 `canva_reconnect_needed` until `CANVA_FOLDERS_ENABLED` is `"1"` and the connection has the folder permissions |
 | `POST` | `/canva/folders`, `/canva/folders/:id/rename`, `/canva/folders/move` | yes | New folder `{name, parentId}`, rename `{name}`, move a design or folder `{itemId, toFolderId}`. No delete (Canva would put the contents in the Trash) |
-| `GET` | `/config/apply` | no | The school application page's Turnstile site key, or `null` when Turnstile isn't set up |
+| `GET` | `/config/apply` | no | What the school application page needs: `{turnstileSiteKey, emailEndings, verifyEmail}` (site key or `null`; allowed email endings, `[]` = any; whether the email must be verified with a code) |
 | `GET` | `/config/schools?lms=schoology\|canvas` | | The schools the sign-in page lists (`src/schools.ts`) |
-| `POST` | `/schools/apply` | | A school's application from `app.averages.io/schools/apply`: `{school, canvas, email, name?, note?}`. Saved, then emailed to Martin. 5 per 10 minutes per network |
+| `POST` | `/schools/apply/code` | | "Verify your email": `{email, turnstileToken?}` emails a 6-digit code (only when `SCHOOLS_VERIFY_EMAIL` is `"1"`). 3 per address per 10 minutes, 45 s apart; 5 per 10 minutes per network |
+| `POST` | `/schools/apply/verify` | | `{email, code}` → `{ok, emailProof}` (2 hours). 5 tries per code, codes last 10 minutes; 20 per 10 minutes per network |
+| `POST` | `/schools/apply` | | A school's application from `app.averages.io/schools/apply`: `{school, canvas, email, name?, note?, emailProof?}`. The email must end in one of `SCHOOLS_EMAIL_ENDINGS`, and carry an `emailProof` when verification is on. Saved, then emailed to Martin. 5 per 10 minutes per network |
 | `GET` | `/schools/applications` | key | Every application, newest first. Needs `Authorization: Bearer <SCHOOLS_ADMIN_KEY>`; doesn't exist until that secret is set |
 
 Demo sessions get `403 not_available_in_demo` on the sync, assignment, extras, messages,
@@ -278,7 +280,9 @@ Make a `SESSION_SECRET` with:
 | `VAPID_PUBLIC_KEY` | Browser notifications: the public half of the VAPID key pair (base64url). In `wrangler.jsonc` under `vars` (since 2026-10-07); must pair with `VAPID_PRIVATE_JWK` |
 | `VAPID_SUBJECT` | Optional. Contact for push services, default `mailto:help@averages.io` |
 | `CANVA_EXPORT_ENABLED` | `"1"` once the `design:content:read` scope is enabled for the Canva integration (turning in Canva designs as PDFs). Leave `"0"` until then: asking Canva for a scope it hasn't approved breaks Connect |
-| `TURNSTILE_SITE_KEY` | The Turnstile widget's site key (public; the apply page gets it from `GET /config/apply`). Set it as a dashboard variable, with `TURNSTILE_SECRET` as a secret; without both, there's no check |
+| `TURNSTILE_SITE_KEY` | The Turnstile widget's site key (public; the apply page gets it from `GET /config/apply`). In `wrangler.jsonc` under `vars`, with `TURNSTILE_SECRET` as a secret; without both, there's no check |
+| `SCHOOLS_EMAIL_ENDINGS` | In `wrangler.jsonc`: the email endings the school application accepts, comma-separated (`"edu,org,us,net"`; `us` covers `k12.ca.us` and the like). Empty = any |
+| `SCHOOLS_VERIFY_EMAIL` | In `wrangler.jsonc`: `"1"` makes applicants verify their email with a 6-digit code. Turn on only after averages.io is onboarded for sending in Cloudflare Email Service (Compute > Email Service > Email Sending > Onboard Domain), which needs Workers Paid: before that, codes only reach verified addresses. Uses `SCHOOLS_MAIL` and `SESSION_SECRET` |
 | `CANVA_FOLDERS_ENABLED` | `"1"` once `folder:read` and `folder:write` are enabled (and approved) for the Canva integration: Connect asks for them and the Files page shows Canva folders. Leave `"0"` until then, for the same reason. Students connected before then see Reconnect |
 
 ### Schools email (schools@averages.io)
