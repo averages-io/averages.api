@@ -83,7 +83,7 @@ import {
   type KVLike,
 } from "./sync.ts";
 import { cloudConfig } from "./cloud.ts";
-import { schoolsFor, validateApplication } from "./schools.ts";
+import { checkTurnstile, schoolsFor, turnstileOn, validateApplication } from "./schools.ts";
 import { EmailMessage } from "cloudflare:email";
 import { autoReplyAllowed, buildMime, cleanEmail, SCHOOLS_ADDRESS } from "./mail.ts";
 import { applicationEmail, autoReplyEmail, inboundCopyEmail } from "./schoolsMail.ts";
@@ -218,6 +218,9 @@ type Bindings = {
   SCHOOLS_MAIL?: SendEmail;
   SCHOOLS_NOTIFY_TO?: string;
   SCHOOLS_ADMIN_KEY?: string;
+  /** Cloudflare Turnstile on the school application (2026-10-07): the site key (public, a var) and its secret. */
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET?: string;
   PUSH_SECRET?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_JWK?: string;
@@ -1195,6 +1198,12 @@ app.get("/data/files", async (c) => {
  * The schools the sign-in page can search (2026-10-06): public, no sign-in
  * needed (the page asks before anyone is signed in). See src/schools.ts.
  */
+/** What the school application page needs: the Turnstile site key, or null when it's off. Public. */
+app.get("/config/apply", (c) => {
+  c.header("Cache-Control", "public, max-age=300");
+  return c.json({ turnstileSiteKey: turnstileOn(c.env) ? c.env.TURNSTILE_SITE_KEY : null });
+});
+
 app.get("/config/schools", (c) => {
   const schools = schoolsFor(c.req.query("lms"));
   if (!schools) return c.json({ error: "bad_request" }, 400);
@@ -1594,6 +1603,12 @@ app.post("/schools/apply", async (c) => {
   if (!checked.ok) return c.json({ error: "invalid", fields: checked.fields }, 400);
   // The hidden field a person never fills in: a bot. Polite "ok", nothing kept.
   if (checked.spam) return c.json({ ok: true });
+  // Cloudflare Turnstile (2026-10-07), when it's set up.
+  if (turnstileOn(c.env)) {
+    const verdict = await checkTurnstile((body as any)?.turnstileToken, c.env.TURNSTILE_SECRET!, c.req.header("CF-Connecting-IP") ?? null);
+    if (verdict === "failed") return c.json({ error: "captcha_failed" }, 400);
+    if (verdict === "unavailable") return c.json({ error: "captcha_unavailable" }, 503);
+  }
   const store = schoolsStoreFor(c.env, c.req.url);
   if (!store) return c.json({ error: "unavailable" }, 503);
   try {

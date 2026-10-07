@@ -99,3 +99,47 @@ export function validateApplication(body: unknown): { ok: true; value: Applicati
   const spam = typeof b.website === "string" && b.website.trim() !== "";
   return { ok: true, value: { school, canvas, email, name, note }, spam };
 }
+
+/* ── Cloudflare Turnstile on the application (2026-10-07, Martin) ──────
+ * The form shows Cloudflare's check (no puzzle for most people); the API
+ * asks Cloudflare whether the token it produced is real before saving
+ * anything. On only when both TURNSTILE_SITE_KEY (public, shown to the
+ * page) and TURNSTILE_SECRET (a secret) are set.
+ */
+export const TURNSTILE_VERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+
+export function turnstileOn(env: { TURNSTILE_SITE_KEY?: string; TURNSTILE_SECRET?: string }): boolean {
+  return !!(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET);
+}
+
+/**
+ * Is this Turnstile token real, fresh and from our form? "ok", "failed"
+ * (missing, used, expired, or made somewhere else) or "unavailable"
+ * (Cloudflare couldn't be asked: the school is told to try again).
+ */
+export async function checkTurnstile(
+  token: unknown,
+  secret: string,
+  ip: string | null,
+  fetcher: typeof fetch = fetch
+): Promise<"ok" | "failed" | "unavailable"> {
+  if (typeof token !== "string" || !token || token.length > 2048) return "failed";
+  const form = new FormData();
+  form.append("secret", secret);
+  form.append("response", token);
+  if (ip) form.append("remoteip", ip);
+  let json: any;
+  try {
+    const res = await fetcher(TURNSTILE_VERIFY, { method: "POST", body: form, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return "unavailable";
+    json = await res.json();
+  } catch {
+    return "unavailable";
+  }
+  if (json?.success !== true) return "failed";
+  // Made on our own form, not one copied to another site.
+  if (json.action && json.action !== "school-apply") return "failed";
+  const host = String(json.hostname ?? "");
+  if (host && host !== "app.averages.io" && host !== "localhost" && host !== "127.0.0.1") return "failed";
+  return "ok";
+}

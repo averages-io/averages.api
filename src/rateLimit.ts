@@ -35,24 +35,15 @@
  * client, which tends to stay on one isolate. The Map is bounded
  * (MAX_KEYS, least recently used dropped first), so it can't grow without end.
  *
- * Optional, for counts shared across isolates: a Workers Rate Limiting
- * binding. When one is bound, it's asked as well and a request over either
- * limit is refused. Each rule looks for its own binding first
- * (RATE_LIMIT_SIGNIN, RATE_LIMIT_DATA, RATE_LIMIT_SEND, RATE_LIMIT_SUBMIT,
- * RATE_LIMIT_PUSH, RATE_LIMIT_CANVA), then a shared RATE_LIMITER. A binding
- * has one fixed limit and a 10 or 60 second period, so per-rule bindings are
- * how to get each rule's own number; a single shared RATE_LIMITER should be
- * set to the loosest one (60 per 60 s) and the in-memory window keeps the
- * stricter ones. A binding that errors is ignored (the in-memory count still
- * applies). Not in wrangler.jsonc yet: the repo's wrangler 3.x doesn't know
- * the `ratelimits` key, and an unknown key could break the deploy. To add it:
- *   - wrangler 4.x: in wrangler.jsonc,
- *       "ratelimits": [{ "name": "RATE_LIMITER", "namespace_id": "1001",
- *                        "simple": { "limit": 60, "period": 60 } }]
- *   - wrangler 3.x: the same thing under "unsafe":
- *       "unsafe": { "bindings": [{ "name": "RATE_LIMITER", "type": "ratelimit",
- *         "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } }] }
- *   (namespace_id is any number unique to this account's rate limiters.)
+ * Counts shared across isolates (2026-10-07): Workers Rate Limiting
+ * bindings, one per rule, declared in wrangler.jsonc under "unsafe" (the
+ * repo's Wrangler 3 doesn't know the newer "ratelimits" key): RATE_LIMIT_SIGNIN,
+ * _DATA, _SEND, _SUBMIT, _PUSH, _CANVA, _CANVA_POLL, _CANVA_BROWSE, _APPLY,
+ * then a shared RATE_LIMITER if one is ever added. Each is asked after the
+ * in-memory count and a request over either limit is refused. A binding has
+ * one fixed limit and a 10 or 60 second period, counted per Cloudflare
+ * location; applications keep their 10-minute window in memory. A binding
+ * that errors is ignored (the in-memory count still applies).
  */
 
 import type { MiddlewareHandler } from "hono";
