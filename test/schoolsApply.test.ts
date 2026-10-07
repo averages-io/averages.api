@@ -186,6 +186,7 @@ console.log("\nturnstile");
   check("replayed token (timeout-or-duplicate)", await checkTurnstile("tok", "s", null, answer({ success: false, "error-codes": ["timeout-or-duplicate"] })), "failed");
   check("wrong secret is ours to fix", await checkTurnstile("tok", "s", null, answer({ success: false, "error-codes": ["invalid-input-secret"] })), "unavailable");
   check("no action or host refused", [await checkTurnstile("tok", "s", null, answer({ success: true, hostname: "app.averages.io" })), await checkTurnstile("tok", "s", null, answer({ success: true, action: "school-apply" }))], ["failed", "failed"]);
+  check("localhost only when the API is local", [await checkTurnstile("tok", "s", null, answer({ ...OK, hostname: "localhost" })), await checkTurnstile("tok", "s", null, answer({ ...OK, hostname: "localhost" }), true)], ["failed", "ok"]);
   check("averages.io itself isn't the form", await checkTurnstile("tok", "s", null, answer({ ...OK, hostname: "averages.io" })), "failed");
   let sentSecret = "";
   await checkTurnstile("tok", " sek\n", null, (async (_u: any, init: any) => { sentSecret = (init.body as FormData).get("secret") as string; return new Response(JSON.stringify(OK)); }) as any);
