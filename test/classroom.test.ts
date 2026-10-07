@@ -147,7 +147,7 @@ check("history: last graded, oldest first", b.HISTORY["111"], { points: [90, 90,
 check("overdue: past due and not turned in", b.OVERDUE.map((x) => x.title), ["Missing reading"]);
 check("overdue item shape", b.OVERDUE[0], { type: "assignment", title: "Missing reading", courseId: "111", due: "Mon Oct 5", dueAt: "2026-10-06T06:59:00.000Z", id: "4", platform: "classroom" });
 check("upcoming: soonest first, turned-in work left out", b.UPCOMING.map((x) => x.title), ["Due tonight", "Next week"]);
-check("today, in the student's zone", b.TODAY, [{ title: "Due tonight", courseId: "111" }]);
+check("today, in the student's zone", b.TODAY, [{ title: "Due tonight", courseId: "111", id: "5" }]);
 check("submitted", b.SUBMITTED, [{ type: "assignment", title: "Turned in, not graded", courseId: "111", submittedOn: "Tue Oct 6", id: "7", platform: "classroom" }]);
 check("announcement as a course update (Classroom has no messages)", [b.MESSAGES, b.COURSE_UPDATES], [[], [{ from: "Announcement", courseId: "111", body: "Field trip forms due Friday!", when: "3h ago", unread: true, id: "a1", link: "https://classroom.google.com/c/MTEx/p/a1" }]]);
 check("recent grades, newest first", b.RECENT_GRADES.map((g: any) => [g.title, g.letter, g.pct, g.pts, g.isNew]), [["Unit test", "C-", 70, "35/50", true], ["Lab report", "A-", 90, "18/20", false], ["Cell worksheet", "A-", 90, "9/10", false]]);

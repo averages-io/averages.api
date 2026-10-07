@@ -374,8 +374,8 @@ console.log("\nemail endings and codes");
   check("code email: never anything but digits", verifyCodeEmail("<b>1</b>").html.includes("<b>1</b>"), false);
 
   // The routes.
-  const mails: { to: string; raw: string }[] = [];
-  const VENV: any = { ...ENV, SCHOOLS: fakeSchools(), SCHOOLS_EMAIL_ENDINGS: "edu,org,us,net", SCHOOLS_VERIFY_EMAIL: "1", SCHOOLS_MAIL: { send: async (m: any) => { mails.push({ to: m.to, raw: m.raw }); } } };
+  const mails: any[] = [];
+  const VENV: any = { ...ENV, SCHOOLS: fakeSchools(), SCHOOLS_EMAIL_ENDINGS: "edu,org,us,net", SCHOOLS_VERIFY_EMAIL: "1", SCHOOLS_MAIL: { send: async (m: any) => { mails.push({ to: m.to, raw: m.raw, from: m.from, subject: m.subject }); } } };
   const call = (path: string, body: unknown, ip = "198.51.100.70", env: any = VENV) =>
     worker.fetch(new Request("https://api.averages.io" + path, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://app.averages.io", "CF-Connecting-IP": ip }, body: JSON.stringify(body) }), env, CTX);
   const cfg = async (env: any) => (await (await worker.fetch(new Request("https://api.averages.io/config/apply"), env, CTX)).json()) as any;
@@ -386,8 +386,8 @@ console.log("\nemail endings and codes");
   let r = await call("/schools/apply/code", { email: "it@gmail.com" });
   check("code: .com refused before anything is sent", [r.status, (await r.json() as any).fields, mails.length], [400, { email: "ending" }, 0]);
   r = await call("/schools/apply/code", { email: "IT@Lincoln.ORG" });
-  const sentCode = /code: (\d{6})/.exec(headerOf(mails[0]?.raw ?? "", "Subject") ?? "")?.[1] ?? "";
-  check("code: sent to the address typed", [r.status, mails.length, mails[0]?.to, sentCode.length], [200, 1, "IT@Lincoln.ORG", 6]);
+  const sentCode = /code: (\d{6})/.exec(mails[0]?.subject ?? "")?.[1] ?? "";
+  check("code: sent to the address typed, from no-reply@", [r.status, mails.length, mails[0]?.to, sentCode.length, mails[0]?.from], [200, 1, "IT@Lincoln.ORG", 6, { email: "no-reply@averages.io", name: "Averages.io" }]);
   r = await call("/schools/apply/code", { email: "it@lincoln.org" }, "198.51.100.72");
   check("code: again too soon (any case) = 429 with seconds", [r.status, (await r.json() as any).error, Number(r.headers.get("Retry-After")) > 0], [429, "code_wait", true]);
   r = await call("/schools/apply/verify", { email: "it@lincoln.org", code: sentCode === "000000" ? "000001" : "000000" });
@@ -404,6 +404,13 @@ console.log("\nemail endings and codes");
   check("forged proof: refused", (await r.json() as any).error, "email_unverified");
   r = await call("/schools/apply", { ...lincoln, emailProof: ver.emailProof }, "198.51.100.76");
   check("apply with the proof: saved", [r.status, await r.json()], [200, { ok: true }]);
+  const AENV: any = { ...VENV, SCHOOLS_EMAIL_ALLOW: " Martin@Example.com , bad-address " };
+  r = await call("/schools/apply/code", { email: "martin@example.COM" }, "198.51.100.80", AENV);
+  check("allow-listed address: code sent despite .com", r.status, 200);
+  check("allow-list never in the public config", JSON.stringify(await cfg(AENV)).includes("xample"), false);
+  r = await call("/schools/apply/code", { email: "other@example.com" }, "198.51.100.81", AENV);
+  check("other .com still refused", (await r.json() as any).fields, { email: "ending" });
+  check("allow-list parsing", (await import("../src/schools.ts")).emailAllowList(" A@B.com;c@d.org bad "), ["a@b.com", "c@d.org"]);
   r = await call("/schools/apply/code", { email: "it@x.org" }, "198.51.100.77", { ...VENV, SCHOOLS_MAIL: { send: async () => { throw new Error("not a verified destination"); } } });
   check("code: Cloudflare won't send = 502 code_send_failed", [r.status, (await r.json() as any).error], [502, "code_send_failed"]);
   r = await call("/schools/apply", { ...lincoln }, "198.51.100.78", { ...VENV, SCHOOLS_VERIFY_EMAIL: "0" });
