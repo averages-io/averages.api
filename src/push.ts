@@ -41,7 +41,7 @@ export interface PushStoreApi {
   setTypes(changes: Partial<NotifyTypes>): Promise<PushStatus | null>;
   unsubscribe(endpoint: string): Promise<PushStatus>;
   deleteAll(): Promise<void>;
-  touch(input: { sealed: string; exp: number }): Promise<boolean>;
+  touch(input: { sealed: string; exp: number; tz?: string }): Promise<boolean>;
   test(endpoint: string): Promise<TestResult>;
   status(endpoint?: string): Promise<PushStatus>;
 }
@@ -213,7 +213,9 @@ export function pushRoutes(deps: PushDeps) {
     const credential = await sealCredential(c.get("session"), c.env.PUSH_SECRET!);
     if (!credential) return c.json({ error: "session_expired" }, 401);
     try {
-      const on = await storeFor(c.env, c.get("session").uid, c.req.url).touch(credential);
+      const body = (await jsonBody(c)) ?? {};
+      const tz = safeTimeZone(body.tz, (c.req.raw as any)?.cf?.timezone);
+      const on = await storeFor(c.env, c.get("session").uid, c.req.url).touch({ ...credential, tz });
       return c.json({ ok: true, on });
     } catch (err) {
       return unavailable(c, err);
