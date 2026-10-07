@@ -113,8 +113,11 @@ export function turnstileOn(env: { TURNSTILE_SITE_KEY?: string; TURNSTILE_SECRET
 }
 
 /** Where the form lives. The widget (site key 0x4AAAAAAFP990oRx5vTqbEf) is set
- *  up for averages.io and its subdomains; localhost is for local testing. */
-const TURNSTILE_HOSTS = new Set(["app.averages.io", "localhost", "127.0.0.1"]);
+ *  up for averages.io and its subdomains. Local hostnames count only when the
+ *  API itself is running locally (Cloudflare: "Do not allow local hostnames in
+ *  production"). */
+const TURNSTILE_HOSTS = new Set(["app.averages.io"]);
+const TURNSTILE_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
 const TURNSTILE_ACTION = "school-apply";
 
 /**
@@ -130,7 +133,8 @@ export async function checkTurnstile(
   token: unknown,
   secret: string,
   ip: string | null,
-  fetcher: typeof fetch = fetch
+  fetcher: typeof fetch = fetch,
+  allowLocal = false
 ): Promise<"ok" | "failed" | "unavailable"> {
   if (typeof token !== "string" || !token || token.length > 2048) return "failed";
   const form = new FormData();
@@ -158,6 +162,7 @@ export async function checkTurnstile(
   // Made on our own form (this action, this host), not a token from another
   // form or site. Both must be present: siteverify always returns them.
   if (json.action !== TURNSTILE_ACTION) return "failed";
-  if (!TURNSTILE_HOSTS.has(String(json.hostname ?? ""))) return "failed";
+  const host = String(json.hostname ?? "");
+  if (!TURNSTILE_HOSTS.has(host) && !(allowLocal && TURNSTILE_LOCAL_HOSTS.has(host))) return "failed";
   return "ok";
 }

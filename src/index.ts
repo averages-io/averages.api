@@ -1605,7 +1605,10 @@ app.post("/schools/apply", async (c) => {
   if (checked.spam) return c.json({ ok: true });
   // Cloudflare Turnstile (2026-10-07), when it's set up.
   if (turnstileOn(c.env)) {
-    const verdict = await checkTurnstile((body as any)?.turnstileToken, c.env.TURNSTILE_SECRET!, c.req.header("CF-Connecting-IP") ?? null);
+    // Tokens from a localhost page only count when this API is running locally too.
+    const apiHost = new URL(c.req.url).hostname;
+    const local = apiHost === "localhost" || apiHost === "127.0.0.1";
+    const verdict = await checkTurnstile((body as any)?.turnstileToken, c.env.TURNSTILE_SECRET!, c.req.header("CF-Connecting-IP") ?? null, fetch, local);
     if (verdict === "failed") return c.json({ error: "captcha_failed" }, 400);
     if (verdict === "unavailable") return c.json({ error: "captcha_unavailable" }, 503);
   }
