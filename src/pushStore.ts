@@ -147,6 +147,8 @@ interface Meta {
   lastSentAt?: number;
   lastTestAt?: number;
   failures?: number;
+  /** The student's time zone, from their browser when they turned notifications on (2026-10-07). */
+  tz?: string;
 }
 
 export interface PushStatus {
@@ -301,7 +303,7 @@ export class PushStore extends DurableObject<PushEnv> {
    * types, and the sealed sign-in. The first time (nothing stored yet) the
    * first check is scheduled soon; it's the baseline and notifies nothing.
    */
-  async subscribe(input: { subscription: PushSubscriptionLike; types: NotifyTypes; sealed: string; exp: number }): Promise<PushStatus> {
+  async subscribe(input: { subscription: PushSubscriptionLike; types: NotifyTypes; sealed: string; exp: number; tz?: string }): Promise<PushStatus> {
     const sub = cleanSubscription(input?.subscription);
     if (!sub) throw new Error("push_bad_subscription");
     if (typeof input.sealed !== "string" || !input.sealed || typeof input.exp !== "number" || !Number.isFinite(input.exp)) {
@@ -318,7 +320,7 @@ export class PushStore extends DurableObject<PushEnv> {
       subs,
       types: normalizeTypes(input.types),
       cred: this.newerCredential(got.get("cred"), { sealed: input.sealed, exp: input.exp }),
-      meta: meta ?? { gen: randomId(), createdAt: now },
+      meta: { ...(meta ?? { gen: randomId(), createdAt: now }), ...(typeof input.tz === "string" && input.tz.length <= 64 ? { tz: input.tz } : {}) },
     });
     if (!meta || (await s.getAlarm()) === null) await s.setAlarm(now + FIRST_CHECK_MS + Math.floor(Math.random() * 15_000));
     return this.status(sub.endpoint);
@@ -466,7 +468,7 @@ export class PushStore extends DurableObject<PushEnv> {
       try {
         observed = isGoogleSession(session)
           ? await readClassroom(session, enabled, this.env, hash, now)
-          : schoologyObservation(await readSchoology(session, enabled), enabled, hash, now);
+          : schoologyObservation(await readSchoology(session, enabled), enabled, hash, now, meta.tz ?? "UTC");
       } catch (err) {
         if (err instanceof StopForGood) {
           console.log("push_stopped", err.message);

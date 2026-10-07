@@ -197,6 +197,78 @@ export function schoologyTime(value: unknown): number | null {
   return toDate(value)?.getTime() ?? null;
 }
 
+/**
+ * Schoology's due dates come with a time: "2026-10-09 23:59:00", in the
+ * student's own time zone (2026-10-07, Martin: "then how does the Schoology
+ * app have times"). Until now the bundle kept only "Fri Oct 9" and read the
+ * rest as UTC, so in California work turned overdue seven hours early. This
+ * is that moment as epoch ms, read in `tz` (the zone the app sends as ?tz=);
+ * unix timestamps pass through.
+ */
+export function schoologyLocalMs(value: unknown, tz: string): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "number" || /^\d+$/.test(String(value))) {
+    const seconds = Number(value);
+    return seconds ? seconds * 1000 : null;
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(String(value).trim());
+  if (!m) return null;
+  const wall = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 23), +(m[5] ?? 59), +(m[6] ?? 0));
+  if (Number.isNaN(wall)) return null;
+  // The zone's offset at that moment, checked twice so a time right at a
+  // daylight-saving change lands on the right side of it.
+  let ms = wall - zoneOffset(wall, tz);
+  ms = wall - zoneOffset(ms, tz);
+  return ms;
+}
+
+const ZONE_PARTS = new Map<string, Intl.DateTimeFormat>();
+/** How far `tz` is ahead of UTC at `ms`, in ms. Unknown zones count as UTC. */
+function zoneOffset(ms: number, tz: string): number {
+  let f = ZONE_PARTS.get(tz);
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    } catch {
+      return 0;
+    }
+    if (ZONE_PARTS.size > 50) ZONE_PARTS.clear();
+    ZONE_PARTS.set(tz, f);
+  }
+  const p: Record<string, number> = {};
+  for (const part of f.formatToParts(new Date(ms))) if (part.type !== "literal") p[part.type] = Number(part.value);
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour === 24 ? 0 : p.hour, p.minute, p.second);
+  return asUtc - Math.floor(ms / 1000) * 1000;
+}
+
+const TIME_FORMATS = new Map<string, Intl.DateTimeFormat>();
+/** "11:59 PM" in the student's zone. */
+export function timeLabel(ms: number, tz: string): string {
+  let f = TIME_FORMATS.get(tz);
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true });
+    } catch {
+      f = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit", hour12: true });
+    }
+    if (TIME_FORMATS.size > 50) TIME_FORMATS.clear();
+    TIME_FORMATS.set(tz, f);
+  }
+  return f.format(new Date(ms));
+}
+
+/** dueAt (ISO) and time ("11:59 PM") for a Schoology due date, or nothing when it has none. */
+function dueParts(value: unknown, tz: string): { dueAt?: string; time?: string } {
+  const ms = schoologyLocalMs(value, tz);
+  return ms === null ? {} : { dueAt: new Date(ms).toISOString(), time: timeLabel(ms, tz) };
+}
+
+/** The calendar day ("2026-10-09") of `ms` in `tz`. */
+function dayIn(ms: number, tz: string): string {
+  const off = zoneOffset(ms, tz);
+  return new Date(ms + off).toISOString().slice(0, 10);
+}
+
 function toDate(value: string | number | undefined): Date | null {
   if (value === undefined || value === null || value === "") return null;
   // Schoology returns both unix timestamps (numeric strings) and
@@ -392,12 +464,11 @@ const TYPE_MAP: Record<string, string> = {
 };
 
 export function adaptAssignments(
-  assignmentsBySection: Record<string, Raw[]>
+  assignmentsBySection: Record<string, Raw[]>,
+  tz = "UTC",
+  now = Date.now()
 ): { OVERDUE: Raw[]; UPCOMING: Raw[]; TODAY: Raw[] } {
-  const now = Date.now();
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const endOfToday = startOfToday.getTime() + 24 * 60 * 60 * 1000;
+  const today = dayIn(now, tz);
 
   const OVERDUE: Raw[] = [];
   const UPCOMING: Raw[] = [];
@@ -405,19 +476,21 @@ export function adaptAssignments(
 
   for (const [courseId, assignments] of Object.entries(assignmentsBySection)) {
     for (const assignment of assignments) {
-      const dueDate = toDate(assignment?.due);
-      if (!dueDate) continue; // undated work belongs in neither bucket
+      const dueMs = schoologyLocalMs(assignment?.due, tz);
+      if (dueMs === null) continue; // undated work belongs in neither bucket
 
       const item = {
         type: TYPE_MAP[String(assignment?.type ?? "").toLowerCase()] ?? "assignment",
         title: assignment?.title ?? "Untitled",
         courseId,
         due: formatDue(assignment?.due),
+        // The exact moment and its time (2026-10-07): "Due in 3 hours", "11:59 PM".
+        dueAt: new Date(dueMs).toISOString(),
+        time: timeLabel(dueMs, tz),
         id: String(assignment?.id ?? ""),
       };
 
-      const dueMs = dueDate.getTime();
-      if (dueMs >= startOfToday.getTime() && dueMs < endOfToday) {
+      if (dayIn(dueMs, tz) === today) {
         TODAY.push({ title: item.title, courseId });
       }
 
@@ -432,7 +505,8 @@ export function adaptAssignments(
     }
   }
 
-  const byDue = (a: Raw, b: Raw) => String(a.due).localeCompare(String(b.due));
+  // By the real due time (the "Fri Oct 9" labels sorted as words before 2026-10-07).
+  const byDue = (a: Raw, b: Raw) => Date.parse(a.dueAt) - Date.parse(b.dueAt);
   OVERDUE.sort(byDue);
   UPCOMING.sort(byDue);
 
@@ -516,6 +590,9 @@ export interface AssignmentDetail {
   title: string;
   description: string;
   due: string;
+  /** The exact due moment (ISO) and its time in the student's zone (2026-10-07). */
+  dueAt?: string;
+  time?: string;
   type: string;
   files: AttachmentFile[];
   links: { title: string; url: string }[];
@@ -544,7 +621,7 @@ function extOf(name: string): string {
  * are deliberately NOT included: the browser only ever gets a file's id, and
  * the Worker looks the real path up again when a file is opened in Canva.
  */
-export function adaptAssignmentDetail(raw: Raw, sectionId: string): AssignmentDetail {
+export function adaptAssignmentDetail(raw: Raw, sectionId: string, tz = "UTC"): AssignmentDetail {
   const attachments = raw?.attachments ?? {};
   const files = nestedList(attachments?.files, "file")
     .map((f) => {
@@ -563,6 +640,7 @@ export function adaptAssignmentDetail(raw: Raw, sectionId: string): AssignmentDe
     title: toPlainText(raw?.title ?? "Untitled"),
     description: toPlainText(raw?.description ?? ""),
     due: formatDue(raw?.due),
+    ...dueParts(raw?.due, tz),
     type: TYPE_MAP[String(raw?.type ?? "").toLowerCase()] ?? "assignment",
     files,
     links,

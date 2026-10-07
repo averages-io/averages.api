@@ -33,10 +33,11 @@ import {
   type TestResult,
 } from "./pushStore.ts";
 import type { PushSubscriptionLike } from "./webpush.ts";
+import { safeTimeZone } from "./classroom.ts";
 
 /** The PushStore methods the routes use (a Durable Object stub in the Worker, the object itself in tests). */
 export interface PushStoreApi {
-  subscribe(input: { subscription: PushSubscriptionLike; types: NotifyTypes; sealed: string; exp: number }): Promise<PushStatus>;
+  subscribe(input: { subscription: PushSubscriptionLike; types: NotifyTypes; sealed: string; exp: number; tz?: string }): Promise<PushStatus>;
   setTypes(changes: Partial<NotifyTypes>): Promise<PushStatus | null>;
   unsubscribe(endpoint: string): Promise<PushStatus>;
   deleteAll(): Promise<void>;
@@ -133,7 +134,9 @@ export function pushRoutes(deps: PushDeps) {
     const credential = await sealCredential(session, c.env.PUSH_SECRET!);
     if (!credential) return c.json({ error: "session_expired" }, 401);
     try {
-      const status = await storeFor(c.env, session.uid, c.req.url).subscribe({ subscription, types, ...credential });
+      // The student's time zone (2026-10-07): Schoology due times are local, so "due within a day" needs it.
+      const tz = safeTimeZone(body.tz, (c.req.raw as any)?.cf?.timezone);
+      const status = await storeFor(c.env, session.uid, c.req.url).subscribe({ subscription, types, tz, ...credential });
       return c.json({ ok: true, ...status });
     } catch (err) {
       return unavailable(c, err);

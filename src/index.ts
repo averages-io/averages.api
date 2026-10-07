@@ -878,7 +878,7 @@ app.get("/data/bundle", requireSession, async (c) => {
       })
     );
 
-    const { OVERDUE, UPCOMING, TODAY } = adaptAssignments(assignmentsBySection);
+    const { OVERDUE, UPCOMING, TODAY } = adaptAssignments(assignmentsBySection, studentTimeZone(c));
 
     // The fetch already happened up in wave 1; this is just the mapping. It
     // keeps its own guard because adaptMessages walks a shape Schoology varies
@@ -1070,7 +1070,7 @@ app.get("/data/assignment", requireSession, async (c) => {
   try {
     const raw = await getAssignment(section, id, session);
     c.header("Cache-Control", "private, no-store");
-    return c.json(adaptAssignmentDetail(raw, section));
+    return c.json(adaptAssignmentDetail(raw, section, studentTimeZone(c)));
   } catch (error) {
     if (error instanceof SchoologyError) {
       return c.json({ error: "schoology_error", status: error.status }, error.status === 404 ? 404 : 502);

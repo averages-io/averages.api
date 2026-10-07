@@ -33,6 +33,7 @@
  */
 
 import { dueMs, timeMs, type CourseRaw } from "./classroom.ts";
+import { schoologyLocalMs } from "./adapt.ts";
 
 export type NotifyType = "grades" | "assignments" | "due" | "messages" | "announcements";
 export const NOTIFY_TYPES: readonly NotifyType[] = ["grades", "assignments", "due", "messages", "announcements"];
@@ -366,7 +367,7 @@ export interface SchoologyRaw {
   updates?: Record<string, Raw[] | null> | null;
 }
 
-export function schoologyObservation(raw: SchoologyRaw, enabled: NotifyTypes, hash: Hasher, now: number): Observation {
+export function schoologyObservation(raw: SchoologyRaw, enabled: NotifyTypes, hash: Hasher, now: number, tz = "UTC"): Observation {
   const obs = emptyObservation();
 
   if (enabled.grades && raw.grades) {
@@ -410,7 +411,8 @@ export function schoologyObservation(raw: SchoologyRaw, enabled: NotifyTypes, ha
         posted.push({ key: `a|${sectionId}|${id}`, rank: idRank(id) });
         // Schoology doesn't say whether it's turned in, so anything due in
         // the next day counts (the app lists it the same way).
-        const at = schoologyMs(a?.due);
+        // Due times are the student's local time (2026-10-07).
+        const at = schoologyLocalMs(a?.due, tz);
         if (at !== null && at > now && at <= now + DUE_WINDOW_MS) due.push({ key: `d|${sectionId}|${id}|${at}`, rank: at });
       }
     }
