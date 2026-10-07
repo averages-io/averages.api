@@ -1,0 +1,135 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Must match the Worker in the Cloudflare dashboard (averages-api: it holds the
+  // secrets and the SYNC Durable Object). Renamed from schoolagy-api 2026-10-05.
+  "name": "averages-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // Keep any variable set only in the Cloudflare dashboard when deploying
+  // (2026-10-05), instead of deleting it. Anything listed under "vars" below
+  // takes this file's value. Secrets are never touched by a deploy.
+  "keep_vars": true,
+  // Where Google and Canva send students back after they sign in. Not secret
+  // (they show in the address bar), so they live here instead of the dashboard.
+  // For local testing, .dev.vars overrides these with the localhost addresses.
+  "vars": {
+    // Public app IDs (OAuth client IDs aren't secret; their secrets are
+    // dashboard secrets: GOOGLE_CLIENT_SECRET, CANVA_CLIENT_SECRET).
+    // GOOGLE_CLIENT_ID is also what Google Drive uses in the browser
+    // (GET /config/cloud); CANVA_CLIENT_ID is the Canva Connect integration.
+    "GOOGLE_CLIENT_ID": "362414855541-vfn2l907f3b8sm3h81nhja0ehr9pln29.apps.googleusercontent.com",
+    "CANVA_CLIENT_ID": "OC-AaDPpElswNe6",
+    "GOOGLE_REDIRECT_URI": "https://api.averages.io/auth/google/callback",
+    "CANVA_REDIRECT_URI": "https://api.averages.io/canva/callback",
+    // OneDrive (Microsoft Entra app "Averages.io", single-page app, no secret).
+    // Public: it's sent to the browser by GET /config/cloud.
+    "MS_CLIENT_ID": "c006202b-180f-4d4c-b03c-c0f43048c8e9",
+    // Turning in Canva designs as PDFs (2026-10-06) needs the Canva scope
+    // design:content:read. Change to "1" only AFTER that scope is turned on
+    // for the integration in Canva's Developer Portal: Connect asks for it
+    // then, and asking for a scope Canva hasn't approved breaks Connect.
+    "CANVA_EXPORT_ENABLED": "1",
+    // Canva folders on the Files page (2026-10-06) need folder:read and
+    // folder:write. Same rule: "1" only AFTER both are enabled (and approved)
+    // for the integration in Canva's Developer Portal.
+    "CANVA_FOLDERS_ENABLED": "1",
+    // Browser notifications: the VAPID key pair's PUBLIC half (base64url), the
+    // one browsers subscribe with. Public by design (GET /push/config serves
+    // it). Its private half is the VAPID_PRIVATE_JWK secret; the two must be
+    // the same pair. Moved here from the dashboard 2026-10-07 (Martin).
+    "VAPID_PUBLIC_KEY": "BL3oWE3nt_phnXKit4vdx5RQsMQV85rK8Vc7HjYJiulzJ681RRE8qmZpyyuqB738mz4hWtvDgnaQesyQ2JulH8M",
+    // The school application's Cloudflare Turnstile widget ("Chaptcha App",
+    // hostname averages.io), 2026-10-07. Public (GET /config/apply serves it).
+    // Its secret is the TURNSTILE_SECRET dashboard secret; without both, no check.
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAFP990oRx5vTqbEf"
+  },
+  // Sync Across Devices: one SyncStore Durable Object per student (src/syncStore.ts).
+  // The code always opens them in the "us" jurisdiction, so the stored record
+  // and the code that reads it stay in the United States (PowerSchool terms
+  // §3.2.1). Replaced the SYNC_KV namespace on 2026-10-04; KV copied data
+  // to Cloudflare locations worldwide. SQLite-backed, which the Free plan supports.
+  //
+  // Canva (2026-10-05): one CanvaStore Durable Object per student, also opened
+  // in the "us" jurisdiction (src/canvaStore.ts). Holds their Canva tokens
+  // (encrypted), drafts and short-lived Return contexts. Separate from SyncStore
+  // so turning Sync off never disconnects Canva.
+  //
+  // Browser notifications (2026-10-06): one PushStore Durable Object per
+  // student who turns them on, also in the "us" jurisdiction (src/pushStore.ts).
+  // Holds their browsers' push subscriptions, their sealed sign-in and a
+  // snapshot of short hashes; its alarm checks for changes every ~20 minutes.
+  // Turning notifications off (or signing out) deletes it all.
+  "durable_objects": {
+    "bindings": [
+      { "name": "SYNC", "class_name": "SyncStore" },
+      { "name": "CANVA", "class_name": "CanvaStore" },
+      { "name": "PUSH", "class_name": "PushStore" },
+      // School applications and the schools@ auto-reply log (2026-10-06):
+      // one object for the whole app, opened in the "us" jurisdiction.
+      { "name": "SCHOOLS", "class_name": "SchoolsStore" }
+    ]
+  },
+  // Schools email (2026-10-06): emails Martin each school application, from
+  // schools@averages.io. Needs Email Routing on for averages.io (with Martin's
+  // inbox as a verified destination); without it this binding can fail the
+  // deploy. Switched on 2026-10-06 (Martin).
+  "send_email": [
+    { "name": "SCHOOLS_MAIL" }
+  ],
+  // Rate limits (2026-10-07): Cloudflare's own counters, shared by every copy
+  // of the Worker in a location, on top of the per-copy counts in
+  // src/rateLimit.ts. Declared under "unsafe" because this repo's Wrangler 3
+  // doesn't know the newer "ratelimits" key (Cloudflare documents both). Each
+  // needs its own namespace_id; a window ("period") can only be 10 or 60 s.
+  // The numbers match RATE_RULES in src/rateLimit.ts; applications are
+  // 5 per 10 minutes there and at most 3 a minute here.
+  "unsafe": {
+    "bindings": [
+      { "name": "RATE_LIMIT_SIGNIN", "type": "ratelimit", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
+      { "name": "RATE_LIMIT_DATA", "type": "ratelimit", "namespace_id": "1002", "simple": { "limit": 90, "period": 60 } },
+      { "name": "RATE_LIMIT_SEND", "type": "ratelimit", "namespace_id": "1003", "simple": { "limit": 10, "period": 60 } },
+      { "name": "RATE_LIMIT_SUBMIT", "type": "ratelimit", "namespace_id": "1004", "simple": { "limit": 90, "period": 60 } },
+      { "name": "RATE_LIMIT_PUSH", "type": "ratelimit", "namespace_id": "1005", "simple": { "limit": 20, "period": 60 } },
+      { "name": "RATE_LIMIT_CANVA", "type": "ratelimit", "namespace_id": "1006", "simple": { "limit": 30, "period": 60 } },
+      { "name": "RATE_LIMIT_CANVA_POLL", "type": "ratelimit", "namespace_id": "1007", "simple": { "limit": 120, "period": 60 } },
+      { "name": "RATE_LIMIT_CANVA_BROWSE", "type": "ratelimit", "namespace_id": "1008", "simple": { "limit": 90, "period": 60 } },
+      { "name": "RATE_LIMIT_APPLY", "type": "ratelimit", "namespace_id": "1009", "simple": { "limit": 3, "period": 60 } }
+    ]
+  },
+  // One-time setup Cloudflare runs on the first deploy that includes SyncStore.
+  // Never edit or remove a tag once deployed; later changes get a new tag.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SyncStore"] },
+    { "tag": "v2", "new_sqlite_classes": ["CanvaStore"] },
+    { "tag": "v3", "new_sqlite_classes": ["PushStore"] },
+    { "tag": "v4", "new_sqlite_classes": ["SchoolsStore"] }
+  ]
+  // Allowed CORS origins and the session cookie's domain are hardcoded as
+  // ALLOWED_ORIGINS/COOKIE_DOMAIN constants in src/index.ts rather than
+  // living here as wrangler vars.
+  //
+  // Secrets (dashboard or `npx wrangler secret put`, never in this file):
+  // SESSION_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+  // CANVA_CLIENT_ID, CANVA_CLIENT_SECRET,
+  // PUSH_SECRET (browser notifications: a random value, NOT the same as
+  // SESSION_SECRET; it seals the stored sign-in), VAPID_PRIVATE_JWK (the
+  // notification key pair's private half, as JWK JSON text).
+  //
+  // VAPID_PUBLIC_KEY is under "vars" above (since 2026-10-07), so every
+  // deploy sets it from this file. VAPID_SUBJECT is optional (default
+  // mailto:help@averages.io). Until PUSH_SECRET and both VAPID keys are set,
+  // notifications show as "Coming soon".
+  //
+  // Rate limits use the Workers Rate Limiting bindings under "unsafe" above
+  // (nothing to set in the dashboard). See src/rateLimit.ts.
+  //
+  // Also set in the dashboard (as a secret, so a deploy keeps it, even though
+  // it ends up public): GOOGLE_PICKER_API_KEY, a Google Cloud API key that MUST
+  // be restricted to app.averages.io and the Picker API. Without it Google
+  // Drive still connects and saves; only "Add from Google Drive" needs it.
+  // GOOGLE_PROJECT_NUMBER is optional (taken from GOOGLE_CLIENT_ID otherwise).
+}
