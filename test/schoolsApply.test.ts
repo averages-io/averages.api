@@ -170,6 +170,46 @@ resetRateLimits();
   check("no key set (or a short one): the list doesn't exist", [(await list("Bearer x", { ...ENV, SCHOOLS_ADMIN_KEY: undefined })).status, (await list("Bearer short", { ...ENV, SCHOOLS_ADMIN_KEY: "short" })).status], [404, 404]);
 }
 
+/* ── Turnstile (2026-10-07) ─────────────────────────────────────────── */
+console.log("\nturnstile");
+{
+  const { checkTurnstile } = await import("../src/schools.ts");
+  const answer = (o: any, status = 200) => (async () => new Response(JSON.stringify(o), { status })) as any;
+  check("good token", await checkTurnstile("tok", "s", "1.2.3.4", answer({ success: true, action: "school-apply", hostname: "app.averages.io" })), "ok");
+  check("Cloudflare says no", await checkTurnstile("tok", "s", null, answer({ success: false, "error-codes": ["timeout-or-duplicate"] })), "failed");
+  check("made on another site", await checkTurnstile("tok", "s", null, answer({ success: true, hostname: "evil.example" })), "failed");
+  check("another form's token", await checkTurnstile("tok", "s", null, answer({ success: true, action: "login" })), "failed");
+  check("no token", await checkTurnstile("", "s", null, answer({ success: true })), "failed");
+  check("Cloudflare down", await checkTurnstile("tok", "s", null, (async () => { throw new Error("x"); }) as any), "unavailable");
+  check("Cloudflare 500", await checkTurnstile("tok", "s", null, answer({}, 500)), "unavailable");
+
+  const real = globalThis.fetch;
+  let verdict: any = { success: true, action: "school-apply", hostname: "app.averages.io" };
+  const seen: string[] = [];
+  globalThis.fetch = (async (input: any, init: any) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.startsWith("https://challenges.cloudflare.com/")) { seen.push((init.body as FormData).get("response") as string); return new Response(JSON.stringify(verdict)); }
+    return real(input, init);
+  }) as typeof fetch;
+  const TENV = { ...ENV, SCHOOLS: fakeSchools(), TURNSTILE_SITE_KEY: "0x4AAA", TURNSTILE_SECRET: "sek" };
+  const good = { school: "Lincoln USD", canvas: "lincolnusd.instructure.com", email: "it@lincolnusd.org" };
+  const send = (body: unknown, ip: string) => worker.fetch(new Request("https://api.averages.io/schools/apply", { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://app.averages.io", "CF-Connecting-IP": ip }, body: JSON.stringify(body) }), TENV, CTX);
+  resetRateLimits();
+  let r = await send(good, "198.51.100.1");
+  check("on: no token refused", [r.status, (await r.json() as any).error], [400, "captcha_failed"]);
+  r = await send({ ...good, turnstileToken: "T1" }, "198.51.100.2");
+  check("on: good token saved", [r.status, (await r.json() as any).ok, seen.at(-1)], [200, true, "T1"]);
+  verdict = { success: false };
+  r = await send({ ...good, turnstileToken: "T2" }, "198.51.100.3");
+  check("on: bad token refused", r.status, 400);
+  r = await send({ ...good, website: "http://spam", turnstileToken: "" }, "198.51.100.4");
+  check("bot trap still answers ok first", r.status, 200);
+  globalThis.fetch = real;
+  const cfg = async (env: any) => (await (await worker.fetch(new Request("https://api.averages.io/config/apply"), env, CTX)).json() as any).turnstileSiteKey;
+  check("config: key when on, null when off or half set", [await cfg(TENV), await cfg(ENV), await cfg({ ...ENV, TURNSTILE_SITE_KEY: "0x4AAA" })], ["0x4AAA", null, null]);
+  resetRateLimits();
+}
+
 /* ── Email to schools@ ──────────────────────────────────────────────── */
 console.log("\nemail handler");
 const enc = (t: string) => new TextEncoder().encode(t);
