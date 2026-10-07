@@ -76,7 +76,7 @@ const EMAIL_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-
  * field the page should point at. `spam` is the hidden field a person never
  * sees: filled in means a bot, which gets a polite "ok" and nothing stored.
  */
-export function validateApplication(body: unknown, endings: readonly string[] = []): { ok: true; value: ApplicationInput; spam: boolean } | { ok: false; fields: Record<string, string> } {
+export function validateApplication(body: unknown, endings: readonly string[] = [], allow: readonly string[] = []): { ok: true; value: ApplicationInput; spam: boolean } | { ok: false; fields: Record<string, string> } {
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
   const fields: Record<string, string> = {};
   const school = line(b.school, 120);
@@ -87,7 +87,7 @@ export function validateApplication(body: unknown, endings: readonly string[] = 
   if (!canvasRaw) fields.canvas = "missing";
   else if (!canvas) fields.canvas = "invalid";
   const emailRaw = String(b.email ?? "").trim();
-  const emailBad = emailProblem(emailRaw, endings);
+  const emailBad = emailProblem(emailRaw, endings, allow);
   if (emailBad) fields.email = emailBad;
   const name = line(b.name, 80);
   if (name.length > 80) fields.name = "too_long";
@@ -122,12 +122,24 @@ export function emailEndingAllowed(email: string, endings: readonly string[]): b
   return endings.includes(last);
 }
 
+/**
+ * Exact addresses that may apply whatever their ending (2026-10-07, Martin's
+ * own for testing): SCHOOLS_EMAIL_ALLOW, comma-separated, a dashboard SECRET
+ * so it stays out of this public repo and out of GET /config/apply.
+ */
+export function emailAllowList(raw: unknown): string[] {
+  return String(raw ?? "")
+    .split(/[\s,;]+/)
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.length <= 254 && EMAIL_RE.test(e));
+}
+
 /** The one email check the form, the code and the application all share: "" when fine. */
-export function emailProblem(value: unknown, endings: readonly string[]): "" | "missing" | "invalid" | "ending" {
+export function emailProblem(value: unknown, endings: readonly string[], allow: readonly string[] = []): "" | "missing" | "invalid" | "ending" {
   const raw = String(value ?? "").trim();
   if (!raw) return "missing";
   if (raw.length > 254 || !EMAIL_RE.test(raw)) return "invalid";
-  if (!emailEndingAllowed(raw, endings)) return "ending";
+  if (!emailEndingAllowed(raw, endings) && !allow.includes(raw.toLowerCase())) return "ending";
   return "";
 }
 

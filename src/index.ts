@@ -39,6 +39,7 @@ import {
   getMe,
   getMessages,
   getSections,
+  schoologyGet,
   SchoologyError,
 } from "./schoology.ts";
 import {
@@ -83,11 +84,12 @@ import {
   type KVLike,
 } from "./sync.ts";
 import { cloudConfig } from "./cloud.ts";
-import { checkTurnstile, emailEndings, emailKey, emailProblem, schoolsFor, turnstileOn, validateApplication } from "./schools.ts";
+import { checkTurnstile, emailAllowList, emailEndings, emailKey, emailProblem, schoolsFor, turnstileOn, validateApplication } from "./schools.ts";
 import { EmailMessage } from "cloudflare:email";
-import { autoReplyAllowed, buildMime, cleanEmail, SCHOOLS_ADDRESS } from "./mail.ts";
+import { autoReplyAllowed, buildMime, cleanEmail, NOREPLY_ADDRESS, SCHOOLS_ADDRESS } from "./mail.ts";
 import { applicationEmail, autoReplyEmail, inboundCopyEmail, verifyCodeEmail } from "./schoolsMail.ts";
 import { readEmailText } from "./mailRead.ts";
+import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
 import type { SchoolsStore } from "./schoolsStore.ts";
 import {
   accessCookie,
@@ -122,9 +124,11 @@ import {
   CallBudget,
   CLASSROOM_ID_RE,
   ClassroomError,
+  classroomGet,
   fetchClassroomAssignment,
   fetchClassroomBundle,
   fetchClassroomFiles,
+  listCourses,
   plain,
   safeTimeZone,
 } from "./classroom.ts";
@@ -231,6 +235,15 @@ type Bindings = {
    */
   SCHOOLS_EMAIL_ENDINGS?: string;
   SCHOOLS_VERIFY_EMAIL?: string;
+  /** Dashboard SECRET: exact addresses allowed whatever their ending (comma-separated). */
+  SCHOOLS_EMAIL_ALLOW?: string;
+  /**
+   * The reviewer account (2026-10-07, dashboard SECRETS, 16+ characters
+   * each): typed into the hidden API-key sign-in, they open sample classes
+   * (reviewSandbox.ts) with every integration working. Unset = off.
+   */
+  REVIEW_KEY?: string;
+  REVIEW_SECRET?: string;
   PUSH_SECRET?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_JWK?: string;
@@ -450,6 +463,22 @@ app.get("/", (c) => {
  * accepting them — so a typo fails here, at the login screen, rather than
  * silently producing an app full of empty pages.
  */
+/** Constant-time match against the reviewer secrets; off unless both are set and at least 16 characters. */
+function reviewSecretsMatch(env: Bindings, key: string, secret: string): boolean {
+  const k = env.REVIEW_KEY ?? "";
+  const s = env.REVIEW_SECRET ?? "";
+  if (k.length < 16 || s.length < 16) return false;
+  const same = (a: string, b: string) => {
+    let diff = a.length ^ b.length;
+    for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+    return diff === 0;
+  };
+  // Both compared every time, so the answer takes as long either way.
+  const a = same(key, k);
+  const b = same(secret, s);
+  return a && b;
+}
+
 app.post("/auth/session", async (c) => {
   // Only from our own app, as JSON (2026-10-06 review): a form on another
   // site could otherwise sign a student into someone else's account (login
@@ -472,6 +501,24 @@ app.post("/auth/session", async (c) => {
   if (!c.env.SESSION_SECRET) {
     // Fail loudly rather than silently issuing sessions sealed with "undefined".
     return c.json({ error: "server_misconfigured" }, 500);
+  }
+
+  /**
+   * The reviewer account (2026-10-07): the REVIEW_KEY / REVIEW_SECRET
+   * dashboard secrets sign into sample classes served by reviewSandbox.ts,
+   * in the app's normal live mode, so every integration works. The sandbox's
+   * own key typed in as an ordinary key is refused, so the secrets are the
+   * only way in.
+   */
+  if (key === SANDBOX_KEY || secret === SANDBOX_SECRET) return c.json({ error: "invalid_credentials" }, 401);
+  if (reviewSecretsMatch(c.env, key, secret)) {
+    const token = await sealSession({ key: SANDBOX_KEY, secret: SANDBOX_SECRET, uid: REVIEW_UID }, c.env.SESSION_SECRET);
+    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
+    const me = await getMe({ key: SANDBOX_KEY, secret: SANDBOX_SECRET });
+    return c.json({
+      ok: true,
+      user: { uid: REVIEW_UID, name: me.name_display ?? "Reviewer", firstName: me.name_first ?? "", email: me.primary_email ?? "", pictureUrl: "" },
+    });
   }
 
   /**
@@ -1059,6 +1106,59 @@ function publicDraft(d: Draft, design?: { title: string; updatedAt: number; thum
  * page. Files come back with an id and name only; the download path stays on
  * the server.
  */
+/**
+ * Which class an assignment belongs to (2026-10-07, Martin: links are just
+ * assignment?id=<Schoology/Classroom id>). The assignment page asks this when
+ * the id isn't in the bundle (older, graded work): every class is asked at
+ * once and the one that has it answers. `{ section, title }`, or 404.
+ */
+app.get("/data/assignment/locate", requireSession, async (c) => {
+  const session = c.get("session");
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  const id = c.req.query("id") ?? "";
+  c.header("Cache-Control", "private, no-store");
+  const first = async (tries: Promise<{ section: string; title: string }>[]) => {
+    const settled = await Promise.allSettled(tries);
+    for (const r of settled) if (r.status === "fulfilled") return r.value;
+    return null;
+  };
+  if (isGoogle(session)) {
+    if (!CLASSROOM_ID_RE.test(id)) return c.json({ error: "bad_request" }, 400);
+    try {
+      const accessToken = await googleAccess(c, session);
+      const budget = new CallBudget(CALL_BUDGET);
+      const courses = await listCourses(accessToken, budget);
+      const found = await first(
+        courses.map(async (course) => {
+          const cid = String(course.id ?? "");
+          const work = await classroomGet(`/courses/${encodeURIComponent(cid)}/courseWork/${encodeURIComponent(id)}`, { fields: "id,title" }, accessToken, budget);
+          return { section: cid, title: plain(work?.title, 200) };
+        })
+      );
+      return found ? c.json(found) : c.json({ error: "not_found" }, 404);
+    } catch (error) {
+      return classroomFailure(c, error);
+    }
+  }
+  if (!ID_RE.test(id)) return c.json({ error: "bad_request" }, 400);
+  try {
+    const sections = await getSections(session.uid, session);
+    const found = await first(
+      sections
+        .map((sec: any) => String(sec?.id ?? sec?.section_id ?? ""))
+        .filter((sid: string) => ID_RE.test(sid))
+        .map(async (sid: string) => {
+          const raw: any = await schoologyGet(`/sections/${sid}/assignments/${id}`, session);
+          return { section: sid, title: String(raw?.title ?? "").slice(0, 200) };
+        })
+    );
+    return found ? c.json(found) : c.json({ error: "not_found" }, 404);
+  } catch (error) {
+    if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
+    return c.json({ error: "unexpected_error" }, 500);
+  }
+});
+
 app.get("/data/assignment", requireSession, async (c) => {
   const session = c.get("session");
   if (isDemo(session)) {
@@ -1633,7 +1733,7 @@ app.post("/schools/apply/code", async (c) => {
   if (!verifyEmailOn(c.env)) return c.json({ error: "verify_off" }, 404);
   const body = await applyJson(c);
   if (!body) return c.json({ error: "invalid_body" }, 400);
-  const problem = emailProblem(body.email, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS));
+  const problem = emailProblem(body.email, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS), emailAllowList(c.env.SCHOOLS_EMAIL_ALLOW));
   if (problem) return c.json({ error: "invalid", fields: { email: problem } }, 400);
   const email = String(body.email).trim();
   if (turnstileOn(c.env)) {
@@ -1650,12 +1750,14 @@ app.post("/schools/apply/code", async (c) => {
     c.header("Retry-After", String(issued.wait));
     return c.json({ error: "code_wait", retryAfter: issued.wait }, 429);
   }
+  // From no-reply@averages.io, with Email Service's structured send (it
+  // builds the message; replies would go nowhere useful, so none is offered).
   const mail = verifyCodeEmail(issued.code);
-  const raw = buildMime({ from: SCHOOLS_ADDRESS, fromName: "Averages.io", to: email, ...mail });
   try {
-    await c.env.SCHOOLS_MAIL!.send(new EmailMessage(SCHOOLS_ADDRESS, email, raw));
-  } catch (error) {
-    console.error("schools_code_send_failed", error);
+    await c.env.SCHOOLS_MAIL!.send({ from: { email: NOREPLY_ADDRESS, name: "Averages.io" }, to: email, subject: mail.subject, text: mail.text, html: mail.html });
+  } catch (error: any) {
+    // e.g. E_RECIPIENT_SUPPRESSED (it bounced before), E_SENDER_NOT_VERIFIED / E_RECIPIENT_NOT_ALLOWED (sending isn't set up).
+    console.error("schools_code_send_failed", error?.code ?? "", error?.message ?? error);
     return c.json({ error: "code_send_failed" }, 502);
   }
   return c.json({ ok: true });
@@ -1668,7 +1770,7 @@ app.post("/schools/apply/verify", async (c) => {
   if (!verifyEmailOn(c.env)) return c.json({ error: "verify_off" }, 404);
   const body = await applyJson(c);
   if (!body) return c.json({ error: "invalid_body" }, 400);
-  if (emailProblem(body.email, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS))) return c.json({ error: "code_expired" }, 400);
+  if (emailProblem(body.email, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS), emailAllowList(c.env.SCHOOLS_EMAIL_ALLOW))) return c.json({ error: "code_expired" }, 400);
   const email = emailKey(String(body.email));
   const code = String(body.code ?? "").replace(/\s+/g, "");
   const store = schoolsStoreFor(c.env, c.req.url);
@@ -1696,7 +1798,7 @@ app.post("/schools/apply", async (c) => {
   } catch {
     return c.json({ error: "invalid_body" }, 400);
   }
-  const checked = validateApplication(body, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS));
+  const checked = validateApplication(body, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS), emailAllowList(c.env.SCHOOLS_EMAIL_ALLOW));
   if (!checked.ok) return c.json({ error: "invalid", fields: checked.fields }, 400);
   // The hidden field a person never fills in: a bot. Polite "ok", nothing kept.
   if (checked.spam) return c.json({ ok: true });

@@ -7,6 +7,7 @@
  */
 
 import { buildAuthHeader, type Credentials } from "./oauth.ts";
+import { isSandboxCreds, sandboxFetch } from "./reviewSandbox.ts";
 
 export const SCHOOLOGY_BASE = "https://api.schoology.com/v1";
 
@@ -45,6 +46,8 @@ function schoologyUrl(path: string, query: Record<string, string | number | unde
  * no credential material: `path` is one of our own constants.
  */
 async function signedFetch(method: string, url: URL, path: string, creds: Credentials, init: { body?: string; redirect: "follow" | "manual" }): Promise<Response> {
+  // The reviewer account (reviewSandbox.ts): answered here, never sent to Schoology.
+  if (isSandboxCreds(creds)) return sandboxFetch(method, url.toString(), init.body);
   const auth = await buildAuthHeader(method, url.toString(), creds);
   const headers: Record<string, string> = { Authorization: auth, Accept: "application/json" };
   if (init.body !== undefined) headers["Content-Type"] = "application/json";
@@ -344,6 +347,7 @@ export async function openAttachment(downloadPath: string, creds: Credentials): 
     throw new SchoologyError("Attachment is not on api.schoology.com", 400);
   }
   const get = async (url: string) => {
+    if (isSandboxCreds(creds)) return sandboxFetch("GET", url);
     const headers: Record<string, string> = {};
     if (isSchoologyApiUrl(url)) headers.Authorization = await buildAuthHeader("GET", url, creds);
     // The 20 s limit is for Schoology to START answering, not for the whole

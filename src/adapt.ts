@@ -491,7 +491,8 @@ export function adaptAssignments(
       };
 
       if (dayIn(dueMs, tz) === today) {
-        TODAY.push({ title: item.title, courseId });
+        // With its id (2026-10-07): Home links to it as assignment?id=<id>.
+        TODAY.push({ title: item.title, courseId, id: item.id });
       }
 
       // "Completed" is deliberately not inferred here — Schoology reports

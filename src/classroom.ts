@@ -425,7 +425,7 @@ export function adaptClassroomBundle(raw: CourseRaw[], now: number, tz: string) 
   const overdue: { at: number; item: ClassroomItem }[] = [];
   const upcoming: { at: number; item: ClassroomItem }[] = [];
   const submitted: { at: number; item: Raw }[] = [];
-  const TODAY: { title: string; courseId: string }[] = [];
+  const TODAY: { title: string; courseId: string; id?: string }[] = [];
   const announcements: { at: number; update: Raw }[] = [];
   const recentGrades: { at: number; grade: Raw }[] = [];
   const GRADEBOOK: Record<string, { categories: GradebookCategory[] }> = {};
@@ -487,7 +487,8 @@ export function adaptClassroomBundle(raw: CourseRaw[], now: number, tz: string) 
       if (due < now) {
         if (sub || subsKnown) overdue.push({ at: due, item: listed() });
       } else upcoming.push({ at: due, item: listed() });
-      if (dayKey(due, tz) === today && (sub || subsKnown)) TODAY.push({ title, courseId });
+      // With its id (2026-10-07): Home links to it as assignment?id=<id>.
+      if (dayKey(due, tz) === today && (sub || subsKnown)) TODAY.push({ title, courseId, id });
     }
 
     for (const g of graded) {

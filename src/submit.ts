@@ -21,6 +21,7 @@
 
 import { buildAuthHeader, type Credentials } from "./oauth.ts";
 import { isSchoologyApiUrl, listOf, schoologyGet, SchoologyError, SCHOOLOGY_BASE, UPSTREAM_TIMEOUT_MS } from "./schoology.ts";
+import { isSandboxCreds, sandboxFetch } from "./reviewSandbox.ts";
 import { findAttachment, toPlainText } from "./adapt.ts";
 import { openValue, sealValue } from "./session.ts";
 
@@ -175,12 +176,13 @@ export async function openUpload(token: string, secret: string): Promise<UploadC
  */
 export async function schoologyPostJson(path: string, creds: Credentials, body: unknown): Promise<{ status: number; json: any }> {
   const url = `${SCHOOLOGY_BASE}${path}`;
-  const auth = await buildAuthHeader("POST", url, creds);
   let res: Response;
   try {
-    res = await fetch(url, {
+    // The reviewer account (reviewSandbox.ts): answered here, never sent to Schoology.
+    if (isSandboxCreds(creds)) res = await sandboxFetch("POST", url, JSON.stringify(body));
+    else res = await fetch(url, {
       method: "POST",
-      headers: { Authorization: auth, Accept: "application/json", "Content-Type": "application/json" },
+      headers: { Authorization: await buildAuthHeader("POST", url, creds), Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify(body),
       redirect: "manual",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
@@ -248,7 +250,8 @@ export async function putUpload(
   if (isSchoologyApiUrl(location)) headers.Authorization = await buildAuthHeader("PUT", location, creds);
   let res: Response;
   try {
-    res = await fetch(location, {
+    if (isSandboxCreds(creds)) res = await sandboxFetch("PUT", location, await new Response(body).arrayBuffer());
+    else res = await fetch(location, {
       method: "PUT",
       headers,
       body: fixedLength(body, length),

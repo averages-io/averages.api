@@ -17,6 +17,7 @@
  * lookup key and delete the KV entry on logout.
  */
 
+import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
 import type { Credentials } from "./oauth.ts";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -225,6 +226,8 @@ export async function openSession(
       return { ...data, key: "", secret: "" };
     }
 
+    // The reviewer account (reviewSandbox.ts): its uid only ever with the sandbox's own credentials.
+    if (String(data.uid).startsWith("r:") && !(data.key === SANDBOX_KEY && data.secret === SANDBOX_SECRET && data.uid === REVIEW_UID)) return null;
     if (!data.key || !data.secret) return null;
     return data;
   } catch {

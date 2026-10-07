@@ -13,6 +13,8 @@
 
 /** The address schools write to. Email Routing sends it to this Worker. */
 export const SCHOOLS_ADDRESS = "schools@averages.io";
+/** Where automatic emails nobody should answer come from (verification codes, 2026-10-07). Needs averages.io onboarded in Email Service. */
+export const NOREPLY_ADDRESS = "no-reply@averages.io";
 
 /** A plain email address: something@domain.tld, nothing that could break a header. */
 const EMAIL_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,24}$/;
