@@ -187,7 +187,10 @@ type Bindings = {
    * Google Drive and OneDrive run in the browser (2026-10-05); these are the
    * PUBLIC values the app needs for that, served by GET /config/cloud.
    * GOOGLE_CLIENT_ID is the same OAuth client the Worker already has; the
-   * Picker API key is restricted to app.averages.io in Google Cloud.
+   * Picker API key is restricted in Google Cloud to the websites
+   * app.averages.io/* AND docs.google.com/* (the Picker runs in a docs.google.com
+   * frame; without it Google says "The API developer key is invalid") and to
+   * the Google Picker API.
    */
   GOOGLE_CLIENT_ID?: string;
   /**
@@ -1330,7 +1333,8 @@ app.get("/config/schools", (c) => {
 });
 
 app.get("/config/cloud", (c) => {
-  c.header("Cache-Control", "public, max-age=300");
+  // A minute (was 5, 2026-10-07): a new Picker key reaches browsers quickly.
+  c.header("Cache-Control", "public, max-age=60");
   return c.json(cloudConfig(c.env));
 });
 
