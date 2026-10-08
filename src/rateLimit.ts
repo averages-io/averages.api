@@ -17,6 +17,7 @@
  *   canva     /canva/*                                     30 per student
  *   canvaPoll GET /canva/exports/:job                     120 per student
  *   canvaBrowse GET /canva/folders/:id/items               90 per student
+ *   cloud     /cloud/* (Google Drive, OneDrive)            60 per student
  *   apply     POST /schools/apply                  5 per 10 min per IP
  *   applyCode POST /schools/apply/code             5 per 10 min per IP
  *   applyVerify POST /schools/apply/verify        20 per 10 min per IP
@@ -41,7 +42,7 @@
  * bindings, one per rule, declared in wrangler.jsonc under "unsafe" (the
  * repo's Wrangler 3 doesn't know the newer "ratelimits" key): RATE_LIMIT_SIGNIN,
  * _DATA, _SEND, _SUBMIT, _PUSH, _CANVA, _CANVA_POLL, _CANVA_BROWSE, _APPLY,
- * _APPLY_CODE, _APPLY_VERIFY,
+ * _APPLY_CODE, _APPLY_VERIFY, _CLOUD,
  * then a shared RATE_LIMITER if one is ever added. Each is asked after the
  * in-memory count and a request over either limit is refused. A binding has
  * one fixed limit and a 10 or 60 second period, counted per Cloudflare
@@ -53,7 +54,7 @@ import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
 
 export interface RateRule {
-  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "apply" | "applyCode" | "applyVerify";
+  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "apply" | "applyCode" | "applyVerify";
   limit: number;
   windowMs: number;
   by: "ip" | "student";
@@ -78,6 +79,10 @@ export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   // Opening Canva folders on the Files page (2026-10-06): one call per folder
   // opened. Canva allows 100 a minute; this stays under it.
   canvaBrowse: { name: "canvaBrowse", limit: 90, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CANVA_BROWSE" },
+  // Google Drive and OneDrive staying connected (2026-10-08): mostly a token
+  // every ~55 minutes per tab, plus Settings' status; 60 leaves room for many
+  // tabs and a few reconnects without letting a loop hammer Google or Microsoft.
+  cloud: { name: "cloud", limit: 60, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CLOUD" },
   // School applications (2026-10-06): a few per school network per 10 minutes is plenty.
   apply: { name: "apply", limit: 5, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY" },
   // "Verify your email" (2026-10-07): each code is an email we send, so few;
@@ -108,6 +113,7 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (method === "GET" && /^\/canva\/exports\/[^/]+$/.test(path)) return RATE_RULES.canvaPoll;
   if (method === "GET" && /^\/canva\/folders\/[^/]+\/items$/.test(path)) return RATE_RULES.canvaBrowse;
   if (under(path, "/canva")) return RATE_RULES.canva;
+  if (under(path, "/cloud")) return RATE_RULES.cloud;
   return null;
 }
 

@@ -11,6 +11,14 @@
  * left out instead. (A shape check can't tell a restricted API key from an
  * unrestricted one: GOOGLE_PICKER_API_KEY must be a key restricted to
  * app.averages.io and the Picker API in Google Cloud.)
+ *
+ * 2026-10-08: Google Drive and OneDrive now stay connected the way Canva does
+ * (Martin: "why do google drive and onedrive need to be reauthed every time I
+ * visit the page"). The Worker does the sign-in and keeps each student's
+ * refresh token (src/cloudConnect.ts); the browser asks POST
+ * /cloud/:app/token for a short-lived access token and still calls Drive and
+ * Graph itself. /config/cloud stays for the Picker's API key and project
+ * number, and the client IDs here are the ones cloudConnect.ts signs in with.
  */
 
 export type CloudEnv = {
@@ -36,7 +44,8 @@ export const GOOGLE_PROJECT_NUMBER_RE = /^\d{6,20}$/;
 /** Microsoft Entra application (client) IDs are GUIDs. */
 export const MS_CLIENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function pick(value: unknown, shape: RegExp): string | null {
+/** The value, trimmed, when it has the expected shape; otherwise null. Also used by cloudConnect.ts (2026-10-08). */
+export function pick(value: unknown, shape: RegExp): string | null {
   if (typeof value !== "string") return null;
   const v = value.trim();
   return shape.test(v) ? v : null;

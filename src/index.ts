@@ -84,6 +84,7 @@ import {
   type KVLike,
 } from "./sync.ts";
 import { cloudConfig } from "./cloud.ts";
+import { CLOUD_APPS, cloudConfigured, isCloudApp, statusForCloudCode, type CloudApp } from "./cloudConnect.ts";
 import { checkTurnstile, emailAllowList, emailEndings, emailKey, emailProblem, schoolsFor, turnstileOn, validateApplication } from "./schools.ts";
 import { EmailMessage } from "cloudflare:email";
 import { autoReplyAllowed, buildMime, cleanEmail, NOREPLY_ADDRESS, SCHOOLS_ADDRESS } from "./mail.ts";
@@ -137,6 +138,7 @@ import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
 import { rateLimit } from "./rateLimit.ts";
 import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
+import type { CloudStore } from "./cloudStore.ts";
 import type { PushStore } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
 import { submitRoutes } from "./submitRoutes.ts";
@@ -147,6 +149,7 @@ import { canvaFolderRoutes } from "./canvaFolders.ts";
 // for Cloudflare to find them (see wrangler.jsonc's durable_objects).
 export { SyncStore } from "./syncStore.ts";
 export { CanvaStore } from "./canvaStore.ts";
+export { CloudStore } from "./cloudStore.ts";
 export { PushStore } from "./pushStore.ts";
 export { SchoolsStore } from "./schoolsStore.ts";
 
@@ -186,6 +189,8 @@ type Bindings = {
   /**
    * Google Drive and OneDrive run in the browser (2026-10-05); these are the
    * PUBLIC values the app needs for that, served by GET /config/cloud.
+   * Since 2026-10-08 the Worker also signs students in to both with these
+   * client IDs and keeps them connected (/cloud/*, src/cloudConnect.ts).
    * GOOGLE_CLIENT_ID is the same OAuth client the Worker already has; the
    * Picker API key is restricted in Google Cloud to the websites
    * app.averages.io/* AND docs.google.com/* (the Picker runs in a docs.google.com
@@ -204,6 +209,25 @@ type Bindings = {
   GOOGLE_PICKER_API_KEY?: string;
   GOOGLE_PROJECT_NUMBER?: string;
   MS_CLIENT_ID?: string;
+  /**
+   * Google Drive and OneDrive that stay connected (2026-10-08): one
+   * CloudStore Durable Object per student, in the "us" jurisdiction (see
+   * cloudStore below), holding their refresh tokens. See src/cloudConnect.ts.
+   */
+  CLOUD: DurableObjectNamespace<CloudStore>;
+  /**
+   * OneDrive's client secret (dashboard secret, 2026-10-08), from a Web
+   * platform on the Entra app. With MS_CLIENT_ID it lets the Worker sign
+   * students in to OneDrive and keep them connected. Unset = OneDrive
+   * reports configured: false.
+   */
+  MS_CLIENT_SECRET?: string;
+  /**
+   * Optional (dashboard secret, 2026-10-08): GOOGLE_DRIVE_CLIENT_ID's own
+   * secret. With both set, Drive connects with that client; otherwise with
+   * GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
+   */
+  GOOGLE_DRIVE_CLIENT_SECRET?: string;
   /**
    * Browser notifications (2026-10-05, wired in 2026-10-06): one PushStore
    * Durable Object per student who turned them on, in the "us" jurisdiction
@@ -293,6 +317,12 @@ function syncKV(env: Bindings, uid: string, requestUrl: string): KVLike {
 /** This student's CanvaStore, in the US (same local-dev exception as syncKV above). */
 function canvaStore(env: Bindings, uid: string, requestUrl: string) {
   const ns = isLocalRequest(requestUrl) ? env.CANVA : env.CANVA.jurisdiction("us" as DurableObjectJurisdiction);
+  return ns.get(ns.idFromName(uid));
+}
+
+/** This student's CloudStore (Google Drive and OneDrive, 2026-10-08), in the US (same local-dev exception). */
+function cloudStore(env: Bindings, uid: string, requestUrl: string) {
+  const ns = isLocalRequest(requestUrl) ? env.CLOUD : env.CLOUD.jurisdiction("us" as DurableObjectJurisdiction);
   return ns.get(ns.idFromName(uid));
 }
 
@@ -1300,8 +1330,10 @@ app.get("/data/files", async (c) => {
 });
 
 /**
- * Public app values for Google Drive and OneDrive, which connect in the
- * browser (the student's tokens never reach this Worker). Everything here is
+ * Public app values for Google Drive and OneDrive. Until 2026-10-08 they
+ * connected entirely in the browser; now the Worker keeps them connected
+ * (/cloud/* below) and the app still needs the Picker's key and project
+ * number from here. Everything here is
  * already visible to anyone who opens the app: OAuth client IDs, and a Picker
  * API key that Google Cloud restricts to app.averages.io. No secrets, so no
  * sign-in needed. A missing value comes back as null and the app shows that
@@ -1635,6 +1667,164 @@ app.get("/canva/designs", requireSession, async (c) => {
     });
   } catch (error) {
     return canvaFailure(c, error, "canva_list_failed");
+  }
+});
+
+/* ────────────────────────────────────────────────────────────────────
+ * Google Drive and OneDrive that stay connected (2026-10-08)
+ *
+ * Martin: "why do google drive and onedrive need to be reauthed every time I
+ * visit the page, why can't it be like canva". Same shape as the Canva
+ * routes above: the browser navigates to /cloud/:app/connect, the provider
+ * sends it back to /cloud/:app/callback, and the student's refresh token
+ * stays in their CloudStore (src/cloudConnect.ts). The app then asks
+ * POST /cloud/:app/token for a short-lived access token whenever it needs
+ * one, and calls Drive or Graph itself: no file passes through here.
+ * ──────────────────────────────────────────────────────────────────── */
+
+/** The cloud_* code in an error from the CloudStore; anything unexpected is logged and becomes `fallback`. */
+function cloudCode(error: unknown, fallback: string): string {
+  // Like errorCode above: over RPC the message may arrive prefixed with the class name.
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const code = message.match(/\bcloud_[a-z_]+/)?.[0];
+  if (code) return code;
+  console.error(fallback, error);
+  return fallback;
+}
+
+function cloudFailure(c: any, error: unknown, fallback: string) {
+  const code = cloudCode(error, fallback);
+  return c.json({ error: code }, statusForCloudCode(code));
+}
+
+/** Back to our own app (fixed origin, checked path) with ?cloud=<outcome>&app=<app>. */
+function cloudBack(origin: string, returnTo: string, outcome: string, cloudApp: CloudApp): string {
+  return `${origin}${withQuery(withQuery(safeAppPath(returnTo, "/settings"), "cloud", outcome), "app", cloudApp)}`;
+}
+
+/** Settings' "Connected as ..." lines for both apps, and whether each is set up on this Worker. */
+app.get("/cloud/status", requireSession, async (c) => {
+  const session = c.get("session");
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  c.header("Cache-Control", "private, no-store");
+  const answer: Record<string, unknown> = {};
+  for (const cloudApp of CLOUD_APPS) {
+    answer[cloudApp] = { configured: cloudConfigured(c.env, cloudApp), connected: false, email: "", name: "", scopes: [] };
+  }
+  // Incognito keeps nothing, so it can't be connected.
+  if (isIncognito(session)) return c.json({ ...answer, incognito: true });
+  if (!CLOUD_APPS.some((cloudApp) => cloudConfigured(c.env, cloudApp))) return c.json(answer);
+  try {
+    const stored = await cloudStore(c.env, session.uid, c.req.url).status(session.uid);
+    for (const cloudApp of CLOUD_APPS) {
+      if (cloudConfigured(c.env, cloudApp)) answer[cloudApp] = { configured: true, ...stored[cloudApp] };
+    }
+    return c.json(answer);
+  } catch (error) {
+    return cloudFailure(c, error, "cloud_unavailable");
+  }
+});
+
+/**
+ * Starts connecting (browser navigation): on to Google's or Microsoft's
+ * consent screen. ?return_to= is the app page to come back to, ?read=1 asks
+ * OneDrive for Files.Read too, ?login_hint= pre-fills the account.
+ */
+app.get("/cloud/:app/connect", async (c) => {
+  const cloudApp = c.req.param("app");
+  if (!isCloudApp(cloudApp)) return c.json({ error: "not_found" }, 404);
+  const origin = appOrigin(c.req.url);
+  const session = await sessionFrom(c);
+  if (!session || isDemo(session)) return c.redirect(`${origin}/`);
+  if (isIncognito(session)) return c.redirect(`${origin}/settings?cloud=incognito&app=${cloudApp}`);
+  const returnTo = safeAppPath(c.req.query("return_to"), "/settings");
+  if (!cloudConfigured(c.env, cloudApp)) return c.redirect(cloudBack(origin, returnTo, "not_configured", cloudApp));
+  c.header("Cache-Control", "no-store");
+  try {
+    const url = await cloudStore(c.env, session.uid, c.req.url).beginConnect(session.uid, cloudApp, {
+      returnTo,
+      read: c.req.query("read") === "1",
+      loginHint: c.req.query("login_hint") ?? null,
+      // This Worker's own address as the browser reached it, so wrangler dev
+      // works too. It must be listed with Google / Microsoft (see README).
+      redirectUri: `${new URL(c.req.url).origin}/cloud/${cloudApp}/callback`,
+    });
+    return c.redirect(url);
+  } catch (error) {
+    cloudCode(error, "cloud_connect_failed");
+    return c.redirect(cloudBack(origin, returnTo, "failed", cloudApp));
+  }
+});
+
+/** Google or Microsoft sends the student back here with ?code&state, or ?error when they cancel. */
+app.get("/cloud/:app/callback", async (c) => {
+  const cloudApp = c.req.param("app");
+  if (!isCloudApp(cloudApp)) return c.json({ error: "not_found" }, 404);
+  const origin = appOrigin(c.req.url);
+  const session = await sessionFrom(c);
+  if (!session || isDemo(session)) return c.redirect(`${origin}/`);
+  if (isIncognito(session)) return c.redirect(`${origin}/settings?cloud=incognito&app=${cloudApp}`);
+  // The code is in this URL: never let it travel on as a Referer.
+  c.header("Cache-Control", "no-store");
+  c.header("Referrer-Policy", "no-referrer");
+  const store = cloudStore(c.env, session.uid, c.req.url);
+  const state = c.req.query("state") ?? "";
+  try {
+    const error = c.req.query("error");
+    if (error) {
+      const returnTo = await store.cancelConnect(cloudApp, state);
+      return c.redirect(cloudBack(origin, returnTo, error === "access_denied" ? "cancelled" : "failed", cloudApp));
+    }
+    const result = await store.finishConnect(session.uid, cloudApp, state, c.req.query("code") ?? "");
+    // Only our own short codes are logged, never the provider's answer.
+    if (result.outcome !== "connected") console.warn("cloud_connect_not_finished", cloudApp, result.code ?? "");
+    return c.redirect(cloudBack(origin, result.returnTo, result.outcome, cloudApp));
+  } catch (error) {
+    cloudCode(error, "cloud_callback_failed");
+    return c.redirect(cloudBack(origin, "/settings", "failed", cloudApp));
+  }
+});
+
+/**
+ * A short-lived access token for the browser: `{access_token, expires_in,
+ * email, scopes}`. The cached one while it has more than 5 minutes left,
+ * otherwise a fresh one (refreshed inside the student's CloudStore, one at a
+ * time). JSON POST from our own app only, so another site can't fetch it.
+ */
+app.post("/cloud/:app/token", requireSession, async (c) => {
+  const cloudApp = c.req.param("app");
+  if (!isCloudApp(cloudApp)) return c.json({ error: "not_found" }, 404);
+  const session = c.get("session");
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
+  c.header("Cache-Control", "no-store");
+  if (isIncognito(session)) return c.json({ error: "incognito_mode" }, 403);
+  if (!cloudConfigured(c.env, cloudApp)) return c.json({ error: "cloud_not_configured" }, 503);
+  try {
+    return c.json(await cloudStore(c.env, session.uid, c.req.url).accessToken(session.uid, cloudApp));
+  } catch (error) {
+    return cloudFailure(c, error, "cloud_unavailable");
+  }
+});
+
+/**
+ * Disconnect: revokes Google's grant where that's safe (see
+ * CloudAccount.disconnect) and forgets the tokens. Allowed in Incognito, so
+ * a student can always remove a connection. Files stay in their Drive.
+ */
+app.delete("/cloud/:app/connection", requireSession, async (c) => {
+  const cloudApp = c.req.param("app");
+  if (!isCloudApp(cloudApp)) return c.json({ error: "not_found" }, 404);
+  const session = c.get("session");
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
+  try {
+    await cloudStore(c.env, session.uid, c.req.url).disconnect(session.uid, cloudApp);
+    return c.json({ ok: true });
+  } catch (error) {
+    return cloudFailure(c, error, "cloud_disconnect_failed");
   }
 });
 
