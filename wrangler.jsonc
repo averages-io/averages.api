@@ -25,8 +25,11 @@
     "CANVA_CLIENT_ID": "OC-AaDPpElswNe6",
     "GOOGLE_REDIRECT_URI": "https://api.averages.io/auth/google/callback",
     "CANVA_REDIRECT_URI": "https://api.averages.io/canva/callback",
-    // OneDrive (Microsoft Entra app "Averages.io", single-page app, no secret).
-    // Public: it's sent to the browser by GET /config/cloud.
+    // OneDrive (Microsoft Entra app "Averages.io"). Public: it's sent to the
+    // browser by GET /config/cloud. Since 2026-10-08 the Worker also signs
+    // students in with it to keep OneDrive connected, which needs a Web
+    // platform on that app and its client secret as the MS_CLIENT_SECRET
+    // dashboard secret (README, "Google Drive and OneDrive").
     "MS_CLIENT_ID": "c006202b-180f-4d4c-b03c-c0f43048c8e9",
     // Turning in Canva designs as PDFs (2026-10-06) needs the Canva scope
     // design:content:read. Change to "1" only AFTER that scope is turned on
@@ -78,6 +81,11 @@
       { "name": "SYNC", "class_name": "SyncStore" },
       { "name": "CANVA", "class_name": "CanvaStore" },
       { "name": "PUSH", "class_name": "PushStore" },
+      // Google Drive and OneDrive that stay connected (2026-10-08): one
+      // CloudStore per student who connects one, in the "us" jurisdiction
+      // (src/cloudStore.ts). Holds their refresh tokens (encrypted). Separate
+      // from SyncStore and CanvaStore so neither's reset takes these with it.
+      { "name": "CLOUD", "class_name": "CloudStore" },
       // School applications and the schools@ auto-reply log (2026-10-06):
       // one object for the whole app, opened in the "us" jurisdiction.
       { "name": "SCHOOLS", "class_name": "SchoolsStore" }
@@ -109,7 +117,9 @@
       { "name": "RATE_LIMIT_CANVA_BROWSE", "type": "ratelimit", "namespace_id": "1008", "simple": { "limit": 90, "period": 60 } },
       { "name": "RATE_LIMIT_APPLY", "type": "ratelimit", "namespace_id": "1009", "simple": { "limit": 3, "period": 60 } },
       { "name": "RATE_LIMIT_APPLY_CODE", "type": "ratelimit", "namespace_id": "1010", "simple": { "limit": 3, "period": 60 } },
-      { "name": "RATE_LIMIT_APPLY_VERIFY", "type": "ratelimit", "namespace_id": "1011", "simple": { "limit": 10, "period": 60 } }
+      { "name": "RATE_LIMIT_APPLY_VERIFY", "type": "ratelimit", "namespace_id": "1011", "simple": { "limit": 10, "period": 60 } },
+      // Google Drive and OneDrive staying connected (2026-10-08): /cloud/*.
+      { "name": "RATE_LIMIT_CLOUD", "type": "ratelimit", "namespace_id": "1012", "simple": { "limit": 60, "period": 60 } }
     ]
   },
   // One-time setup Cloudflare runs on the first deploy that includes SyncStore.
@@ -118,7 +128,8 @@
     { "tag": "v1", "new_sqlite_classes": ["SyncStore"] },
     { "tag": "v2", "new_sqlite_classes": ["CanvaStore"] },
     { "tag": "v3", "new_sqlite_classes": ["PushStore"] },
-    { "tag": "v4", "new_sqlite_classes": ["SchoolsStore"] }
+    { "tag": "v4", "new_sqlite_classes": ["SchoolsStore"] },
+    { "tag": "v5", "new_sqlite_classes": ["CloudStore"] }
   ]
   // Allowed CORS origins and the session cookie's domain are hardcoded as
   // ALLOWED_ORIGINS/COOKIE_DOMAIN constants in src/index.ts rather than
@@ -127,6 +138,8 @@
   // Secrets (dashboard or `npx wrangler secret put`, never in this file):
   // SESSION_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
   // CANVA_CLIENT_ID, CANVA_CLIENT_SECRET,
+  // MS_CLIENT_SECRET (OneDrive staying connected, 2026-10-08) and, optional,
+  // GOOGLE_DRIVE_CLIENT_SECRET (only with a separate GOOGLE_DRIVE_CLIENT_ID),
   // PUSH_SECRET (browser notifications: a random value, NOT the same as
   // SESSION_SECRET; it seals the stored sign-in), VAPID_PRIVATE_JWK (the
   // notification key pair's private half, as JWK JSON text).

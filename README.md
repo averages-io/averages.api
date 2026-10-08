@@ -30,7 +30,7 @@ Schoology and Classroom.
 | Canva: connect, Edit in Canva, Drafts, designs list | Built (2026-10-05), stored only in the US. Canva approved the integration (2026-10-05), so any student can connect |
 | Assignment details and attachment downloads | Built (2026-10-05) |
 | Course files (`/data/files`): every class's Materials documents and assignment attachments | Built (2026-10-05) |
-| Google Drive and OneDrive | Built (2026-10-05), entirely in the student's browser; the Worker only serves public app IDs |
+| Google Drive and OneDrive | Built (2026-10-05) in the student's browser. Since 2026-10-08 they stay connected like Canva: the Worker signs in and keeps the refresh token (US only), the browser gets short-lived access tokens and still talks to Drive and Graph itself. Live once `MS_CLIENT_SECRET` is set and the callback addresses are registered (see "Google Drive and OneDrive" below) |
 | Per-page extras (`/data/people`, `/data/updates`, `/data/events`, `/data/folders`, `/data/gradebook`) and Schoology messages (read, send, reply) | Built (2026-10-06) |
 | Browser notifications (`/push/*`) | Built (2026-10-05), wired in 2026-10-06; switched on once `PUSH_SECRET` and the VAPID keys are set |
 | Rate limiting | Built (2026-10-06): per student and per IP, counted in memory and (2026-10-07) by Cloudflare's Rate Limiting bindings in `wrangler.jsonc` |
@@ -121,10 +121,14 @@ signs them out.
   read with the student's own token on each request and passed to the browser.
   Class files stay in Google Drive: the app gets their Drive links, and nothing is
   downloaded through the Worker.
-- **Google Drive and OneDrive: nothing.** Both connect straight from the
-  student's browser to Google or Microsoft. Their tokens stay in that browser tab
-  and never reach this Worker; the Worker only serves the public app IDs
-  (`/config/cloud`) and the assignment files being copied (`/data/attachment`).
+- **Google Drive and OneDrive** (only if the student connects one, since
+  2026-10-08): per app, the refresh token, the current access token and when it
+  expires, the permissions granted, the account's email and name, and when it was
+  connected, all encrypted with a key derived from `SESSION_SECRET` and tied to
+  their user ID and the app. One Durable Object per student, in the `us`
+  jurisdiction, separate from Sync and Canva. Disconnect deletes it (and revokes
+  Google's grant when Drive has its own OAuth client). Files never pass through the
+  Worker: the browser calls Drive and Graph itself with the access tokens it's given.
 - **School applications** (from school staff, not students): the school's name, its
   Canvas address, the contact email and anything they typed, at most 500, in one US
   Durable Object; plus when each address that wrote to schools@averages.io last got the
@@ -171,7 +175,12 @@ signs them out.
 | `DELETE` | `/canva/drafts/:id` | yes | Removes a draft from Averages.io (the design stays in Canva) |
 | `POST` | `/canva/designs/:id/open` | yes | A fresh editor link with a Return key |
 | `GET` | `/canva/designs` | yes | The student's Canva designs, newest first, 50 a page |
-| `GET` | `/config/cloud` | | Public IDs the app needs to connect Google Drive and OneDrive in the browser (`null` for anything not set up) |
+| `GET` | `/config/cloud` | | Public IDs the app needs for Google Drive and OneDrive in the browser, including the Picker's key (`null` for anything not set up) |
+| `GET` | `/cloud/status` | yes | `{gdrive, onedrive}`, each `{configured, connected, email, name, scopes}` (`incognito: true` and nothing connected in Incognito) |
+| `GET` | `/cloud/:app/connect?return_to=&read=1&login_hint=` | yes | `:app` is `gdrive` or `onedrive`. Starts connecting (browser navigation) and sends the student to Google or Microsoft. `read=1`: OneDrive also asks to read their files (`Files.Read`, kept on reconnects once given) |
+| `GET` | `/cloud/:app/callback` | yes | Where Google or Microsoft sends the student back; returns to `return_to` with `?cloud=connected&app=:app` (or `cancelled`, `failed`, `drive_not_allowed`, `not_configured`, `incognito`) |
+| `POST` | `/cloud/:app/token` | yes | JSON from our app: `{access_token, expires_in, email, scopes}`, the cached token while it has over 5 minutes left, otherwise refreshed. 409 `cloud_not_connected` / `cloud_reconnect_needed` (the grant was revoked or expired; the connection is forgotten), 503 `cloud_not_configured`, 502 `cloud_unavailable`, 403 `incognito_mode` |
+| `DELETE` | `/cloud/:app/connection` | yes | Disconnect: forgets the tokens (allowed in Incognito) |
 | `POST` | `/submit/upload` | yes | Turning in (Schoology): `{section, assignment, filename, filesize, md5}` starts an upload; answers with a sealed upload token (Schoology's upload address never reaches the browser) |
 | `PUT` | `/submit/upload/:token` | yes | The file's bytes (95 MB max), streamed straight through to Schoology |
 | `POST` | `/submit/file` | yes | `{section, assignment, fileIds}`: turns the uploaded files in |
@@ -189,12 +198,12 @@ signs them out.
 | `GET` | `/schools/applications` | key | Every application, newest first. Needs `Authorization: Bearer <SCHOOLS_ADMIN_KEY>`; doesn't exist until that secret is set |
 
 Demo sessions get `403 not_available_in_demo` on the sync, assignment, extras, messages,
-notification and Canva routes. Messages are Schoology only: a Google session gets
+notification, Canva and `/cloud/*` routes. Messages are Schoology only: a Google session gets
 `404 not_available`.
 
 **Rate limits** (per minute): sign-in 30 per IP; `/data/*`, `/auth/me`, `/sync` and reading
 messages 90 per student; sending messages 10; `/submit/*` 90; `/push/*` 20; `/canva/*` 30
-(export polling 120, browsing folders 90); school applications 5 per 10 minutes per IP.
+(export polling 120, browsing folders 90); `/cloud/*` 60; school applications 5 per 10 minutes per IP.
 Counted twice: in memory per Worker copy, and by Cloudflare's Rate Limiting bindings
 (`RATE_LIMIT_*` in `wrangler.jsonc`, shared per location; since 2026-10-07). Over the
 limit: `429 {"error":"rate_limited"}` with `Retry-After`. Preflights, `GET /` and the
@@ -232,6 +241,15 @@ feature gets its own route with its own fixed Schoology calls.
   the Return JWT's Ed25519 signature, audience, type and expiry are checked; every
   redirect goes to a fixed app origin plus a checked path. POSTs must be JSON from an
   allowed Origin, so another page can't trigger them.
+- **Google Drive and OneDrive** (2026-10-08): the same PKCE-and-state pattern as Canva
+  (state in the student's own Durable Object, 10 minutes, used once, tied to the app);
+  the code is exchanged with the client secret on the Worker; Google must have granted
+  `drive.file` and sent a refresh token, or nothing is kept; the id_token only labels the
+  connection (decoded, audience checked: it comes straight from the token endpoint over
+  TLS). `POST /cloud/:app/token` needs JSON from an allowed Origin. Refreshes are one at a
+  time per student, and Microsoft's rotated refresh token is saved before the access token
+  is handed out. Every call to Google or Microsoft gives up after 15 seconds, and errors
+  carry our own short codes, never a token or a provider's message.
 - **Google sign-in:** the state is 256 bits, sealed in its own cookie under a
   different key from sessions, compared in constant time and used once; PKCE (S256)
   on top; the callback URL is pinned; every redirect goes to the fixed app origin
@@ -264,6 +282,8 @@ feature gets its own route with its own fixed Schoology calls.
 | `SCHOOLS_NOTIFY_TO` | Schools: the inbox that gets every email to schools@averages.io and every school application. Must be a verified destination in Email Routing. A secret so the address isn't in this public repo |
 | `TURNSTILE_SECRET` | Schools: the secret key of the Cloudflare Turnstile widget on app.averages.io/schools/apply. With `TURNSTILE_SITE_KEY` set too, applications need a passed check |
 | `SCHOOLS_ADMIN_KEY` | Schools: unlocks `GET /schools/applications`. A long random value (24+ characters) |
+| `MS_CLIENT_SECRET` | OneDrive staying connected (2026-10-08): a client secret of the Entra app (`MS_CLIENT_ID`), from its **Web** platform. Without it OneDrive reports `configured: false`. Entra secrets expire (24 months at most): put a reminder in the calendar |
+| `GOOGLE_DRIVE_CLIENT_SECRET` | Optional. The secret of `GOOGLE_DRIVE_CLIENT_ID`'s OAuth client. With both set, Google Drive connects with that client (and Disconnect revokes its grant); otherwise with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` |
 
 Make a `SESSION_SECRET` with:
 `node -e "console.log(crypto.randomUUID()+crypto.randomUUID())"`
@@ -276,8 +296,8 @@ Make a `SESSION_SECRET` with:
 | `CANVA_CLIENT_ID` | The Canva Connect integration's client ID |
 | `GOOGLE_REDIRECT_URI` | `https://api.averages.io/auth/google/callback` |
 | `CANVA_REDIRECT_URI` | `https://api.averages.io/canva/callback` |
-| `MS_CLIENT_ID` | The Microsoft Entra app's Application (client) ID, for OneDrive. A public ID, no client secret (it's a single-page app registration) |
-| `GOOGLE_DRIVE_CLIENT_ID` | Optional. A separate Google OAuth client (same Google Cloud project) used only for Google Drive in the browser; its only setting is the JavaScript origin `https://app.averages.io`. Without it, Google Drive uses `GOOGLE_CLIENT_ID` |
+| `MS_CLIENT_ID` | The Microsoft Entra app's Application (client) ID, for OneDrive. A public ID; its secret is `MS_CLIENT_SECRET` (since 2026-10-08) |
+| `GOOGLE_DRIVE_CLIENT_ID` | Optional. A separate Google OAuth client (same Google Cloud project) used only for Google Drive; it needs the JavaScript origin `https://app.averages.io`, and (to connect with it on the Worker, with `GOOGLE_DRIVE_CLIENT_SECRET`) the redirect URI below. Without it, Google Drive uses `GOOGLE_CLIENT_ID` |
 | `VAPID_PUBLIC_KEY` | Browser notifications: the public half of the VAPID key pair (base64url). In `wrangler.jsonc` under `vars` (since 2026-10-07); must pair with `VAPID_PRIVATE_JWK` |
 | `VAPID_SUBJECT` | Optional. Contact for push services, default `mailto:help@averages.io` |
 | `CANVA_EXPORT_ENABLED` | `"1"` once the `design:content:read` scope is enabled for the Canva integration (turning in Canva designs as PDFs). Leave `"0"` until then: asking Canva for a scope it hasn't approved breaks Connect |
@@ -287,6 +307,27 @@ Make a `SESSION_SECRET` with:
 | `SCHOOLS_EMAIL_ALLOW` | Dashboard **secret** (not in this public repo): exact email addresses that may apply whatever their ending, comma-separated. Never shown by `GET /config/apply` |
 | `REVIEW_KEY`, `REVIEW_SECRET` | Dashboard **secrets**, 16+ characters each (e.g. `openssl rand -hex 16`). Typed into the hidden API-key sign-in (`app.averages.io/?keys`), they open the reviewer account: six sample classes served by `src/reviewSandbox.ts` (a pretend Schoology inside the Worker, nothing sent to Schoology) in the app's normal live mode, so Canva, Google Drive, OneDrive, notifications and Sync all work. For app reviewers and testing. Unset = off |
 | `CANVA_FOLDERS_ENABLED` | `"1"` once `folder:read` and `folder:write` are enabled (and approved) for the Canva integration: Connect asks for them and the Files page shows Canva folders. Leave `"0"` until then, for the same reason. Students connected before then see Reconnect |
+
+### Google Drive and OneDrive (staying connected, 2026-10-08)
+
+The Worker signs students in to Google Drive and OneDrive and keeps them connected, so
+the app no longer asks again on every visit. One-time setup:
+
+- **Google** (Google Cloud console > APIs & Services > Credentials, the OAuth client
+  Drive uses: `GOOGLE_DRIVE_CLIENT_ID` if it has `GOOGLE_DRIVE_CLIENT_SECRET`, otherwise
+  `GOOGLE_CLIENT_ID`): add `https://api.averages.io/cloud/gdrive/callback` to
+  **Authorized redirect URIs**. Also check the **OAuth consent screen**: if its
+  publishing status is **Testing**, Google expires refresh tokens after 7 days and
+  everyone has to reconnect every week. It must be **In production**.
+- **Microsoft** (Entra admin center > App registrations > the Averages.io app >
+  Authentication): **Add a platform > Web** with the redirect URI
+  `https://api.averages.io/cloud/onedrive/callback` (the existing single-page app
+  platform can stay). Then **Certificates & secrets > New client secret**, and set its
+  **Value** as the `MS_CLIENT_SECRET` secret. The Web platform matters: Microsoft
+  refuses to redeem a code for a single-page-app redirect URI with a client secret.
+
+For `wrangler dev`, also register `http://localhost:8787/cloud/gdrive/callback` and
+`http://localhost:8787/cloud/onedrive/callback` (Google allows `http` only for localhost).
 
 ### Schools email (schools@averages.io)
 
@@ -328,7 +369,7 @@ Cloudflare's local runtime can't pin Durable Objects to the US, so on
 
 ```bash
 npm install
-npm test          # OAuth signing, sessions, adapters, sync, Canva, cloud config, files, Classroom, notifications, extras, messages, rate limits, routes
+npm test          # OAuth signing, sessions, adapters, sync, Canva, cloud config, files, Classroom, notifications, extras, messages, rate limits, routes, Drive/OneDrive connections
 npm run dev       # local Worker on http://localhost:8787
 ```
 
@@ -395,6 +436,14 @@ TypeScript support.
   skipped, odd ids and paging tokens refused), new folder, rename and move with their
   Canva errors (in several folders, not allowed, busy), other-site and form posts
   refused, and `/canva/status`'s `folders`.
+- **Google Drive and OneDrive connections** (`cloudConnect.test.ts`, 2026-10-08): through
+  the real routes with Google and Microsoft faked: status, the authorize URLs (PKCE,
+  scopes, `read=1` and keeping `Files.Read`, `login_hint`), callbacks (forged, replayed,
+  expired, other student's and other app's states, cancel, no refresh token, Drive
+  unticked), cached and refreshed tokens (one refresh for many requests, Microsoft's
+  rotated refresh token saved), revoked grants, Disconnect (revoke only with a Drive-only
+  client, beating a refresh in flight), demo, Incognito, the reviewer account and
+  `return_to` never leaving the app.
 - **Schools** (`schools.test.ts`, `schoolsApply.test.ts`): the sign-in page's lists, the
   application's checks and spam trap, saving and duplicates, Martin's list behind its
   key, the email builder (no header injection, encoded subjects, both parts decode),
