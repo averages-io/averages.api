@@ -141,7 +141,8 @@
   //
   // Also set in the dashboard (as a secret, so a deploy keeps it, even though
   // it ends up public): GOOGLE_PICKER_API_KEY, a Google Cloud API key that MUST
-  // be restricted to app.averages.io and the Picker API. Without it Google
+  // be restricted to the websites app.averages.io/* and docs.google.com/* (the
+  // Picker's own frame) and to the Picker API. Without it Google
   // Drive still connects and saves; only "Add from Google Drive" needs it.
   // GOOGLE_PROJECT_NUMBER is optional (taken from GOOGLE_CLIENT_ID otherwise).
 }

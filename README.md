@@ -257,7 +257,7 @@ feature gets its own route with its own fixed Schoology calls.
 | `SESSION_SECRET` | Seals session cookies. Required: without it sign-in returns 500 on purpose |
 | `GOOGLE_CLIENT_SECRET` | Sign in with Google (Google Classroom). Without it the Google button says sign-in isn't switched on yet |
 | `CANVA_CLIENT_SECRET` | Canva Connect app secret (Developer Portal). Without it Canva reports "not set up" |
-| `GOOGLE_PICKER_API_KEY` | Google Cloud API key for "Add from Google Drive". **Must** be restricted to `https://app.averages.io/*` and the Google Picker API: it's served publicly, and `/config/cloud` can't tell a restricted key from an unrestricted one |
+| `GOOGLE_PICKER_API_KEY` | Google Cloud API key for "Add from Google Drive". **Must** be restricted to the websites `https://app.averages.io/*` **and** `https://docs.google.com/*` (the Picker runs in a docs.google.com frame; leaving it out gives "The API developer key is invalid") and to the Google Picker API, in the same Google Cloud project as `GOOGLE_CLIENT_ID`: it's served publicly, and `/config/cloud` can't tell a restricted key from an unrestricted one |
 | `GOOGLE_PROJECT_NUMBER` | Optional. The Google Cloud project number the Picker needs; without it, the number at the start of `GOOGLE_CLIENT_ID` is used |
 | `PUSH_SECRET` | Browser notifications: seals each student's stored sign-in. A new random value, never the same as `SESSION_SECRET` (notifications stay off if it is) |
 | `VAPID_PRIVATE_JWK` | Browser notifications: the private half of the VAPID key pair, as JWK JSON text |
