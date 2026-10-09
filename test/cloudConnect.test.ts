@@ -249,7 +249,7 @@ console.log("\nconnect: Google Drive");
   check("302 to Google's authorize URL", [s.res.status, `${s.url.origin}${s.url.pathname}`], [302, GOOGLE_AUTHORIZE_URL]);
   const p = s.params;
   check("client, callback, code flow", [p.client_id, p.redirect_uri, p.response_type], [G_CLIENT, `${API}/cloud/gdrive/callback`, "code"]);
-  check("scopes: openid email profile drive.file", p.scope, `openid email profile ${DRIVE_FILE_SCOPE}`);
+  check("scopes: openid email profile drive.file drive.install", p.scope, `openid email profile ${DRIVE_FILE_SCOPE} https://www.googleapis.com/auth/drive.install`);
   check("scope separator is %20, never +", s.location.includes("scope=openid%20email%20profile%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file"), true);
   check("offline + consent (a refresh token every time)", [p.access_type, p.prompt], ["offline", "consent"]);
   check("PKCE S256 and a 32-character state", [p.code_challenge_method, /^[A-Za-z0-9_-]{43}$/.test(p.code_challenge), /^[A-Za-z0-9_-]{32}$/.test(s.state)], ["S256", true, true]);
