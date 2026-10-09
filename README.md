@@ -307,6 +307,7 @@ Make a `SESSION_SECRET` with:
 | `SCHOOLS_EMAIL_ALLOW` | Dashboard **secret** (not in this public repo): exact email addresses that may apply whatever their ending, comma-separated. Never shown by `GET /config/apply` |
 | `REVIEW_KEY`, `REVIEW_SECRET` | Dashboard **secrets**, 16+ characters each (e.g. `openssl rand -hex 16`). Typed into the hidden API-key sign-in (`app.averages.io/?keys`), they open the reviewer account: six sample classes served by `src/reviewSandbox.ts` (a pretend Schoology inside the Worker, nothing sent to Schoology) in the app's normal live mode, so Canva, Google Drive, OneDrive, notifications and Sync all work. For app reviewers and testing. Unset = off |
 | `CANVA_FOLDERS_ENABLED` | `"1"` once `folder:read` and `folder:write` are enabled (and approved) for the Canva integration: Connect asks for them and the Files page shows Canva folders. Leave `"0"` until then, for the same reason. Students connected before then see Reconnect |
+| `FLAGS` (Flagship binding, optional) | When bound, the flags `canva-export`, `canva-folders` and `schools-verify-email` override `CANVA_EXPORT_ENABLED`, `CANVA_FOLDERS_ENABLED` and `SCHOOLS_VERIFY_EMAIL` per request, so they can be flipped in the dashboard without a deploy. If Flagship is slow (400 ms) or errors, the var decides. See the commented `"flagship"` block in wrangler.jsonc |
 
 ### Google Drive and OneDrive (staying connected, 2026-10-08)
 
