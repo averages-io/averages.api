@@ -175,7 +175,8 @@ signs them out.
 | `DELETE` | `/canva/drafts/:id` | yes | Removes a draft from Averages.io (the design stays in Canva) |
 | `POST` | `/canva/designs/:id/open` | yes | A fresh editor link with a Return key |
 | `GET` | `/canva/designs` | yes | The student's Canva designs, newest first, 50 a page |
-| `GET` | `/config/cloud` | | Public IDs the app needs for Google Drive and OneDrive in the browser, including the Picker's key (`null` for anything not set up) |
+| `GET` | `/config/cloud` | | Public IDs the app needs for Google Drive and OneDrive in the browser, including the Picker's key (`null` for anything not set up or switched off) |
+| `GET` | `/config/features` | | Every feature switch (`features`: key → true/false) and `maintenance` (`{ message }` while the banner is on, else `null`). 30 s cache |
 | `GET` | `/cloud/status` | yes | `{gdrive, onedrive}`, each `{configured, connected, email, name, scopes}` (`incognito: true` and nothing connected in Incognito) |
 | `GET` | `/cloud/:app/connect?return_to=&read=1&login_hint=` | yes | `:app` is `gdrive` or `onedrive`. Starts connecting (browser navigation) and sends the student to Google or Microsoft. `read=1`: OneDrive also asks to read their files (`Files.Read`, kept on reconnects once given) |
 | `GET` | `/cloud/:app/callback` | yes | Where Google or Microsoft sends the student back; returns to `return_to` with `?cloud=connected&app=:app` (or `cancelled`, `failed`, `drive_not_allowed`, `not_configured`, `incognito`) |
@@ -307,7 +308,9 @@ Make a `SESSION_SECRET` with:
 | `SCHOOLS_EMAIL_ALLOW` | Dashboard **secret** (not in this public repo): exact email addresses that may apply whatever their ending, comma-separated. Never shown by `GET /config/apply` |
 | `REVIEW_KEY`, `REVIEW_SECRET` | Dashboard **secrets**, 16+ characters each (e.g. `openssl rand -hex 16`). Typed into the hidden API-key sign-in (`app.averages.io/?keys`), they open the reviewer account: six sample classes served by `src/reviewSandbox.ts` (a pretend Schoology inside the Worker, nothing sent to Schoology) in the app's normal live mode, so Canva, Google Drive, OneDrive, notifications and Sync all work. For app reviewers and testing. Unset = off |
 | `CANVA_FOLDERS_ENABLED` | `"1"` once `folder:read` and `folder:write` are enabled (and approved) for the Canva integration: Connect asks for them and the Files page shows Canva folders. Leave `"0"` until then, for the same reason. Students connected before then see Reconnect |
-| `FLAGS` (Flagship binding, optional) | When bound, the flags `canva-export`, `canva-folders` and `schools-verify-email` override `CANVA_EXPORT_ENABLED`, `CANVA_FOLDERS_ENABLED` and `SCHOOLS_VERIFY_EMAIL` per request, so they can be flipped in the dashboard without a deploy. If Flagship is slow (400 ms) or errors, the var decides. See the commented `"flagship"` block in wrangler.jsonc |
+| `FLAGS` (Flagship binding, optional) | Feature switches read on every request (src/flags.ts): `canva-integration`, `onedrive-integration`, `drive-integration`, `schoology-signin`, `gclassroom-signin`, `canvas-signin`, `test-signin`, `maintenance-banner`, `schoolsform-page`, `coursematerialpreview-feature`, `turnin-feature`, `messaging-features`, `notifications-features`. Off: that feature's routes answer 503 `feature_off` (navigations go back to the app with `?feature_off=`), and `GET /config/features` tells the app to hide it. All default on except `maintenance-banner` and `coursematerialpreview-feature`. If Flagship is slow (400 ms) or errors, the fallback decides. See the commented `"flagship"` block in wrangler.jsonc |
+| `FEATURES_OFF` / `FEATURES_ON` (optional vars) | Comma-separated switch keys to turn off / on without Flagship (Flagship still wins when it answers) |
+| `MAINTENANCE_MESSAGE` (optional var) | The banner text while `maintenance-banner` is on (300 characters at most) |
 
 ### Google Drive and OneDrive (staying connected, 2026-10-08)
 

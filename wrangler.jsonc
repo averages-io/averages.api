@@ -105,11 +105,12 @@
   // needs its own namespace_id; a window ("period") can only be 10 or 60 s.
   // The numbers match RATE_RULES in src/rateLimit.ts; applications are
   // 5 per 10 minutes there and at most 3 a minute here.
-  // Flagship (2026-10-08): switches flipped from the dashboard without a deploy
-  // (src/flags.ts). Create an app in Compute > Flagship, add boolean flags
-  // "canva-export", "canva-folders" and "schools-verify-email", then put its
-  // app ID here and uncomment. Without it the vars above decide, as before.
-   "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
+  // Flagship (2026-10-09): feature switches flipped from the dashboard without a
+  // deploy (src/flags.ts has the list of 13 boolean flags and their defaults).
+  // Create an app in Compute > Flagship, add the flags you want to control,
+  // then put its app ID here and uncomment. Flags you don't create keep their
+  // defaults; FEATURES_OFF / FEATURES_ON vars can also flip them without Flagship.
+  // "flagship": [{ "binding": "FLAGS", "app_id": "<your Flagship app ID>" }],
   "ratelimits": [
     { "name": "RATE_LIMIT_SIGNIN", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
     { "name": "RATE_LIMIT_DATA", "namespace_id": "1002", "simple": { "limit": 90, "period": 60 } },
