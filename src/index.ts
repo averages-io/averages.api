@@ -90,6 +90,7 @@ import { EmailMessage } from "cloudflare:email";
 import { autoReplyAllowed, buildMime, cleanEmail, NOREPLY_ADDRESS, SCHOOLS_ADDRESS } from "./mail.ts";
 import { applicationEmail, autoReplyEmail, inboundCopyEmail, verifyCodeEmail } from "./schoolsMail.ts";
 import { readEmailText } from "./mailRead.ts";
+import { withFlags } from "./flags.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
 import type { SchoolsStore } from "./schoolsStore.ts";
 import {
@@ -270,6 +271,8 @@ type Bindings = {
    * (reviewSandbox.ts) with every integration working. Unset = off.
    */
   REVIEW_KEY?: string;
+  /** Cloudflare Flagship (2026-10-08, optional): see src/flags.ts. */
+  FLAGS?: { getBooleanValue(key: string, defaultValue: boolean, context?: Record<string, unknown>): Promise<boolean> };
   REVIEW_SECRET?: string;
   PUSH_SECRET?: string;
   VAPID_PUBLIC_KEY?: string;
@@ -1411,7 +1414,8 @@ app.get("/canva/connect", async (c) => {
   if (isIncognito(session)) return c.redirect(`${origin}/settings?canva=incognito`);
   const returnTo = safeAppPath(c.req.query("return_to"), "/settings");
   try {
-    return c.redirect(await canvaStore(c.env, session.uid, c.req.url).beginConnect(returnTo));
+    // The scopes depend on two switches that can come from Flagship (src/flags.ts): pass them in.
+    return c.redirect(await canvaStore(c.env, session.uid, c.req.url).beginConnect(returnTo, { CANVA_EXPORT_ENABLED: c.env.CANVA_EXPORT_ENABLED, CANVA_FOLDERS_ENABLED: c.env.CANVA_FOLDERS_ENABLED }));
   } catch (error) {
     errorCode(error, "canva_connect_failed");
     return c.redirect(`${origin}${withQuery(returnTo, "canva", "failed")}`);
@@ -2137,6 +2141,7 @@ export async function handleSchoolsEmail(message: ForwardableEmailMessage, env: 
  * `app.fetch` on this object exactly as they did on the Hono app.
  */
 export default {
-  fetch: app.fetch,
+  // Flagship switches (src/flags.ts) are read once per request, before the app sees env.
+  fetch: async (request: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(request, await withFlags(env), ctx),
   email: handleSchoolsEmail,
 };

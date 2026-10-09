@@ -39,8 +39,8 @@
  * (MAX_KEYS, least recently used dropped first), so it can't grow without end.
  *
  * Counts shared across isolates (2026-10-07): Workers Rate Limiting
- * bindings, one per rule, declared in wrangler.jsonc under "unsafe" (the
- * repo's Wrangler 3 doesn't know the newer "ratelimits" key): RATE_LIMIT_SIGNIN,
+ * bindings, one per rule, declared in wrangler.jsonc under "ratelimits"
+ * (Wrangler 4 since 2026-10-08; "unsafe" before): RATE_LIMIT_SIGNIN,
  * _DATA, _SEND, _SUBMIT, _PUSH, _CANVA, _CANVA_POLL, _CANVA_BROWSE, _APPLY,
  * _APPLY_CODE, _APPLY_VERIFY, _CLOUD,
  * then a shared RATE_LIMITER if one is ever added. Each is asked after the

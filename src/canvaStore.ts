@@ -24,7 +24,9 @@ export class CanvaStore extends DurableObject<CanvaConfig> {
     this.account = new CanvaAccount(ctx.storage, env);
   }
 
-  beginConnect(returnTo: string): Promise<string> {
+  /** `switches`: the Worker's current CANVA_EXPORT_ENABLED / CANVA_FOLDERS_ENABLED (Flagship may have changed them, 2026-10-08). */
+  beginConnect(returnTo: string, switches?: { CANVA_EXPORT_ENABLED?: string; CANVA_FOLDERS_ENABLED?: string }): Promise<string> {
+    if (switches) this.account.env = { ...this.account.env, ...switches };
     return this.account.beginConnect(returnTo);
   }
   finishConnect(uid: string, state: string, code: string): Promise<string> {
