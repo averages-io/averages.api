@@ -156,10 +156,9 @@
   // Rate limits use the Workers Rate Limiting bindings under "ratelimits" above
   // (nothing to set in the dashboard). See src/rateLimit.ts.
   //
-  // Also set in the dashboard (as a secret, so a deploy keeps it, even though
-  // it ends up public): GOOGLE_PICKER_API_KEY, a Google Cloud API key that MUST
-  // be restricted to the websites app.averages.io/* and docs.google.com/* (the
-  // Picker's own frame) and to the Picker API. Without it Google
-  // Drive still connects and saves; only "Add from Google Drive" needs it.
-  // GOOGLE_PROJECT_NUMBER is optional (taken from GOOGLE_CLIENT_ID otherwise).
+  // The Google Picker was removed (2026-10-09): GOOGLE_PICKER_API_KEY and
+  // GOOGLE_PROJECT_NUMBER aren't used by the app any more and can be deleted from
+  // the dashboard. Drive files come in with "Open with → Averages.io" instead
+  // (drive.install; Drive UI integration in Google Cloud, Open URL
+  // https://app.averages.io/files?drive=open).
 }

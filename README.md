@@ -245,7 +245,8 @@ feature gets its own route with its own fixed Schoology calls.
 - **Google Drive and OneDrive** (2026-10-08): the same PKCE-and-state pattern as Canva
   (state in the student's own Durable Object, 10 minutes, used once, tied to the app);
   the code is exchanged with the client secret on the Worker; Google must have granted
-  `drive.file` and sent a refresh token, or nothing is kept; the id_token only labels the
+  `drive.file` and sent a refresh token, or nothing is kept (it also asks for `drive.install`,
+  2026-10-09, which puts "Averages.io" in Drive's Open with menu; see the app's Files page); the id_token only labels the
   connection (decoded, audience checked: it comes straight from the token endpoint over
   TLS). `POST /cloud/:app/token` needs JSON from an allowed Origin. Refreshes are one at a
   time per student, and Microsoft's rotated refresh token is saved before the access token
@@ -276,8 +277,8 @@ feature gets its own route with its own fixed Schoology calls.
 | `SESSION_SECRET` | Seals session cookies. Required: without it sign-in returns 500 on purpose |
 | `GOOGLE_CLIENT_SECRET` | Sign in with Google (Google Classroom). Without it the Google button says sign-in isn't switched on yet |
 | `CANVA_CLIENT_SECRET` | Canva Connect app secret (Developer Portal). Without it Canva reports "not set up" |
-| `GOOGLE_PICKER_API_KEY` | Google Cloud API key for "Add from Google Drive". **Must** be restricted to the websites `https://app.averages.io/*` **and** `https://docs.google.com/*` (the Picker runs in a docs.google.com frame; leaving it out gives "The API developer key is invalid") and to the Google Picker API, in the same Google Cloud project as `GOOGLE_CLIENT_ID`: it's served publicly, and `/config/cloud` can't tell a restricted key from an unrestricted one |
-| `GOOGLE_PROJECT_NUMBER` | Optional. The Google Cloud project number the Picker needs; without it, the number at the start of `GOOGLE_CLIENT_ID` is used |
+| `GOOGLE_PICKER_API_KEY` | **No longer used** (2026-10-09): the Google Picker was removed. Safe to delete from the dashboard. `/config/cloud` still reports it if set. |
+| `GOOGLE_PROJECT_NUMBER` | **No longer used** (it was for the Google Picker). |
 | `PUSH_SECRET` | Browser notifications: seals each student's stored sign-in. A new random value, never the same as `SESSION_SECRET` (notifications stay off if it is) |
 | `VAPID_PRIVATE_JWK` | Browser notifications: the private half of the VAPID key pair, as JWK JSON text |
 | `SCHOOLS_NOTIFY_TO` | Schools: the inbox that gets every email to schools@averages.io and every school application. Must be a verified destination in Email Routing. A secret so the address isn't in this public repo |
