@@ -44,7 +44,15 @@ export const MS_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.
 
 /** Only files the app creates or the student picks: never their whole Drive. */
 export const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
-export const GOOGLE_SCOPES = ["openid", "email", "profile", DRIVE_FILE_SCOPE];
+/**
+ * drive.install (2026-10-09, replacing the Google Picker): puts "Averages.io" in
+ * Google Drive's "Open with" menu. Opening a file that way grants drive.file
+ * for it, so Averages.io can read the file the student chose and nothing else.
+ * Non-sensitive, like drive.file. A Drive UI integration (Open URL
+ * https://app.averages.io/files?drive=open) has to be set up in Google Cloud.
+ */
+export const DRIVE_INSTALL_SCOPE = "https://www.googleapis.com/auth/drive.install";
+export const GOOGLE_SCOPES = ["openid", "email", "profile", DRIVE_FILE_SCOPE, DRIVE_INSTALL_SCOPE];
 /** offline_access is what makes Microsoft hand back a refresh token. */
 export const MS_SCOPES = ["openid", "profile", "email", "offline_access", "User.Read", "Files.ReadWrite.AppFolder"];
 /** Reading the student's own OneDrive files (adding one from OneDrive), asked for only when the app needs it. */
