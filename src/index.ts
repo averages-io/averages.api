@@ -90,7 +90,7 @@ import { EmailMessage } from "cloudflare:email";
 import { autoReplyAllowed, buildMime, cleanEmail, NOREPLY_ADDRESS, SCHOOLS_ADDRESS } from "./mail.ts";
 import { applicationEmail, autoReplyEmail, inboundCopyEmail, verifyCodeEmail } from "./schoolsMail.ts";
 import { readEmailText } from "./mailRead.ts";
-import { withFlags } from "./flags.ts";
+import { withFlags, featureOn, featureForRoute, FEATURE_KEYS, type FeatureKey, type Features } from "./flags.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
 import type { SchoolsStore } from "./schoolsStore.ts";
 import {
@@ -263,6 +263,16 @@ type Bindings = {
    */
   SCHOOLS_EMAIL_ENDINGS?: string;
   SCHOOLS_VERIFY_EMAIL?: string;
+  /**
+   * Feature switches (src/flags.ts, 2026-10-09). FEATURES is filled in per
+   * request (Flagship, else the vars). FEATURES_OFF / FEATURES_ON: optional
+   * comma-separated keys to flip without Flagship. MAINTENANCE_MESSAGE: the
+   * banner's text while maintenance-banner is on (300 characters at most).
+   */
+  FEATURES?: Features;
+  FEATURES_OFF?: string;
+  FEATURES_ON?: string;
+  MAINTENANCE_MESSAGE?: string;
   /** Dashboard SECRET: exact addresses allowed whatever their ending (comma-separated). */
   SCHOOLS_EMAIL_ALLOW?: string;
   /**
@@ -446,6 +456,28 @@ function openedSession(c: any): Promise<SessionData | null> {
  */
 app.use("*", rateLimit({ studentOf: async (c) => (await openedSession(c))?.uid ?? null }));
 
+/**
+ * Feature switches (src/flags.ts, 2026-10-09). A route whose feature is off
+ * answers 503 { error: "feature_off", feature }. Pages the browser navigates
+ * to (connect, callback, return, Google sign-in) go back to the app instead,
+ * (Settings with ?feature_off=<key>, or the sign-in page for Google), so
+ * nobody lands on a JSON page.
+ */
+const NAVIGATED = /^\/(canva\/(connect|callback|return)|cloud\/[^/]+\/(connect|callback)|auth\/google\/start)$/;
+app.use("*", async (c, next) => {
+  if (c.req.method === "OPTIONS") return next();
+  const path = new URL(c.req.url).pathname;
+  const off = featureForRoute(c.req.method, path).find((k) => !featureOn(c.env, k));
+  if (!off) return next();
+  c.header("Cache-Control", "no-store");
+  if (c.req.method === "GET" && NAVIGATED.test(path)) {
+    // Google sign-in: the sign-in page's own "isn't switched on" message.
+    if (off === "gclassroom-signin") return c.redirect(`${appOrigin(c.req.url)}/?google=unavailable`);
+    return c.redirect(`${appOrigin(c.req.url)}/settings?feature_off=${off}`);
+  }
+  return c.json({ error: "feature_off", feature: off }, 503);
+});
+
 /** Resolves the session cookie, or 401s. */
 async function requireSession(c: any, next: any) {
   const token = readCookie(c.req.header("Cookie") ?? null, SESSION_COOKIE);
@@ -547,7 +579,11 @@ app.post("/auth/session", async (c) => {
    * only way in.
    */
   if (key === SANDBOX_KEY || secret === SANDBOX_SECRET) return c.json({ error: "invalid_credentials" }, 401);
-  if (reviewSecretsMatch(c.env, key, secret)) {
+  const reviewer = reviewSecretsMatch(c.env, key, secret);
+  // Sign-in switches (src/flags.ts): the reviewer account and Schoology keys each have their own.
+  const signin: FeatureKey = reviewer ? "test-signin" : "schoology-signin";
+  if (!featureOn(c.env, signin)) return c.json({ error: "feature_off", feature: signin }, 503);
+  if (reviewer) {
     const token = await sealSession({ key: SANDBOX_KEY, secret: SANDBOX_SECRET, uid: REVIEW_UID }, c.env.SESSION_SECRET);
     c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
     const me = await getMe({ key: SANDBOX_KEY, secret: SANDBOX_SECRET });
@@ -1357,6 +1393,7 @@ app.get("/config/apply", (c) => {
     turnstileSiteKey: turnstileOn(c.env) ? c.env.TURNSTILE_SITE_KEY : null,
     emailEndings: emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS),
     verifyEmail: verifyEmailOn(c.env),
+    open: featureOn(c.env, "schoolsform-page"),
   });
 });
 
@@ -1370,7 +1407,26 @@ app.get("/config/schools", (c) => {
 app.get("/config/cloud", (c) => {
   // A minute (was 5, 2026-10-07): a new Picker key reaches browsers quickly.
   c.header("Cache-Control", "public, max-age=60");
-  return c.json(cloudConfig(c.env));
+  const cfg = cloudConfig(c.env);
+  // A switched-off integration looks unconfigured to older pages too.
+  if (!featureOn(c.env, "drive-integration")) cfg.google = null;
+  if (!featureOn(c.env, "onedrive-integration")) cfg.microsoft = null;
+  return c.json(cfg);
+});
+
+/**
+ * GET /config/features (2026-10-09): every switch, for the app to hide what's
+ * off (public/js/averages-features.js), and the maintenance banner's text.
+ * Thirty seconds, so a flip reaches everyone within a minute.
+ */
+app.get("/config/features", (c) => {
+  const features = Object.fromEntries(FEATURE_KEYS.map((k) => [k, featureOn(c.env, k)])) as Features;
+  const msg = typeof c.env.MAINTENANCE_MESSAGE === "string" ? c.env.MAINTENANCE_MESSAGE.trim().slice(0, 300) : "";
+  c.header("Cache-Control", "public, max-age=30");
+  return c.json({
+    features,
+    maintenance: featureOn(c.env, "maintenance-banner") ? { message: msg || "Averages.io is having some trouble right now. Some things may not work." } : null,
+  });
 });
 
 /**

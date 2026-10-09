@@ -34,6 +34,7 @@ import { isGoogleSession, openValue, type SessionData } from "./session.ts";
 import { getAssignments, getGrades, getMessages, getSections, listOf, SchoologyError, schoologyGet } from "./schoology.ts";
 import { CALL_BUDGET, CallBudget, ClassroomError, fetchClassroomBundle } from "./classroom.ts";
 import { googleConfig, GoogleError, hasRequiredScopes, refreshAccessToken, type GoogleEnv } from "./google.ts";
+import { readFeatures } from "./flags.ts";
 import { isValidSubscription, sendWebPush, type PushSubscriptionLike, type VapidConfig } from "./webpush.ts";
 import {
   classroomObservation,
@@ -455,6 +456,9 @@ export class PushStore extends DurableObject<PushEnv> {
       // and look again later. Deleting here would turn every student's
       // notifications off over a deploy mistake.
       if (!secret || !vapid) return;
+      // notifications-features switched off (src/flags.ts): send nothing, keep
+      // everyone's settings, and look again next time.
+      if (!(await readFeatures(this.env))["notifications-features"]) return;
 
       const opened = await openValue(cred.sealed, secret, PUSH_PURPOSE);
       const session = typeof opened === "string" ? this.parseSession(opened) : null;
