@@ -110,7 +110,7 @@
   // Create an app in Compute > Flagship, add the flags you want to control,
   // then put its app ID here and uncomment. Flags you don't create keep their
   // defaults; FEATURES_OFF / FEATURES_ON vars can also flip them without Flagship.
-  // "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
+   "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
   "ratelimits": [
     { "name": "RATE_LIMIT_SIGNIN", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
     { "name": "RATE_LIMIT_DATA", "namespace_id": "1002", "simple": { "limit": 90, "period": 60 } },
