@@ -40,6 +40,15 @@
     // folder:write. Same rule: "1" only AFTER both are enabled (and approved)
     // for the integration in Canva's Developer Portal.
     "CANVA_FOLDERS_ENABLED": "1",
+    // Canva permission probe (temporary, developer only, 2026-10-10). Lets
+    // Martin test from the live site whether Canva's undocumented
+    // design:permission:* / folder:permission:write scopes do anything, using
+    // his own real connection. Set "1" only while testing, then back to "0":
+    // while "1", GET /canva/connect?probe=1 also asks for those scopes and
+    // POST /canva/probe is reachable (and still needs the SCHOOLS_ADMIN_KEY
+    // secret and that key in the request). See the README's "Canva permission
+    // probe" section.
+    "CANVA_PERMISSION_PROBE": "1",
     // Browser notifications: the VAPID key pair's PUBLIC half (base64url), the
     // one browsers subscribe with. Public by design (GET /push/config serves
     // it). Its private half is the VAPID_PRIVATE_JWK secret; the two must be

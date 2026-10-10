@@ -199,6 +199,7 @@ signs them out.
 | `GET` | `/canva/exports/:job` and `/canva/exports/:job/file?design=` | yes | The export's status, then the PDF itself (streamed) |
 | `GET` | `/canva/folders/:id/items` | yes | A Canva folder's folders and designs for the Files page (`root` is the top of Projects), 100 a page. 409 `canva_reconnect_needed` until `CANVA_FOLDERS_ENABLED` is `"1"` and the connection has the folder permissions |
 | `POST` | `/canva/folders`, `/canva/folders/:id/rename`, `/canva/folders/move` | yes | New folder `{name, parentId}`, rename `{name}`, move a design or folder `{itemId, toFolderId}`. No delete (Canva would put the contents in the Trash) |
+| `POST` | `/canva/probe` | key | Developer-only Canva permission probe (temporary). `{key, write?}`. 404 unless `CANVA_PERMISSION_PROBE` is `"1"` and `SCHOOLS_ADMIN_KEY` is set; 403 unless `key` matches it. See "Canva permission probe" below |
 | `GET` | `/config/apply` | no | What the school application page needs: `{turnstileSiteKey, emailEndings, verifyEmail}` (site key or `null`; allowed email endings, `[]` = any; whether the email must be verified with a code) |
 | `GET` | `/config/schools?lms=schoology\|canvas` | | The schools the sign-in page lists (`src/schools.ts`) |
 | `POST` | `/schools/apply/code` | | "Verify your email": `{email, turnstileToken?}` emails a 6-digit code from `no-reply@averages.io` (only when `SCHOOLS_VERIFY_EMAIL` is `"1"`). 3 per address per 10 minutes, 45 s apart; 5 per 10 minutes per network |
@@ -325,6 +326,46 @@ Make a `SESSION_SECRET` with:
 | `FLAGS` (Flagship binding, optional) | Feature switches read on every request (src/flags.ts): `canva-integration`, `onedrive-integration`, `drive-integration`, `schoology-signin`, `gclassroom-signin`, `canvas-signin`, `test-signin`, `maintenance-banner`, `schoolsform-page`, `coursematerialpreview-feature`, `turnin-feature`, `messaging-features`, `notifications-features`. Off: that feature's routes answer 503 `feature_off` (navigations go back to the app with `?feature_off=`), and `GET /config/features` tells the app to hide it. All default on except `maintenance-banner` and `coursematerialpreview-feature`. If Flagship is slow (400 ms) or errors, the fallback decides. See the commented `"flagship"` block in wrangler.jsonc |
 | `FEATURES_OFF` / `FEATURES_ON` (optional vars) | Comma-separated switch keys to turn off / on without Flagship (Flagship still wins when it answers) |
 | `MAINTENANCE_MESSAGE` (optional var) | The banner text while `maintenance-banner` is on (300 characters at most) |
+| `CANVA_PERMISSION_PROBE` | In `wrangler.jsonc`: `"1"` only while running the Canva permission probe (below), otherwise `"0"`. Developer only |
+
+### Canva permission probe (temporary)
+
+A developer-only tool (added 2026-10-10) for Martin to test, from the live site with
+his own real Canva connection, whether Canva's undocumented `design:permission:read`,
+`design:permission:write` and `folder:permission:write` scopes do anything. Canva lists
+those scopes but its published OpenAPI spec has no request that uses them, so this tries
+the most likely (guessed) addresses and reports what Canva answers. It is off by default
+and does nothing to the normal app.
+
+What it does, while switched on:
+
+- `GET /canva/connect?probe=1` also asks Canva for the three permission scopes (on top
+  of the normal ones), so the connection has them to test with. Without `?probe=1`, or
+  with the switch off, a normal Connect is unchanged.
+- `POST /canva/probe` `{key, write?}` makes one throwaway test design and one test folder
+  in the developer's Canva (both titled "Averages permission test (safe to delete)") and
+  tries the guessed permission addresses **against only those two ids**. Read-only unless
+  `write: true`, which also tries the write guesses on the test design (stopping at the
+  first Canva accepts) and two on the test folder. It answers
+  `{ ok, scopes, designId, folderId, results: [{ method, path, body, status, answer }] }`,
+  where `answer` is Canva's response text cut to 600 characters. The access, refresh and
+  client tokens never appear in the answer or the logs.
+
+Turning it on and off:
+
+1. Set `CANVA_PERMISSION_PROBE` to `"1"` in `wrangler.jsonc` and deploy (the
+   `SCHOOLS_ADMIN_KEY` secret must already be set — it is what unlocks the probe).
+2. Reconnect Canva in Settings via `/canva/connect?probe=1` so the connection carries the
+   permission scopes.
+3. Call `POST /canva/probe` from the app (same origin) with `{ "key": "<SCHOOLS_ADMIN_KEY>" }`,
+   or `{ "key": "...", "write": true }` for the write guesses, and read the `results`.
+4. Set `CANVA_PERMISSION_PROBE` back to `"0"` and deploy. Delete the test design and folder
+   in Canva.
+
+Gated hard: `/canva/probe` is 404 unless the switch is `"1"` **and** `SCHOOLS_ADMIN_KEY` is
+set, 403 unless `key` matches it (constant-time), 401 without a session, refused in
+demo/Incognito/Classroom like the other Canva routes, and capped at 3 runs per 10 minutes
+per student on top of the usual `/canva` rate limit.
 
 ### Google Drive and OneDrive (staying connected, 2026-10-08)
 
