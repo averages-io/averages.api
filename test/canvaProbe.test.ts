@@ -7,7 +7,7 @@
  */
 import app from "../src/index.ts";
 import { sealSession } from "../src/session.ts";
-import { CanvaAccount, PROBE_SCOPES, type CanvaStorage } from "../src/canva.ts";
+import { CanvaAccount, PROBE_SCOPES, PROBE_TITLE, SWEEP_BATCHES, sweepPlan, type CanvaStorage } from "../src/canva.ts";
 
 let passed = 0;
 let failed = 0;
@@ -71,6 +71,13 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (method === "POST" && path === "/designs") return body({ design: { id: "DTEST", title: "t", owner: { user_id: "u", team_id: "t" }, urls: { edit_url: "https://www.canva.com/api/design/" + "x".repeat(700) + "/edit", view_url: "https://www.canva.com/api/design/" + "y".repeat(700) + "/view" } } }, 200);
   if (method === "POST" && path === "/folders") return body({ folder: { id: "FTEST" } }, 200);
   if (method === "GET" && path === "/designs/DTEST") return body({ design: { id: "DTEST", title: "t" } }, 200);
+  // The sweep's later batches check their test items by title.
+  if (method === "GET" && path === "/designs/DSW1") return body({ design: { id: "DSW1", title: PROBE_TITLE, urls: { edit_url: "https://www.canva.com/api/design/SIGNED/edit", view_url: "https://www.canva.com/api/design/SIGNED/view" } } }, 200);
+  if (method === "GET" && path === "/folders/FSW1") return body({ folder: { id: "FSW1", name: PROBE_TITLE } }, 200);
+  if (method === "GET" && path === "/designs/DREAL") return body({ design: { id: "DREAL", title: "My real homework" } }, 200);
+  if (method === "GET" && path === "/folders/FREAL") return body({ folder: { id: "FREAL", name: "Projects" } }, 200);
+  // One sweep guess that "exists": an empty body gets a 400 naming a field.
+  if (method === "POST" && path === "/designs/DSW1/share-link") return body({ code: "invalid_field", message: "role is required" }, 400);
   // The design permission writes: accept the third, refuse the rest.
   if (path === "/designs/DTEST/permissions" && method !== "GET") {
     designWrites++;
@@ -189,6 +196,29 @@ check("flag on, no probe: not added", PROBE_SCOPES.some((sc) => s.includes(sc)),
 s = await connectScopes("?probe=1", { CANVA_PERMISSION_PROBE: "0" });
 check("flag off + probe=1: ignored, not added", PROBE_SCOPES.some((sc) => s.includes(sc)), false);
 check("normal scopes still asked for", ["design:content:write", "design:meta:read", "profile:read"].every((sc) => s.includes(sc)), true);
+
+/* ── the full sweep (2026-10-10) ──────────────────────────────────────── */
+console.log("sweep");
+const plan = sweepPlan();
+check("sweep: hundreds of guesses, in batches of at most 40", [plan.length > 400, SWEEP_BATCHES, plan.length <= SWEEP_BATCHES * 40], [true, Math.ceil(plan.length / 40), true]);
+check("sweep: POST/PATCH/PUT guesses send an empty body only", plan.filter((x) => x.method !== "GET" && x.method !== "DELETE").every((x) => JSON.stringify(x.body) === "{}"), true);
+check("sweep: DELETE only under the test design / folder", plan.filter((x) => x.method === "DELETE").every((x) => x.path.includes("{D}") || x.path.includes("{F}")), true);
+calls.length = 0;
+r = await probe({ body: { key: ADMIN_KEY, sweep: true, batch: 0 }, uid: "sw0" });
+check("sweep batch 0: makes the test items and runs 40 guesses", [r.status, r.json.ok, r.json.designId, r.json.folderId, r.json.results.length, r.json.batches], [200, true, "DTEST", "FTEST", 42, SWEEP_BATCHES]);
+check("sweep batch 0: only the test ids", calls.filter((c) => c.path !== "/designs" && c.path !== "/folders" && !/DTEST|FTEST/.test(c.path)).length, 0);
+calls.length = 0;
+const shareLinkBatch = Math.floor(plan.findIndex((x) => x.method === "POST" && x.path === "/designs/{D}/share-link") / 40);
+r = await probe({ body: { key: ADMIN_KEY, sweep: true, batch: shareLinkBatch, designId: "DSW1", folderId: "FSW1" }, uid: "sw1" });
+check("sweep later batch: checks its test items by title, then 40 guesses", [r.status, r.json.ok, r.json.batch, calls[0].path, calls[1].path, r.json.results.length], [200, true, shareLinkBatch, "/designs/DSW1", "/folders/FSW1", 42]);
+check("sweep batch 1: the found one shows its 400", r.json.results.some((x: any) => x.path === "/designs/DSW1/share-link" && x.method === "POST" && x.status === 400), true);
+check("sweep: the design's signed links are hidden", JSON.stringify(r.json).includes("SIGNED"), false);
+check("sweep: nothing created in later batches", calls.some((c) => c.method === "POST" && (c.path === "/designs" || c.path === "/folders")), false);
+calls.length = 0;
+r = await probe({ body: { key: ADMIN_KEY, sweep: true, batch: 1, designId: "DREAL", folderId: "FREAL" }, uid: "sw2" });
+check("sweep: someone's real design isn't touched (title check)", [r.status, r.json.error, calls.length], [400, "not_test_items", 2]);
+r = await probe({ body: { key: ADMIN_KEY, sweep: true, batch: 2, designId: "../x", folderId: "FSW1" }, uid: "sw3" });
+check("sweep: odd ids refused", [r.status, r.json.error], [400, "not_test_items"]);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
