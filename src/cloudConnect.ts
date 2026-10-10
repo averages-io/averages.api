@@ -21,6 +21,10 @@
  * current access token and when it expires, the scopes granted, the account's
  * email and name, and when it was connected. Sealed with a key derived from
  * SESSION_SECRET and tied to the student's uid and the app, like Canva's.
+ * When Google or Microsoft refuses the grant and the connection is dropped,
+ * a sealed "lost" marker (that account's email and name, and when; no
+ * tokens) stays until the student connects again or presses Disconnect
+ * (2026-10-09), so Settings can tell "got disconnected" from "never connected".
  *
  * Errors carry a short code as their message (statusForCloudCode maps it to
  * an HTTP status), never a token, a secret or a provider's error text.
@@ -64,6 +68,13 @@ const TIMEOUT_MS = 15_000;
 const CONNECT_TTL_S = 10 * 60;
 /** A cached access token is handed out only while it has more than 5 minutes left. */
 const SKEW_S = 300;
+/**
+ * A refresh the browser asks for (`{ refresh: true }`, after Drive or Graph
+ * said 401) is skipped when this connection was refreshed less than 30
+ * seconds ago: the current token is handed back instead, so a page that keeps
+ * getting 401 can't make us hammer Google or Microsoft (2026-10-09).
+ */
+export const FORCED_REFRESH_GAP_MS = 30_000;
 
 const nowS = () => Math.floor(Date.now() / 1000);
 
@@ -251,6 +262,21 @@ export interface Connection {
   name: string;
   /** Epoch ms. */
   connectedAt: number;
+  /** When the access token was last refreshed, epoch ms (2026-10-09; absent or 0 = not since connecting). */
+  refreshedAt?: number;
+}
+
+/**
+ * What's kept when a connection is dropped because Google or Microsoft
+ * refused the grant (2026-10-09): who it was and when, never a token, so
+ * Settings can say "Reconnect" instead of a plain "Connect". Sealed like a
+ * connection.
+ */
+export interface LostConnection {
+  email: string;
+  name: string;
+  /** Epoch ms. */
+  at: number;
 }
 
 /**
@@ -270,27 +296,37 @@ async function sealKey(secret: string): Promise<CryptoKey> {
   );
 }
 
-const aad = (uid: string, app: CloudApp) => new TextEncoder().encode(`${uid}\n${app}`);
+/** The lost-connection marker gets its own additional data, so a sealed marker can never open as a connection (or back). */
+const aad = (uid: string, app: CloudApp, kind = "") => new TextEncoder().encode(kind ? `${uid}\n${app}\n${kind}` : `${uid}\n${app}`);
 
-export async function sealConnection(conn: Connection, uid: string, app: CloudApp, secret: string): Promise<string> {
+async function sealJson(value: unknown, additional: Uint8Array, secret: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const data = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv, additionalData: aad(uid, app) },
+    { name: "AES-GCM", iv, additionalData: additional },
     await sealKey(secret),
-    new TextEncoder().encode(JSON.stringify(conn)),
+    new TextEncoder().encode(JSON.stringify(value)),
   );
   return `${b64url(iv)}.${b64url(new Uint8Array(data))}`;
 }
 
+/** The sealed JSON, or throws (wrong key, student, app or kind; tampered). */
+async function openJson(sealed: string, additional: Uint8Array, secret: string): Promise<any> {
+  const [iv, data] = sealed.split(".");
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: b64urlDecode(iv), additionalData: additional },
+    await sealKey(secret),
+    b64urlDecode(data),
+  );
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+export function sealConnection(conn: Connection, uid: string, app: CloudApp, secret: string): Promise<string> {
+  return sealJson(conn, aad(uid, app), secret);
+}
+
 export async function openConnection(sealed: string, uid: string, app: CloudApp, secret: string): Promise<Connection | null> {
   try {
-    const [iv, data] = sealed.split(".");
-    const plain = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: b64urlDecode(iv), additionalData: aad(uid, app) },
-      await sealKey(secret),
-      b64urlDecode(data),
-    );
-    const c = JSON.parse(new TextDecoder().decode(plain));
+    const c = await openJson(sealed, aad(uid, app), secret);
     if (typeof c?.refresh !== "string" || typeof c?.access !== "string" || typeof c?.client !== "string") return null;
     return {
       client: c.client,
@@ -301,7 +337,22 @@ export async function openConnection(sealed: string, uid: string, app: CloudApp,
       email: typeof c.email === "string" ? c.email : "",
       name: typeof c.name === "string" ? c.name : "",
       connectedAt: Number(c.connectedAt) || 0,
+      refreshedAt: Number(c.refreshedAt) || 0,
     };
+  } catch {
+    return null;
+  }
+}
+
+export function sealLost(lost: LostConnection, uid: string, app: CloudApp, secret: string): Promise<string> {
+  return sealJson(lost, aad(uid, app, "lost"), secret);
+}
+
+export async function openLost(sealed: string, uid: string, app: CloudApp, secret: string): Promise<LostConnection | null> {
+  try {
+    const v = await openJson(sealed, aad(uid, app, "lost"), secret);
+    if (!v || typeof v !== "object") return null;
+    return { email: typeof v.email === "string" ? v.email : "", name: typeof v.name === "string" ? v.name : "", at: Number(v.at) || 0 };
   } catch {
     return null;
   }
@@ -383,9 +434,22 @@ export interface FinishResult {
 
 export interface AppStatus {
   connected: boolean;
+  /**
+   * True when the connection was dropped because Google or Microsoft refused
+   * the grant (the student removed Averages.io from their account, say) and
+   * they haven't connected again or pressed Disconnect since (2026-10-09).
+   * email and name are then the account that was connected.
+   */
+  lost: boolean;
   email: string;
   name: string;
   scopes: string[];
+}
+
+/** Options for accessToken (POST /cloud/:app/token's body). */
+export interface TokenOptions {
+  /** Refresh even when the cached token looks fine (the browser just got a 401 with it). */
+  refresh?: boolean;
 }
 
 export interface CloudToken {
@@ -401,6 +465,7 @@ function own<T>(map: Record<string, T>, key: string): T | null {
 }
 
 const connKey = (app: CloudApp) => `conn:${app}`;
+const lostKey = (app: CloudApp) => `lost:${app}`;
 
 /** One student's Google Drive and OneDrive connections. */
 export class CloudAccount {
@@ -430,6 +495,25 @@ export class CloudAccount {
 
   async save(uid: string, app: CloudApp, conn: Connection): Promise<void> {
     await this.storage.put(connKey(app), await sealConnection(conn, uid, app, secretOf(this.env.SESSION_SECRET)!));
+  }
+
+  /** The "connection was lost" marker for `app`, or null. */
+  async loadLost(uid: string, app: CloudApp): Promise<LostConnection | null> {
+    const sealed = await this.storage.get<string>(lostKey(app));
+    const secret = secretOf(this.env.SESSION_SECRET);
+    if (typeof sealed !== "string" || !secret) return null;
+    return openLost(sealed, uid, app, secret);
+  }
+
+  /** Remembers that `conn` was dropped because the provider refused its grant (no tokens kept). Never throws. */
+  async markLost(uid: string, app: CloudApp, conn: Connection): Promise<void> {
+    const secret = secretOf(this.env.SESSION_SECRET);
+    if (!secret) return;
+    try {
+      await this.storage.put(lostKey(app), await sealLost({ email: conn.email, name: conn.name, at: Date.now() }, uid, app, secret));
+    } catch {
+      /* only a label for Settings: the connection is dropped either way */
+    }
   }
 
   async pending(): Promise<Record<string, PendingConnect>> {
@@ -568,7 +652,10 @@ export class CloudAccount {
       email: who.email,
       name: who.name,
       connectedAt: Date.now(),
+      refreshedAt: 0,
     });
+    // Connected again: no longer "lost".
+    await this.storage.delete(lostKey(app));
     this.generation[app]++;
     this.refreshing[app] = null;
     return { outcome: "connected", returnTo };
@@ -578,24 +665,39 @@ export class CloudAccount {
     const out = {} as Record<CloudApp, AppStatus>;
     for (const app of CLOUD_APPS) {
       const conn = await this.load(uid, app);
+      const lost = conn ? null : await this.loadLost(uid, app);
       out[app] = conn
-        ? { connected: true, email: conn.email, name: conn.name, scopes: conn.scopes }
-        : { connected: false, email: "", name: "", scopes: [] };
+        ? { connected: true, lost: false, email: conn.email, name: conn.name, scopes: conn.scopes }
+        : lost
+          ? { connected: false, lost: true, email: lost.email, name: lost.name, scopes: [] }
+          : { connected: false, lost: false, email: "", name: "", scopes: [] };
     }
     return out;
   }
 
   /* ── tokens ── */
 
-  /** A short-lived access token for the browser, refreshing first when under 5 minutes are left. */
-  async accessToken(uid: string, app: CloudApp): Promise<CloudToken> {
+  /**
+   * A short-lived access token for the browser, refreshing first when under
+   * 5 minutes are left. With `refresh` (2026-10-09: the browser got a 401
+   * with the cached one, as happens for up to an hour after a student removes
+   * Averages.io from their account) it refreshes anyway, unless this
+   * connection was refreshed in the last FORCED_REFRESH_GAP_MS. A refused
+   * grant drops the connection and throws cloud_reconnect_needed, so the
+   * browser stops asking instead of being handed the same dead token.
+   */
+  async accessToken(uid: string, app: CloudApp, opts: TokenOptions = {}): Promise<CloudToken> {
     if (!cloudConfigured(this.env, app)) throw new CloudError("cloud_not_configured", 503);
+    const forced = opts?.refresh === true;
     // Twice at most: a refresh whose answer was discarded because the
     // connection changed meanwhile reads the new connection once more.
     for (let attempt = 0; attempt < 2; attempt++) {
       const conn = await this.load(uid, app);
       if (!conn) throw new CloudError("cloud_not_connected", 409);
-      const fresh = conn.accessExp - SKEW_S > nowS() ? conn : await this.refresh(uid, app, conn);
+      const stale = conn.accessExp - SKEW_S <= nowS();
+      const justRefreshed = !!conn.refreshedAt && Date.now() - conn.refreshedAt < FORCED_REFRESH_GAP_MS;
+      // Forced or not, a refresh goes through refresh(), which shares one already on its way.
+      const fresh = !stale && !(forced && !justRefreshed) ? conn : await this.refresh(uid, app, conn);
       if (fresh) {
         return { access_token: fresh.access, expires_in: Math.max(0, fresh.accessExp - nowS()), email: fresh.email, scopes: fresh.scopes };
       }
@@ -633,15 +735,18 @@ export class CloudAccount {
           // then on its way out: save it BEFORE handing out the access token.
           refresh: typeof json.refresh_token === "string" && json.refresh_token ? json.refresh_token : conn.refresh,
           scopes: typeof json.scope === "string" && json.scope.trim() ? parseScopes(app, json.scope) : conn.scopes,
+          refreshedAt: Date.now(),
         };
         await this.save(uid, app, next);
         return next;
       } catch (error) {
         // A refused grant won't work next time either: drop the connection so
-        // the app shows Connect instead of failing forever.
+        // the app shows Connect instead of failing forever, and remember
+        // whose it was (2026-10-09) so Settings can say it was lost.
         if (error instanceof CloudError && error.message === "cloud_reconnect_needed" && gen === this.generation[app]) {
           this.generation[app]++;
           await this.storage.delete(connKey(app));
+          await this.markLost(uid, app, conn);
         }
         throw error;
       } finally {
@@ -674,7 +779,11 @@ export class CloudAccount {
       }
     }
     await this.storage.delete(connKey(app));
+    // Disconnect also forgets a lost connection (2026-10-09): Settings goes back to plain "Connect".
+    await this.storage.delete(lostKey(app));
     const other: CloudApp = app === "gdrive" ? "onedrive" : "gdrive";
-    if ((await this.storage.get(connKey(other))) === undefined) await this.storage.deleteAll();
+    if ((await this.storage.get(connKey(other))) === undefined && (await this.storage.get(lostKey(other))) === undefined) {
+      await this.storage.deleteAll();
+    }
   }
 }

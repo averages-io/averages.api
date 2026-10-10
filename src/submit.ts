@@ -331,9 +331,13 @@ function asList(value: unknown): Raw[] {
 }
 
 /** Files nest as `files: [...]`, `files: {file: [...]}` or a single object, like assignments'. */
-function revisionFiles(rev: Raw): Revision["files"] {
+function rawRevisionFiles(rev: Raw): Raw[] {
   const files = rev?.attachments?.files;
-  const list = Array.isArray(files) ? files : files && typeof files === "object" && "file" in files ? asList(files.file) : asList(files);
+  return Array.isArray(files) ? asList(files) : files && typeof files === "object" && "file" in files ? asList(files.file) : asList(files);
+}
+
+function revisionFiles(rev: Raw): Revision["files"] {
+  const list = rawRevisionFiles(rev);
   const out: Revision["files"] = [];
   for (const f of list) {
     const id = String(f?.id ?? "");
@@ -393,6 +397,161 @@ export function adaptHistory(payload: unknown, uid: string, tz: string): Revisio
   }
   out.sort((a, b) => b.created - a.created || Number(b.id) - Number(a.id));
   return out.slice(0, 50);
+}
+
+/** The same "only this student's" rule as adaptHistory, for the raw revisions. */
+function isTheirs(raw: Raw, uid: string): boolean {
+  return raw?.uid === undefined || raw?.uid === null || String(raw.uid) === uid;
+}
+
+/**
+ * One file the student turned in, with its Schoology download path (Worker
+ * only, never sent to the browser), for GET /data/submission-file
+ * (2026-10-09). Looked up in the student's own history payload: the revision
+ * must be theirs (adaptHistory's uid rule) and have that file. Named exactly
+ * as the history and the Files page name it. Null when it isn't there.
+ */
+export function findSubmittedFile(
+  payload: unknown,
+  uid: string,
+  revisionId: string,
+  fileId: string,
+): { name: string; downloadPath: string; size: number } | null {
+  if (!ID_RE.test(revisionId) || !ID_RE.test(fileId)) return null;
+  for (const raw of listOf<Raw>(payload, "revision")) {
+    if (!raw || typeof raw !== "object" || !isTheirs(raw, uid)) continue;
+    if (String(raw.revision_id ?? raw.id ?? "") !== revisionId) continue;
+    for (const f of rawRevisionFiles(raw)) {
+      if (String(f?.id ?? "") !== fileId) continue;
+      return findAttachment({ attachments: { files: [f] } }, fileId);
+    }
+  }
+  return null;
+}
+
+/* ── what the student turned in, for the Files page (2026-10-09) ──── */
+
+/** Most assignments whose history GET /data/submissions reads. */
+export const MAX_SUBMISSION_ASSIGNMENTS = 60;
+/** Most files it lists. */
+export const MAX_SUBMITTED_FILES = 500;
+/**
+ * Schoology calls one GET /data/submissions may make in all (sections,
+ * assignment lists and histories). The Free plan allows 50 subrequests per
+ * request; this leaves room, so with 12 classes about 32 histories are read,
+ * with 4 classes about 40 (and never more than MAX_SUBMISSION_ASSIGNMENTS).
+ */
+export const SUBMISSION_CALL_BUDGET = 45;
+
+/**
+ * Kinds of grade item nothing gets turned in to here: quizzes and tests run
+ * in Schoology's own player, discussions are posts (the same kinds adapt.ts's
+ * TYPE_MAP files as "assessment" and "discussion").
+ */
+const NO_DROPBOX_TYPES = new Set(["discussion", "assessment", "assessment_v2", "quiz", "test"]);
+
+/** Work due further out than this is read last: little of it has been turned in yet. */
+const FAR_AHEAD_MS = 14 * 24 * 60 * 60 * 1000;
+
+export interface TurnInAssignment {
+  /** Section id. */
+  course: string;
+  /** The assignment's id (its grade item, as /submit/history uses it). */
+  id: string;
+  title: string;
+}
+
+/** Schoology's "0" / 0 / false. A missing field doesn't count as no. */
+function saysNo(value: unknown): boolean {
+  return value === false || value === 0 || value === "0";
+}
+
+/** A Schoology time (unix seconds, or "YYYY-MM-DD HH:MM:SS" read as UTC: only for ordering) as ms, or 0. */
+function orderMs(value: unknown): number {
+  if (typeof value === "number" || (typeof value === "string" && /^\d{1,12}$/.test(value))) return epochMs(value);
+  const m = typeof value === "string" ? /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(value.trim()) : null;
+  if (!m) return 0;
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/**
+ * The assignments a student can turn files in to, most relevant first: no
+ * quizzes, tests or discussions, nothing whose `allow_dropbox` is "0", ids
+ * that are digits. "Most relevant" is the due date (else Schoology's
+ * last_updated), newest first; work due more than two weeks from `now` goes
+ * after everything else, soonest first. All of them: the caller cuts.
+ */
+export function turnInAssignments(bySection: Record<string, Raw[] | null>, now: number = Date.now()): TurnInAssignment[] {
+  const ranked: { a: TurnInAssignment; at: number; ahead: boolean }[] = [];
+  for (const [course, list] of Object.entries(bySection)) {
+    if (!ID_RE.test(course) || !Array.isArray(list)) continue;
+    for (const raw of list) {
+      if (!raw || typeof raw !== "object") continue;
+      const id = String(raw.id ?? "");
+      if (!ID_RE.test(id)) continue;
+      if (NO_DROPBOX_TYPES.has(String(raw.type ?? "").toLowerCase())) continue;
+      if (saysNo(raw.allow_dropbox)) continue;
+      const at = orderMs(raw.due) || orderMs(raw.last_updated);
+      const title = toPlainText(raw.title ?? "").slice(0, 255) || "Assignment";
+      ranked.push({ a: { course, id, title }, at, ahead: at > now + FAR_AHEAD_MS });
+    }
+  }
+  ranked.sort((x, y) => {
+    if (x.ahead !== y.ahead) return x.ahead ? 1 : -1;
+    return x.ahead ? x.at - y.at : y.at - x.at;
+  });
+  return ranked.map((r) => r.a);
+}
+
+/** A file in the Files page's "Turned in" list. No download path: GET /data/submission-file looks it up again. */
+export interface SubmittedFile {
+  /** Schoology's file id. */
+  id: string;
+  /** Shown name, as the history names it (extension included). */
+  name: string;
+  ext: string;
+  /** Bytes; 0 when Schoology didn't say. */
+  size: number;
+  /** Section id. */
+  course: string;
+  /** The assignment (grade item) id. */
+  assignment: string;
+  assignmentTitle: string;
+  /** The revision it was turned in with. */
+  revision: string;
+  /** When that revision was turned in, epoch ms (0 when Schoology didn't say). */
+  at: number;
+  late: boolean;
+}
+
+/** The files in one assignment's history: only this student's revisions (adaptHistory), never drafts. */
+export function submittedFiles(payload: unknown, uid: string, assignment: TurnInAssignment): SubmittedFile[] {
+  const out: SubmittedFile[] = [];
+  for (const rev of adaptHistory(payload, uid, "UTC")) {
+    if (rev.draft) continue;
+    for (const f of rev.files) {
+      out.push({
+        id: f.id,
+        name: f.name,
+        ext: extOf(f.name),
+        size: f.size,
+        course: assignment.course,
+        assignment: assignment.id,
+        assignmentTitle: assignment.title,
+        revision: rev.id,
+        at: rev.created,
+        late: rev.late,
+      });
+    }
+  }
+  return out;
+}
+
+/** Newest first (then by name), at most MAX_SUBMITTED_FILES; `cut` when there were more. */
+export function newestSubmittedFiles(files: SubmittedFile[]): { files: SubmittedFile[]; cut: boolean } {
+  const sorted = [...files].sort((a, b) => b.at - a.at || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  return { files: sorted.slice(0, MAX_SUBMITTED_FILES), cut: sorted.length > MAX_SUBMITTED_FILES };
 }
 
 /** One formatter per zone (building one is slow; see classroom.ts). */

@@ -143,6 +143,16 @@ import type { CloudStore } from "./cloudStore.ts";
 import type { PushStore } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
 import { submitRoutes } from "./submitRoutes.ts";
+import {
+  findSubmittedFile,
+  getHistory,
+  MAX_SUBMISSION_ASSIGNMENTS,
+  newestSubmittedFiles,
+  SUBMISSION_CALL_BUDGET,
+  submittedFiles,
+  turnInAssignments,
+  type SubmittedFile,
+} from "./submit.ts";
 import { canvaExportRoutes } from "./canvaExport.ts";
 import { canvaFolderRoutes } from "./canvaFolders.ts";
 
@@ -1290,28 +1300,37 @@ app.get("/data/attachment", async (c) => {
     const file = findAttachment(parent, fileId);
     if (!file || !file.downloadPath) return c.json({ error: "file_not_found" }, 404);
     const upstream = await openAttachment(file.downloadPath, session);
-    // RFC 5987 filename*, plus a plain ASCII fallback, so any name downloads under its real title.
-    const ascii = file.name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-    let utf8Name: string;
-    try {
-      utf8Name = encodeURIComponent(file.name).replace(/['()*]/g, (ch) => "%" + ch.charCodeAt(0).toString(16).toUpperCase());
-    } catch {
-      utf8Name = encodeURIComponent(ascii); // a lone surrogate can't be encoded; the ASCII name still works
-    }
-    const headers = new Headers({
-      "Content-Type": upstream.headers.get("Content-Type") || "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${ascii}"; filename*=UTF-8''${utf8Name}`,
-      "Cache-Control": "private, no-store",
-      "X-Content-Type-Options": "nosniff",
-    });
-    const length = upstream.headers.get("Content-Length");
-    if (length) headers.set("Content-Length", length);
-    return new Response(upstream.body, { status: 200, headers });
+    return downloadResponse(upstream, file.name);
   } catch (error) {
     if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
     return c.json({ error: "unexpected_error" }, 500);
   }
 });
+
+/**
+ * A file from Schoology streamed on to the browser as a download named
+ * `name` (moved out of GET /data/attachment on 2026-10-09 so
+ * GET /data/submission-file sends exactly the same headers).
+ */
+function downloadResponse(upstream: Response, name: string): Response {
+  // RFC 5987 filename*, plus a plain ASCII fallback, so any name downloads under its real title.
+  const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  let utf8Name: string;
+  try {
+    utf8Name = encodeURIComponent(name).replace(/['()*]/g, (ch) => "%" + ch.charCodeAt(0).toString(16).toUpperCase());
+  } catch {
+    utf8Name = encodeURIComponent(ascii); // a lone surrogate can't be encoded; the ASCII name still works
+  }
+  const headers = new Headers({
+    "Content-Type": upstream.headers.get("Content-Type") || "application/octet-stream",
+    "Content-Disposition": `attachment; filename="${ascii}"; filename*=UTF-8''${utf8Name}`,
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  const length = upstream.headers.get("Content-Length");
+  if (length) headers.set("Content-Length", length);
+  return new Response(upstream.body, { status: 200, headers });
+}
 
 /**
  * Every file in the signed-in student's courses, for the Files page
@@ -1362,6 +1381,111 @@ app.get("/data/files", async (c) => {
     await Promise.all(Array.from({ length: Math.min(4, courses.length) }, worker));
     const { files, partial } = adaptCourseFiles(bySection);
     return c.json({ courses, files, partial });
+  } catch (error) {
+    if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
+    return c.json({ error: "unexpected_error" }, 500);
+  }
+});
+
+/** Runs `fn` on every item, at most `limit` at once (Schoology's rate limit is unpublished). */
+async function eachAtMost<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+/**
+ * The files the signed-in student turned in on Schoology, for the Files page
+ * (2026-10-09): every file in their own submission revisions (drafts left
+ * out), newest first, at most 500. Ids and names only, never download paths;
+ * GET /data/submission-file looks a file up again to download it. Nothing is
+ * stored.
+ *
+ * The same classes as GET /data/files (12 at most, 4 at a time). Only
+ * assignments that take files are asked about (see turnInAssignments in
+ * submit.ts: no quizzes, tests or discussions, nothing with allow_dropbox
+ * "0"), most relevant first, at most 60 and never more than the Free plan's
+ * subrequest limit leaves room for (SUBMISSION_CALL_BUDGET), 6 histories at
+ * a time. A 404 from a history is "nothing turned in"; any other failure, or
+ * assignments left unread, makes the answer `partial: true`.
+ *
+ * Google Classroom: nothing to list here (work is turned in on Classroom and
+ * the files are in the student's own Drive).
+ */
+app.get("/data/submissions", async (c) => {
+  const session = await sessionFrom(c);
+  if (!session) return c.json({ error: "not_authenticated" }, 401);
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  c.header("Cache-Control", "private, no-store");
+  if (isGoogle(session)) return c.json({ platform: "classroom", courses: [], files: [], partial: false });
+  try {
+    const { COURSES } = adaptCourses(await getSections(session.uid, session), []);
+    const courses = COURSES.slice(0, 12).map((course) => ({ id: course.id, name: course.name, color: course.color }));
+    const bySection: Record<string, any[] | null> = {};
+    await eachAtMost(courses, 4, async (course) => {
+      bySection[course.id] = ID_RE.test(course.id) ? await getAssignments(course.id, session).catch(() => null) : null;
+    });
+    // A class that didn't answer, or a full page (Schoology may have more than it sent).
+    let partial = Object.values(bySection).some((list) => !list || list.length >= 200);
+
+    const candidates = turnInAssignments(bySection);
+    const room = Math.max(0, Math.min(MAX_SUBMISSION_ASSIGNMENTS, SUBMISSION_CALL_BUDGET - 1 - courses.length));
+    if (candidates.length > room) partial = true;
+    const found: SubmittedFile[] = [];
+    await eachAtMost(candidates.slice(0, room), 6, async (assignment) => {
+      try {
+        const raw = await getHistory(session, assignment.course, assignment.id, session.uid);
+        found.push(...submittedFiles(raw, session.uid, assignment));
+      } catch (error) {
+        // Nothing turned in can come back as a 404 (as in /submit/history): not a failure.
+        if (error instanceof SchoologyError && error.status === 404) return;
+        partial = true;
+      }
+    });
+    const { files, cut } = newestSubmittedFiles(found);
+    return c.json({ platform: "schoology", courses, files, partial: partial || cut });
+  } catch (error) {
+    if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
+    return c.json({ error: "unexpected_error" }, 500);
+  }
+});
+
+/**
+ * Downloads one file the student turned in (the Files page's "Turned in"
+ * list, 2026-10-09). The browser navigates here with ids only; the file is
+ * looked up again in the student's own submission history (their revisions
+ * only, as /submit/history shows them) and streamed straight through from
+ * Schoology with the same safe download code as GET /data/attachment, never
+ * stored. 404 not_found when that revision or file isn't the student's.
+ */
+app.get("/data/submission-file", async (c) => {
+  const session = await sessionFrom(c);
+  if (!session) return c.json({ error: "not_authenticated" }, 401);
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  // Google Classroom files live in Google Drive and open there; they never pass through this Worker.
+  if (isGoogle(session)) return c.json({ error: "classroom_files_open_in_drive" }, 404);
+  const section = c.req.query("section") ?? "";
+  const assignment = c.req.query("assignment") ?? "";
+  const revision = c.req.query("revision") ?? "";
+  const fileId = c.req.query("file") ?? "";
+  if (![section, assignment, revision, fileId].every((id) => ID_RE.test(id))) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  try {
+    let history: unknown;
+    try {
+      history = await getHistory(session, section, assignment, session.uid);
+    } catch (error) {
+      // Nothing turned in (or no such assignment for this student).
+      if (error instanceof SchoologyError && error.status === 404) return c.json({ error: "not_found" }, 404);
+      throw error;
+    }
+    const file = findSubmittedFile(history, session.uid, revision, fileId);
+    if (!file || !file.downloadPath) return c.json({ error: "not_found" }, 404);
+    const upstream = await openAttachment(file.downloadPath, session);
+    return downloadResponse(upstream, file.name);
   } catch (error) {
     if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
     return c.json({ error: "unexpected_error" }, 500);
@@ -1762,14 +1886,20 @@ function cloudBack(origin: string, returnTo: string, outcome: string, cloudApp: 
   return `${origin}${withQuery(withQuery(safeAppPath(returnTo, "/settings"), "cloud", outcome), "app", cloudApp)}`;
 }
 
-/** Settings' "Connected as ..." lines for both apps, and whether each is set up on this Worker. */
+/**
+ * Settings' "Connected as ..." lines for both apps, and whether each is set up
+ * on this Worker. `lost: true` (2026-10-09, with `connected: false`) when the
+ * connection was dropped because Google or Microsoft refused it; `email` and
+ * `name` are then the account that was connected, so Settings can offer to
+ * reconnect it.
+ */
 app.get("/cloud/status", requireSession, async (c) => {
   const session = c.get("session");
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
   c.header("Cache-Control", "private, no-store");
   const answer: Record<string, unknown> = {};
   for (const cloudApp of CLOUD_APPS) {
-    answer[cloudApp] = { configured: cloudConfigured(c.env, cloudApp), connected: false, email: "", name: "", scopes: [] };
+    answer[cloudApp] = { configured: cloudConfigured(c.env, cloudApp), connected: false, lost: false, email: "", name: "", scopes: [] };
   }
   // Incognito keeps nothing, so it can't be connected.
   if (isIncognito(session)) return c.json({ ...answer, incognito: true });
@@ -1845,11 +1975,37 @@ app.get("/cloud/:app/callback", async (c) => {
   }
 });
 
+/** POST /cloud/:app/token's body: optional (older pages send `{}`), at most 1 KB. Null when it isn't a JSON object. */
+async function tokenRequestBody(c: any): Promise<Record<string, unknown> | null> {
+  if (Number(c.req.header("Content-Length") ?? 0) > 1024) return null;
+  let text: string;
+  try {
+    text = await c.req.text();
+  } catch {
+    return null;
+  }
+  if (text.length > 1024) return null;
+  if (!text.trim()) return {};
+  try {
+    const body = JSON.parse(text);
+    return body && typeof body === "object" && !Array.isArray(body) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A short-lived access token for the browser: `{access_token, expires_in,
  * email, scopes}`. The cached one while it has more than 5 minutes left,
  * otherwise a fresh one (refreshed inside the student's CloudStore, one at a
  * time). JSON POST from our own app only, so another site can't fetch it.
+ *
+ * `{ "refresh": true }` (2026-10-09): the browser just got a 401 from Drive or
+ * Graph with the token it has. A student who removes Averages.io from their
+ * account leaves us a cached token that looks good for up to an hour, and
+ * handing it out again made a loop; this refreshes even so (at most once per
+ * 30 seconds per connection: within that the current token comes back). A
+ * refused grant answers 409 cloud_reconnect_needed and forgets the connection.
  */
 app.post("/cloud/:app/token", requireSession, async (c) => {
   const cloudApp = c.req.param("app");
@@ -1861,8 +2017,11 @@ app.post("/cloud/:app/token", requireSession, async (c) => {
   c.header("Cache-Control", "no-store");
   if (isIncognito(session)) return c.json({ error: "incognito_mode" }, 403);
   if (!cloudConfigured(c.env, cloudApp)) return c.json({ error: "cloud_not_configured" }, 503);
+  const body = await tokenRequestBody(c);
+  if (!body) return c.json({ error: "invalid_body" }, 400);
   try {
-    return c.json(await cloudStore(c.env, session.uid, c.req.url).accessToken(session.uid, cloudApp));
+    const opts = body.refresh === true ? { refresh: true } : {};
+    return c.json(await cloudStore(c.env, session.uid, c.req.url).accessToken(session.uid, cloudApp, opts));
   } catch (error) {
     return cloudFailure(c, error, "cloud_unavailable");
   }
@@ -1870,8 +2029,9 @@ app.post("/cloud/:app/token", requireSession, async (c) => {
 
 /**
  * Disconnect: revokes Google's grant where that's safe (see
- * CloudAccount.disconnect) and forgets the tokens. Allowed in Incognito, so
- * a student can always remove a connection. Files stay in their Drive.
+ * CloudAccount.disconnect) and forgets the tokens, and a lost connection's
+ * marker (2026-10-09). Allowed in Incognito, so a student can always remove a
+ * connection. Files stay in their Drive.
  */
 app.delete("/cloud/:app/connection", requireSession, async (c) => {
   const cloudApp = c.req.param("app");

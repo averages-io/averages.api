@@ -22,6 +22,7 @@ import {
   type CloudToken,
   type ConnectOptions,
   type FinishResult,
+  type TokenOptions,
 } from "./cloudConnect.ts";
 
 export class CloudStore extends DurableObject<CloudConnectEnv> {
@@ -44,8 +45,8 @@ export class CloudStore extends DurableObject<CloudConnectEnv> {
   status(uid: string): Promise<Record<CloudApp, AppStatus>> {
     return this.account.status(uid);
   }
-  accessToken(uid: string, app: CloudApp): Promise<CloudToken> {
-    return this.account.accessToken(uid, app);
+  accessToken(uid: string, app: CloudApp, opts: TokenOptions = {}): Promise<CloudToken> {
+    return this.account.accessToken(uid, app, opts);
   }
   disconnect(uid: string, app: CloudApp): Promise<void> {
     return this.account.disconnect(uid, app);

@@ -59,6 +59,13 @@ const ATTACHMENT_BASE = `https://${API_HOST}/v1/attachment/sandbox/`;
 const UPLOAD_BASE = `https://${API_HOST}/v1/upload/sandbox/`;
 /** Most sent messages, uploads and revisions remembered, each. */
 export const MAX_KEPT = 50;
+/**
+ * Turned-in files' bytes are kept (so the Files page's "Turned in" list can
+ * download them, 2026-10-09) only up to 1 MB each and 8 MB in all, oldest
+ * dropped first; anything else downloads as a one-page PDF that says so.
+ */
+export const MAX_KEPT_FILE_BYTES = 1024 * 1024;
+export const MAX_KEPT_BYTES_TOTAL = 8 * 1024 * 1024;
 
 type Raw = Record<string, any>;
 
@@ -79,8 +86,8 @@ const state = {
   sent: [] as MessageRow[],
   /** Threads opened from the inbox (Schoology marks them read). */
   read: new Set<string>(),
-  /** Files announced with POST /upload, by Schoology file id. */
-  uploads: new Map<string, { filename: string; filesize: number; md5: string; uploaded: boolean; at: number }>(),
+  /** Files announced with POST /upload, by Schoology file id (with their bytes once sent, within the caps above). */
+  uploads: new Map<string, { filename: string; filesize: number; md5: string; uploaded: boolean; at: number; bytes?: Uint8Array }>(),
   /** Turned-in revisions, oldest first. */
   revisions: [] as { section: string; assignment: string; raw: Raw }[],
   nextThread: 7800000100,
@@ -439,7 +446,63 @@ const extOf = (name: string) => /\.([a-z0-9]{1,8})$/i.exec(name)?.[1].toLowerCas
 
 function revisionFile(id: string, filename: string, filesize: number, at: number): Raw {
   const ext = extOf(filename);
-  return { id, type: "file", title: filename, filename, filesize, extension: ext, filemime: EXT_MIME[ext] ?? "application/octet-stream", timestamp: unix(at) };
+  // download_path (2026-10-09): Schoology's revision files carry one, and GET /data/submission-file uses it.
+  return { id, type: "file", title: filename, filename, filesize, extension: ext, filemime: EXT_MIME[ext] ?? "application/octet-stream", timestamp: unix(at), download_path: `${ATTACHMENT_BASE}${id}` };
+}
+
+/** The sample work turned in before the review: a generated PDF named for it, made once. */
+const seededBytes = new Map<string, Uint8Array>();
+function seededFileBytes(fileId: string): Uint8Array | null {
+  const seeded = SEEDED_REVISIONS.find((r) => r.file?.id === fileId);
+  if (!seeded?.file) return null;
+  let bytes = seededBytes.get(fileId);
+  if (!bytes) {
+    bytes = makePdf(seeded.file.filename.replace(/\.pdf$/i, ""), ["Sample work turned in on the reviewer account.", "", `${STUDENT.name_display}`]);
+    seededBytes.set(fileId, bytes);
+  }
+  return bytes;
+}
+
+/**
+ * A turned-in file's download: its own bytes when they were kept, else a
+ * one-page PDF that says the sample account didn't keep it. Null for an id
+ * no turn-in has.
+ */
+function turnedInDownload(fileId: string): Response | null {
+  const seeded = seededFileBytes(fileId);
+  if (seeded) return new Response(seeded.slice(), { status: 200, headers: { "Content-Type": "application/pdf", "Content-Length": String(seeded.byteLength) } });
+  let file: Raw | undefined;
+  for (const r of state.revisions) file ??= rawFiles(r.raw).find((f) => f.id === fileId);
+  if (!file) return null;
+  const upload = state.uploads.get(fileId);
+  if (upload?.bytes) {
+    const type = EXT_MIME[extOf(upload.filename)] ?? "application/octet-stream";
+    return new Response(upload.bytes.slice(), { status: 200, headers: { "Content-Type": type, "Content-Length": String(upload.bytes.byteLength) } });
+  }
+  const stand = makePdf(String(file.filename ?? "File"), ["The sample account keeps turned-in files up to 1 MB (8 MB in all).", "This one wasn't kept, so here is a stand-in."]);
+  return new Response(stand, { status: 200, headers: { "Content-Type": "application/pdf", "Content-Length": String(stand.byteLength) } });
+}
+
+function rawFiles(raw: Raw): Raw[] {
+  const list = raw?.attachments?.files?.file;
+  return Array.isArray(list) ? list : [];
+}
+
+/** Keeps an upload's bytes within MAX_KEPT_FILE_BYTES / MAX_KEPT_BYTES_TOTAL, dropping the oldest kept first. */
+function keepBytes(fileId: string, body: unknown): void {
+  const upload = state.uploads.get(fileId);
+  if (!upload) return;
+  const view = body instanceof ArrayBuffer ? new Uint8Array(body) : ArrayBuffer.isView(body) ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength) : typeof body === "string" ? new TextEncoder().encode(body) : null;
+  if (!view || view.byteLength > MAX_KEPT_FILE_BYTES) return;
+  upload.bytes = view.slice();
+  let total = 0;
+  for (const u of state.uploads.values()) total += u.bytes?.byteLength ?? 0;
+  for (const [id, u] of state.uploads) {
+    if (total <= MAX_KEPT_BYTES_TOTAL) break;
+    if (!u.bytes || id === fileId) continue;
+    total -= u.bytes.byteLength;
+    delete u.bytes;
+  }
 }
 
 function seededRevisions(section: string, assignment: string, now: number): Raw[] {
@@ -447,7 +510,8 @@ function seededRevisions(section: string, assignment: string, now: number): Raw[
     const at = now - r.daysAgo * DAY;
     const raw: Raw = { revision_id: r.revisionId, uid: REVIEW_UID, created: unix(at), late: 0, draft: 0, num_items: r.file ? 1 : 0 };
     if (r.body) raw.body = r.body;
-    if (r.file) raw.attachments = { files: { file: [revisionFile(r.file.id, r.file.filename, r.file.filesize, at)] } };
+    // Its size is the PDF it downloads as (2026-10-09).
+    if (r.file) raw.attachments = { files: { file: [revisionFile(r.file.id, r.file.filename, seededFileBytes(r.file.id)?.byteLength ?? r.file.filesize, at)] } };
     return raw;
   });
 }
@@ -470,6 +534,7 @@ function putUpload(fileId: string, body: unknown): Response {
   // Schoology checks the bytes against what POST /upload announced.
   if (bodyBytes(body) !== upload.filesize) return json(400, { error: "File size does not match" });
   upload.uploaded = true;
+  keepBytes(fileId, body);
   return json(200, { id: fileId, filename: upload.filename, filesize: upload.filesize, md5_checksum: upload.md5 });
 }
 
@@ -613,7 +678,8 @@ function get(path: string[], url: URL, now: number): Response {
 
   if (realm === "attachment" && id === "sandbox" && path.length === 3) {
     const bytes = bytesOf(sub);
-    if (!bytes) return notFound();
+    // Not a teacher's file: maybe one the reviewer turned in (2026-10-09).
+    if (!bytes) return turnedInDownload(sub) ?? notFound();
     return new Response(bytes.slice(), {
       status: 200,
       headers: { "Content-Type": MIME[FILES[sub].kind], "Content-Length": String(bytes.byteLength) },
