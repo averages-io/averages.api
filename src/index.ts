@@ -138,7 +138,7 @@ import {
 } from "./classroom.ts";
 import { getRecipients, namesFrom } from "./messages.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
-import { rateLimit, SlidingWindow } from "./rateLimit.ts";
+import { rateLimit } from "./rateLimit.ts";
 import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
 import type { CloudStore } from "./cloudStore.ts";
@@ -1659,14 +1659,10 @@ app.delete("/canva/connection", requireSession, async (c) => {
  * is "1" AND the REVIEW_SECRET (or SCHOOLS_ADMIN_KEY) secret is set, and then only for a caller
  * who presents that key. Tokens never appear in the answer or the logs.
  *
- * On top of the /canva rule (30/min) and Flagship's canva-integration switch,
- * a strict in-memory cap of 3 runs per 10 minutes per student (probeWindow):
- * each run makes ~20-30 Canva calls, so this keeps a stray loop from hammering
- * Canva. In-memory per isolate, like the rest of src/rateLimit.ts.
+ * Only the general /canva rule (30/min) and Flagship's canva-integration
+ * switch apply. The extra 3-runs-per-10-minutes cap was removed (2026-10-10,
+ * Martin); the key and CANVA_PERMISSION_PROBE still keep it to the developer.
  */
-const probeWindow = new SlidingWindow(1000);
-const PROBE_LIMIT = 3;
-const PROBE_WINDOW_MS = 10 * 60 * 1000;
 
 app.post("/canva/probe", requireSession, async (c) => {
   c.header("Cache-Control", "no-store");
@@ -1695,11 +1691,6 @@ app.post("/canva/probe", requireSession, async (c) => {
   const matches = keys.map((k) => sameString(given, k));
   if (!matches.some(Boolean)) return c.json({ error: "forbidden" }, 403);
 
-  const gate = probeWindow.hit(`canvaProbe|u:${session.uid}`, PROBE_LIMIT, PROBE_WINDOW_MS, Date.now());
-  if (!gate.ok) {
-    c.header("Retry-After", String(gate.retryAfter));
-    return c.json({ error: "rate_limited" }, 429);
-  }
 
   const write = body?.write === true;
   try {
