@@ -58,6 +58,7 @@ import {
   canvaConfigured,
   canvaExportEnabled,
   canvaFoldersEnabled,
+  canvaProbeEnabled,
   EXPORT_SCOPE,
   FOLDER_READ_SCOPE,
   FOLDER_WRITE_SCOPE,
@@ -69,6 +70,7 @@ import {
   listDesigns,
   MAX_IMPORT_BYTES,
   mimeForName,
+  probePermissions,
   safeAppPath,
   statusForCode,
   verifyReturnJwt,
@@ -136,7 +138,7 @@ import {
 } from "./classroom.ts";
 import { getRecipients, namesFrom } from "./messages.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
-import { rateLimit } from "./rateLimit.ts";
+import { rateLimit, SlidingWindow } from "./rateLimit.ts";
 import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
 import type { CloudStore } from "./cloudStore.ts";
@@ -197,6 +199,14 @@ type Bindings = {
    * Canva folders. Until then it lists designs without folders.
    */
   CANVA_FOLDERS_ENABLED?: string;
+  /**
+   * "1" only while testing whether Canva's undocumented design:permission:* /
+   * folder:permission:write scopes do anything (2026-10-10, developer only).
+   * While "1", GET /canva/connect?probe=1 also asks for them and POST
+   * /canva/probe is reachable (it still needs SCHOOLS_ADMIN_KEY). See
+   * canvaProbeEnabled() / probePermissions() in canva.ts.
+   */
+  CANVA_PERMISSION_PROBE?: string;
   /**
    * Google Drive and OneDrive run in the browser (2026-10-05); these are the
    * PUBLIC values the app needs for that, served by GET /config/cloud.
@@ -1593,9 +1603,13 @@ app.get("/canva/connect", async (c) => {
   if (!session || isDemo(session)) return c.redirect(`${origin}/`);
   if (isIncognito(session)) return c.redirect(`${origin}/settings?canva=incognito`);
   const returnTo = safeAppPath(c.req.query("return_to"), "/settings");
+  // Developer only (2026-10-10): also ask for the undocumented permission
+  // scopes, but only while CANVA_PERMISSION_PROBE is "1" (canvaScopes ignores
+  // it otherwise, so a normal Connect is never affected). See POST /canva/probe.
+  const probe = c.req.query("probe") === "1";
   try {
-    // The scopes depend on two switches that can come from Flagship (src/flags.ts): pass them in.
-    return c.redirect(await canvaStore(c.env, session.uid, c.req.url).beginConnect(returnTo, { CANVA_EXPORT_ENABLED: c.env.CANVA_EXPORT_ENABLED, CANVA_FOLDERS_ENABLED: c.env.CANVA_FOLDERS_ENABLED }));
+    // The scopes depend on switches that can come from Flagship (src/flags.ts): pass them in.
+    return c.redirect(await canvaStore(c.env, session.uid, c.req.url).beginConnect(returnTo, { CANVA_EXPORT_ENABLED: c.env.CANVA_EXPORT_ENABLED, CANVA_FOLDERS_ENABLED: c.env.CANVA_FOLDERS_ENABLED, CANVA_PERMISSION_PROBE: c.env.CANVA_PERMISSION_PROBE }, probe));
   } catch (error) {
     errorCode(error, "canva_connect_failed");
     return c.redirect(`${origin}${withQuery(returnTo, "canva", "failed")}`);
@@ -1632,6 +1646,67 @@ app.delete("/canva/connection", requireSession, async (c) => {
     return c.json({ ok: true });
   } catch (error) {
     return canvaFailure(c, error, "canva_disconnect_failed");
+  }
+});
+
+/**
+ * Permission probe (temporary, developer only, 2026-10-10). Lets Martin test,
+ * from the live site with his own real Canva connection, whether Canva's
+ * undocumented design:permission:* / folder:permission:write scopes do
+ * anything: it makes one throwaway test design and folder and tries the most
+ * likely (undocumented) addresses against ONLY those, returning what Canva
+ * answered (see probePermissions in canva.ts). Off unless CANVA_PERMISSION_PROBE
+ * is "1" AND the SCHOOLS_ADMIN_KEY secret is set, and then only for a caller
+ * who presents that key. Tokens never appear in the answer or the logs.
+ *
+ * On top of the /canva rule (30/min) and Flagship's canva-integration switch,
+ * a strict in-memory cap of 3 runs per 10 minutes per student (probeWindow):
+ * each run makes ~20-30 Canva calls, so this keeps a stray loop from hammering
+ * Canva. In-memory per isolate, like the rest of src/rateLimit.ts.
+ */
+const probeWindow = new SlidingWindow(1000);
+const PROBE_LIMIT = 3;
+const PROBE_WINDOW_MS = 10 * 60 * 1000;
+
+app.post("/canva/probe", requireSession, async (c) => {
+  c.header("Cache-Control", "no-store");
+  // Doesn't exist unless switched on and an admin key is configured: a wrong
+  // flag or a missing key is indistinguishable from an unknown route.
+  const adminKey = c.env.SCHOOLS_ADMIN_KEY ?? "";
+  if (!canvaProbeEnabled(c.env) || adminKey.length < 24) return c.json({ error: "not_found" }, 404);
+
+  const session = c.get("session");
+  // Same gates as the other Canva POSTs: no demo/incognito, configured, our app, JSON.
+  const blocked = canvaGuard(c) ?? notFromOurApp(c);
+  if (blocked) return blocked;
+  // Google Classroom sign-ins have no Canva connection (same as /canva/edit).
+  if (isGoogle(session)) return c.json({ error: "classroom_not_supported" }, 403);
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_body" }, 400);
+  }
+  // Constant-time, length-safe: the admin key unlocks the probe.
+  if (!sameString(String(body?.key ?? ""), adminKey)) return c.json({ error: "forbidden" }, 403);
+
+  const gate = probeWindow.hit(`canvaProbe|u:${session.uid}`, PROBE_LIMIT, PROBE_WINDOW_MS, Date.now());
+  if (!gate.ok) {
+    c.header("Retry-After", String(gate.retryAfter));
+    return c.json({ error: "rate_limited" }, 429);
+  }
+
+  const write = body?.write === true;
+  try {
+    const store = canvaStore(c.env, session.uid, c.req.url);
+    // The student's own token through the normal refresh path (409 if not connected).
+    const token = await store.accessToken(session.uid);
+    const scopes = await store.grantedScopes(session.uid).catch(() => null);
+    const { designId, folderId, results } = await probePermissions(token, { write });
+    return c.json({ ok: true, scopes, designId, folderId, results });
+  } catch (error) {
+    return canvaFailure(c, error, "canva_probe_failed");
   }
 });
 

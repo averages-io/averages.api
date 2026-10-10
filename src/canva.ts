@@ -58,11 +58,35 @@ export function canvaFoldersEnabled(env: { CANVA_FOLDERS_ENABLED?: string }): bo
   return env.CANVA_FOLDERS_ENABLED === "1";
 }
 
-/** The scopes a new connection asks for. */
-export function canvaScopes(env: { CANVA_EXPORT_ENABLED?: string; CANVA_FOLDERS_ENABLED?: string }): string {
+/**
+ * Permission probe (temporary, 2026-10-10): Canva lists design:permission and
+ * folder:permission scopes but its published OpenAPI spec has no request that
+ * uses them. These are the extra scopes GET /canva/connect?probe=1 asks for so
+ * the developer can test, from the live site with his own real connection,
+ * whether anything responds to them (see probePermissions and POST /canva/probe
+ * in index.ts). Only ever added when CANVA_PERMISSION_PROBE is "1"; developer
+ * only, off otherwise.
+ */
+export const PROBE_SCOPES = ["design:permission:read", "design:permission:write", "folder:permission:write"];
+
+export function canvaProbeEnabled(env: { CANVA_PERMISSION_PROBE?: string }): boolean {
+  return env.CANVA_PERMISSION_PROBE === "1";
+}
+
+/**
+ * The scopes a new connection asks for. `opts.probe` adds the undocumented
+ * permission scopes (see PROBE_SCOPES), but only while CANVA_PERMISSION_PROBE
+ * is "1" — otherwise probe is silently ignored, so a normal Connect is never
+ * affected.
+ */
+export function canvaScopes(
+  env: { CANVA_EXPORT_ENABLED?: string; CANVA_FOLDERS_ENABLED?: string; CANVA_PERMISSION_PROBE?: string },
+  opts: { probe?: boolean } = {},
+): string {
   const scopes = [CANVA_SCOPES];
   if (canvaExportEnabled(env)) scopes.push(EXPORT_SCOPE);
   if (canvaFoldersEnabled(env)) scopes.push(FOLDER_READ_SCOPE, FOLDER_WRITE_SCOPE);
+  if (opts.probe && canvaProbeEnabled(env)) scopes.push(...PROBE_SCOPES);
   return scopes.join(" ");
 }
 
@@ -86,6 +110,8 @@ export interface CanvaConfig {
   CANVA_EXPORT_ENABLED?: string;
   /** "1" once folder:read and folder:write are enabled there (see canvaScopes). */
   CANVA_FOLDERS_ENABLED?: string;
+  /** "1" only while testing the undocumented permission scopes (see canvaProbeEnabled / probePermissions). */
+  CANVA_PERMISSION_PROBE?: string;
 }
 
 export function canvaConfigured(env: CanvaConfig): boolean {
@@ -360,7 +386,7 @@ export class CanvaAccount {
 
   /* ── connect ── */
 
-  async beginConnect(returnTo: string): Promise<string> {
+  async beginConnect(returnTo: string, opts: { probe?: boolean } = {}): Promise<string> {
     if (!canvaConfigured(this.env)) throw new CanvaError("canva_not_configured", 503);
     // 43-128 chars; 48 random bytes = 64 chars. Never leaves the server:
     // only `state` goes to the browser.
@@ -377,7 +403,7 @@ export class CanvaAccount {
       ["response_type", "code"],
       ["code_challenge", await codeChallenge(verifier)],
       ["code_challenge_method", "S256"],
-      ["scope", canvaScopes(this.env)],
+      ["scope", canvaScopes(this.env, opts)],
       ["state", state],
       ["redirect_uri", this.env.CANVA_REDIRECT_URI!],
     ] as [string, string][])
@@ -848,4 +874,183 @@ export async function verifyReturnJwt(
     throw new CanvaError("canva_jwt_malformed", 400);
   }
   return { designId: claims.design_id, correlationState: claims.correlation_state };
+}
+
+/* ── permission probe (temporary, 2026-10-10) ──────────────────────────
+ *
+ * Canva's published OpenAPI spec has no request that uses the
+ * design:permission:* / folder:permission:write scopes. probePermissions()
+ * tries the most likely addresses (modelled on how the rest of Canva's API is
+ * laid out: comments and pages hang under …/designs/{id}, so permissions
+ * probably do too) and returns what Canva answered, so POST /canva/probe can
+ * hand it to the developer. Ported from the standalone reference script
+ * (out/canva-permission-probe/canva-permission-probe.mjs), same guess lists
+ * and behaviour.
+ *
+ * Safe by design:
+ *   - Makes one throwaway test design and one test folder and ONLY ever tries
+ *     to change those two ids. Nothing else is touched.
+ *   - Read-only unless `write` is set, and even then only on the TEST design
+ *     (and the TEST folder), stopping at the first write Canva accepts.
+ *   - Each call gives up after PROBE_TIMEOUT_MS; a failed call is recorded as
+ *     a row, never thrown, so one dead guess doesn't stop the rest.
+ *   - Counts its Canva calls and stops before the Worker's 50-subrequest
+ *     limit, noting in the results when it had to skip the remaining guesses.
+ *   - The access token never appears in a result row (only Canva's response
+ *     text, cut to 600 chars) and is never logged.
+ */
+
+/** A little tighter than the 20 s on the rest of Canva: these are guesses, not real work. */
+const PROBE_TIMEOUT_MS = 9_000;
+
+/** Well under the Worker's (and Canva's) 50-subrequest ceiling, counting the two creates. */
+const PROBE_BUDGET = 45;
+
+/** Same title for the test design and folder; says plainly it can be deleted. */
+export const PROBE_TITLE = "Averages permission test (safe to delete)";
+
+export interface ProbeResult {
+  method: string;
+  /** Relative to /v1, e.g. "/designs/{id}/permissions". */
+  path: string;
+  body: any;
+  status: number;
+  /** Canva's response text, cut to 600 chars. Never carries a token. */
+  answer: string;
+}
+
+export async function probePermissions(
+  token: string,
+  opts: { write?: boolean } = {},
+  deps: { fetchImpl?: typeof fetch } = {},
+): Promise<{ designId: string; folderId: string; results: ProbeResult[] }> {
+  const doFetch = deps.fetchImpl ?? fetch;
+  const results: ProbeResult[] = [];
+  let calls = 0;
+  let skipped = 0;
+
+  /** One Canva call, recorded as a row. Counts a subrequest; never throws. */
+  async function call(method: string, path: string, body?: any): Promise<ProbeResult> {
+    calls++;
+    const headers: Record<string, string> = { ...(bearer(token) as Record<string, string>) };
+    const init: RequestInit = { method, headers };
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    let status = 0;
+    let text = "";
+    try {
+      const r = await doFetch(`${CANVA_API}${path}`, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+      status = r.status;
+      text = await r.text();
+    } catch (error) {
+      // A timeout or network error is just another answer for a guess: record it.
+      text = error instanceof Error ? error.message : String(error);
+    }
+    const row: ProbeResult = { method, path, body: body ?? null, status, answer: text.slice(0, 600) };
+    results.push(row);
+    return row;
+  }
+
+  /** Room for `need` more calls without passing the budget. */
+  const budgetLeft = (need = 1) => calls + need <= PROBE_BUDGET;
+
+  // A throwaway design and folder to try things on. Only these ids are touched.
+  const mk = await call("POST", "/designs", { type: "type_and_asset", design_type: { type: "preset", name: "doc" }, title: PROBE_TITLE });
+  let designId = "";
+  try {
+    designId = String(JSON.parse(mk.answer)?.design?.id ?? "");
+  } catch {
+    /* leave empty */
+  }
+  const mf = await call("POST", "/folders", { name: PROBE_TITLE, parent_folder_id: "root" });
+  let folderId = "";
+  try {
+    folderId = String(JSON.parse(mf.answer)?.folder?.id ?? "");
+  } catch {
+    /* leave empty */
+  }
+  // No test design, nothing to probe against: stop here (the two rows above say why).
+  if (!designId) return { designId, folderId, results };
+
+  const D = `/designs/${designId}`;
+  // Reading: where would the list of people / link access live? Canva nests
+  // things under the design (…/comments, /pages, /export-formats), so the
+  // likeliest home is …/designs/{id}/permissions. Then the two flat styles.
+  const reads: string[] = [
+    `${D}/permissions`,
+    `${D}/permissions/link`,
+    `${D}/access`,
+    `${D}/access-list`,
+    `${D}/sharing`,
+    `${D}/share`,
+    `${D}/share-settings`,
+    `${D}/collaborators`,
+    `${D}/members`,
+    `${D}/links`,
+    `${D}/share-links`,
+    `${D}/public-link`,
+    `/designs/permissions?design_id=${designId}`,
+    `/permissions?resource_id=${designId}`,
+  ];
+  if (folderId) {
+    reads.push(`/folders/${folderId}/permissions`, `/folders/${folderId}/access`, `/folders/${folderId}/collaborators`, `/folders/${folderId}/sharing`);
+  }
+  for (const p of reads) {
+    if (!budgetLeft()) {
+      skipped++;
+      continue;
+    }
+    await call("GET", p, undefined);
+  }
+  // A full design read: does Canva now include sharing info in the design itself?
+  if (budgetLeft()) await call("GET", D, undefined);
+  else skipped++;
+
+  if (opts.write) {
+    // Write guesses on the TEST design only, stopping at the first Canva accepts.
+    const writes: [string, string, any][] = [
+      ["POST", `${D}/permissions`, { type: "anyone", role: "viewer" }],
+      ["POST", `${D}/permissions`, { audience: "anyone_with_link", role: "view" }],
+      ["POST", `${D}/permissions`, { grantee: { type: "anyone" }, role: "can_view" }],
+      ["PATCH", `${D}/permissions`, { link_access: { audience: "anyone", role: "view" } }],
+      ["PUT", `${D}/permissions/link`, { audience: "anyone", role: "view" }],
+      ["PATCH", `${D}/permissions/link`, { audience: "anyone", role: "view" }],
+      ["PATCH", `${D}/access`, { link: { audience: "anyone", role: "view" } }],
+      ["PATCH", D, { sharing: { link_access: "view" } }],
+    ];
+    for (const [method, path, body] of writes) {
+      if (!budgetLeft()) {
+        skipped++;
+        break;
+      }
+      const r = await call(method, path, body);
+      if (r.status >= 200 && r.status < 300) break; // Canva accepted one: stop.
+    }
+    if (folderId) {
+      const folderWrites: [string, string, any][] = [
+        ["POST", `/folders/${folderId}/permissions`, { type: "anyone", role: "viewer" }],
+        ["PATCH", `/folders/${folderId}/permissions`, { link_access: { audience: "anyone", role: "view" } }],
+      ];
+      for (const [method, path, body] of folderWrites) {
+        if (!budgetLeft()) {
+          skipped++;
+          break;
+        }
+        await call(method, path, body);
+      }
+    }
+  }
+
+  if (skipped) {
+    results.push({
+      method: "NOTE",
+      path: "",
+      body: null,
+      status: 0,
+      answer: `Subrequest budget (${PROBE_BUDGET}) reached after ${calls} calls; skipped ${skipped} remaining guess(es).`,
+    });
+  }
+  return { designId, folderId, results };
 }
