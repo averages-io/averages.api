@@ -23,8 +23,10 @@ import {
   MS_AUTHORIZE_URL,
   MS_TOKEN_URL,
   openConnection,
+  openLost,
   parseScopes,
   sealConnection,
+  sealLost,
   validLoginHint,
   type CloudApp,
 } from "../src/cloudConnect.ts";
@@ -221,7 +223,7 @@ const SAM = "4242";
 const sam = await cookieFor(SAM);
 {
   const none = await status(sam, { SESSION_SECRET: SECRET, CLOUD });
-  const off = { configured: false, connected: false, email: "", name: "", scopes: [] };
+  const off = { configured: false, connected: false, lost: false, email: "", name: "", scopes: [] };
   check("nothing set up: both configured false, no Durable Object opened", [none.res.status, none.data, objects.size], [200, { gdrive: off, onedrive: off }, 0]);
   const msOnly = await status(sam, { ...BASE_ENV, MS_CLIENT_SECRET: undefined });
   check("OneDrive without MS_CLIENT_SECRET: not configured", [msOnly.data.gdrive.configured, msOnly.data.onedrive.configured], [true, false]);
@@ -232,7 +234,7 @@ const sam = await cookieFor(SAM);
   const bad = await status(sam, { ...BASE_ENV, GOOGLE_CLIENT_ID: "GOCSPX-a-secret-in-the-wrong-box", MS_CLIENT_ID: "not-a-guid" });
   check("client IDs in the wrong shape: not configured", [bad.data.gdrive.configured, bad.data.onedrive.configured], [false, false]);
   const fresh = await status(sam);
-  const on = { configured: true, connected: false, email: "", name: "", scopes: [] };
+  const on = { configured: true, connected: false, lost: false, email: "", name: "", scopes: [] };
   check("set up, not connected", [fresh.res.status, fresh.data, fresh.res.headers.get("Cache-Control")], [200, { gdrive: on, onedrive: on }, "private, no-store"]);
   check("opened in the us jurisdiction", jurisdictions.at(-1), "us");
   const before = jurisdictions.length;
@@ -311,7 +313,7 @@ console.log("\ncallback: Google Drive");
   check("PKCE: the verifier matches the challenge", await codeChallenge(ex.form.code_verifier), start.params.code_challenge);
   check("with a 15 s timeout signal", ex.signal, true);
   const st = await status(sam);
-  check("status: connected, who, scopes", st.data.gdrive, { configured: true, connected: true, email: "sam@example.com", name: "Sam Student", scopes: parseScopes("gdrive", G_SCOPE_GRANTED) });
+  check("status: connected, who, scopes", st.data.gdrive, { configured: true, connected: true, lost: false, email: "sam@example.com", name: "Sam Student", scopes: parseScopes("gdrive", G_SCOPE_GRANTED) });
   const raw = await objects.get(SAM)!.storage.get<string>("conn:gdrive");
   check("stored sealed (no token, no email in the clear)", [typeof raw, raw!.includes("g-rt-1"), raw!.includes("sam@example.com")], ["string", false, false]);
   const kept = await stored(SAM, "gdrive");
@@ -502,6 +504,109 @@ console.log("\ndisconnect");
   const lateAnswer = await late;
   check("Disconnect beats a refresh in flight", [lateAnswer.res.status, await stored(SAM, "gdrive")], [409, null]);
   defaultAnswers();
+}
+
+/* ── reconnecting: forced refresh and lost connections (2026-10-09) ──── */
+console.log("\nforced refresh and lost connections");
+{
+  const R = "6500";
+  const c = await cookieFor(R);
+  const force = (app: CloudApp, body: unknown = { refresh: true }, env?: any) => call(`/cloud/${app}/token`, { method: "POST", cookie: c, json: body, env });
+  await connect("gdrive", c);
+  const first = await token("gdrive", c);
+  calls.length = 0;
+  const forced = await force("gdrive");
+  const refreshCalls = tokenCalls(GOOGLE_TOKEN_ENDPOINT);
+  check("{refresh: true} with over 5 minutes left: refreshed anyway", [forced.res.status, forced.data.access_token !== first.data.access_token, refreshCalls.length, refreshCalls[0]?.form.grant_type], [200, true, 1, "refresh_token"]);
+  check("same answer fields", Object.keys(forced.data).sort(), ["access_token", "email", "expires_in", "scopes"]);
+  check("the refreshed token is the cached one now", (await token("gdrive", c)).data.access_token, forced.data.access_token);
+  check("when it was refreshed is kept (sealed)", Math.abs(Date.now() - ((await stored(R, "gdrive"))?.refreshedAt ?? 0)) < 5000, true);
+
+  calls.length = 0;
+  const again = await force("gdrive");
+  check("asked again within 30 s: the current token, Google not asked", [again.res.status, again.data.access_token, tokenCalls(GOOGLE_TOKEN_ENDPOINT).length], [200, forced.data.access_token, 0]);
+  const conn = (await stored(R, "gdrive"))!;
+  conn.refreshedAt = Date.now() - 31_000;
+  await objects.get(R)!.storage.put("conn:gdrive", await sealConnection(conn, R, "gdrive", SECRET));
+  calls.length = 0;
+  const later = await force("gdrive");
+  check("31 s later: refreshed again", [later.data.access_token !== forced.data.access_token, tokenCalls(GOOGLE_TOKEN_ENDPOINT).length], [true, 1]);
+
+  calls.length = 0;
+  const plain = await token("gdrive", c);
+  check("old app's {} body: unchanged (cached token, no refresh)", [plain.res.status, plain.data.access_token, tokenCalls(GOOGLE_TOKEN_ENDPOINT).length], [200, later.data.access_token, 0]);
+  const empty = await call("/cloud/gdrive/token", { method: "POST", cookie: c, body: "", headers: { "Content-Type": "application/json" } });
+  check("no body at all: also unchanged", [empty.res.status, empty.data.access_token], [200, later.data.access_token]);
+  check("refresh: \"yes\" (not true): no forced refresh", [(await force("gdrive", { refresh: "yes" })).data.access_token, tokenCalls(GOOGLE_TOKEN_ENDPOINT).length], [later.data.access_token, 0]);
+  const broken = await call("/cloud/gdrive/token", { method: "POST", cookie: c, body: "{not json", headers: { "Content-Type": "application/json" } });
+  check("a body that isn't JSON: 400 invalid_body", [broken.res.status, broken.data], [400, { error: "invalid_body" }]);
+  check("a JSON array: 400", (await force("gdrive", [1])).res.status, 400);
+  check("over 1 KB: 400", (await force("gdrive", { refresh: true, pad: "x".repeat(2000) })).res.status, 400);
+
+  // Three forced asks at once (three tabs got a 401): one refresh, all share it.
+  const shared = (await stored(R, "gdrive"))!;
+  shared.refreshedAt = 0;
+  await objects.get(R)!.storage.put("conn:gdrive", await sealConnection(shared, R, "gdrive", SECRET));
+  calls.length = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  answer["google:refresh_token"] = async () => { await gate; return json({ access_token: "g-at-forced-shared", expires_in: 3599 }); };
+  const many = Promise.all([force("gdrive"), force("gdrive"), force("gdrive")]);
+  await new Promise((r) => setTimeout(r, 20));
+  release();
+  const results = await many;
+  check("three forced at once: one refresh, all get its token", [tokenCalls(GOOGLE_TOKEN_ENDPOINT).length, results.map((r) => r.data.access_token)], [1, ["g-at-forced-shared", "g-at-forced-shared", "g-at-forced-shared"]]);
+  defaultAnswers();
+
+  // The student removed Averages.io from their Google account: the cached token still looks good.
+  const removed = (await stored(R, "gdrive"))!;
+  removed.refreshedAt = 0;
+  await objects.get(R)!.storage.put("conn:gdrive", await sealConnection(removed, R, "gdrive", SECRET));
+  answer["google:refresh_token"] = () => json({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, 400);
+  const gone = await force("gdrive");
+  check("forced refresh refused (invalid_grant): 409 cloud_reconnect_needed", [gone.res.status, gone.data], [409, { error: "cloud_reconnect_needed" }]);
+  check("and the connection is forgotten", await stored(R, "gdrive"), null);
+  const st = await status(c);
+  check("status: lost, with the account that was connected", st.data.gdrive, { configured: true, connected: false, lost: true, email: "sam@example.com", name: "Sam Student", scopes: [] });
+  check("the other app: not lost", [st.data.onedrive.connected, st.data.onedrive.lost], [false, false]);
+  const marker = await objects.get(R)!.storage.get<string>("lost:gdrive");
+  check("the marker is sealed and holds no token", [typeof marker, marker!.includes("sam@example.com"), marker!.includes("g-rt-1")], ["string", false, false]);
+  check("next ask: 409 cloud_not_connected (still lost)", [(await token("gdrive", c)).data, (await status(c)).data.gdrive.lost], [{ error: "cloud_not_connected" }, true]);
+  const inc = await status(await cookieFor(R, { inc: true }));
+  check("Incognito: unchanged (not connected, not lost)", [inc.data.incognito, inc.data.gdrive.connected, inc.data.gdrive.lost, inc.data.gdrive.email], [true, false, false, ""]);
+  defaultAnswers();
+
+  await connect("gdrive", c);
+  const back = await status(c);
+  check("connecting again clears lost", [back.data.gdrive.connected, back.data.gdrive.lost, await objects.get(R)!.storage.get("lost:gdrive")], [true, false, undefined]);
+
+  // OneDrive lost, then Disconnect pressed without reconnecting.
+  await connect("onedrive", c);
+  await setAccessLeft(R, "onedrive", 0);
+  answer["ms:refresh_token"] = () => json({ error: "invalid_grant" }, 400);
+  check("OneDrive refused on an ordinary refresh: lost too", [(await token("onedrive", c)).data, (await status(c)).data.onedrive], [{ error: "cloud_reconnect_needed" }, { configured: true, connected: false, lost: true, email: "sam@outlook.com", name: "Sam O", scopes: [] }]);
+  defaultAnswers();
+  const del = await call("/cloud/onedrive/connection", { method: "DELETE", cookie: c });
+  check("Disconnect clears lost", [del.data, (await status(c)).data.onedrive.lost, await objects.get(R)!.storage.get("lost:onedrive")], [{ ok: true }, false, undefined]);
+  check("and leaves Google Drive connected", (await status(c)).data.gdrive.connected, true);
+
+  // Both gone, one of them only lost: the object keeps that marker until it's dismissed.
+  const L = "6600";
+  const lc = await cookieFor(L);
+  await connect("gdrive", lc);
+  await connect("onedrive", lc);
+  await setAccessLeft(L, "onedrive", 0);
+  answer["ms:refresh_token"] = () => json({ error: "invalid_grant" }, 400);
+  await token("onedrive", lc);
+  defaultAnswers();
+  await call("/cloud/gdrive/connection", { method: "DELETE", cookie: lc });
+  check("disconnecting Drive keeps OneDrive's lost marker", (await status(lc)).data.onedrive.lost, true);
+  await call("/cloud/onedrive/connection", { method: "DELETE", cookie: lc });
+  check("dismissing it too: nothing left in the object", [(await status(lc)).data.onedrive.lost, objects.get(L)!.storage.data.size], [false, 0]);
+
+  // A marker can't be opened as anything else, or for another student.
+  const sealedLost = await sealLost({ email: "a@b.co", name: "A", at: 1 }, R, "gdrive", SECRET);
+  check("a sealed marker opens only as a marker, for its own student and app", [!!(await openLost(sealedLost, R, "gdrive", SECRET)), await openLost(sealedLost, "6501", "gdrive", SECRET), await openLost(sealedLost, R, "onedrive", SECRET), await openConnection(sealedLost, R, "gdrive", SECRET)], [true, null, null, null]);
 }
 
 /* ── demo, Incognito, the reviewer ─────────────────────────────────────── */

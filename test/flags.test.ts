@@ -64,6 +64,9 @@ const OFF = (k: string) => ({ ...ENV, FLAGS: flags({ [k]: false }) });
 check("messages off → 503 feature_off", await json(await call("/messages", OFF("messaging-features"))), [503, { error: "feature_off", feature: "messaging-features" }]);
 check("turn in off → /submit/text 503", (await call("/submit/text", OFF("turnin-feature"), { method: "POST" })).status, 503);
 check("turn in off → /submit/history still answers (401 without a session)", (await call("/submit/history", OFF("turnin-feature"))).status, 401);
+// What was turned in (2026-10-09): ungated like /data/files, so turning in going off doesn't hide it.
+check("/data/submissions and /data/submission-file need no switch", [featureForRoute("GET", "/data/submissions"), featureForRoute("GET", "/data/submission-file"), featureForRoute("GET", "/data/files")], [[], [], []]);
+check("turn in off → /data/submissions still answers (401 without a session)", (await call("/data/submissions", OFF("turnin-feature"))).status, 401);
 check("on: the route runs as before (401 without a session)", (await call("/messages", ENV)).status, 401);
 r = await call("/canva/connect", OFF("canva-integration"));
 check("Canva off: Connect goes back to Settings", [r.status, r.headers.get("location")], [302, "https://app.averages.io/settings?feature_off=canva-integration"]);

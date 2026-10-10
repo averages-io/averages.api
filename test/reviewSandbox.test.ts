@@ -334,6 +334,30 @@ console.log("\nturning in");
   check("an assignment from another class: 404", wrongClass.res.status, 404);
 }
 
+console.log("\nwhat was turned in (Files page, 2026-10-09)");
+{
+  const { res, data } = await call("/data/submissions", { cookie });
+  check("submissions: 200, complete, the six classes", [res.status, data.platform, data.partial, data.courses.length], [200, "schoology", false, 6]);
+  check("the file just turned in comes first, then the one from before the review", data.files.map((f: any) => f.name), ["Lab Report 4 - Alex.pdf", "Lab Report 3 - Alex Rivera.pdf"]);
+  const just = data.files[0];
+  check("its entry", [just.course, just.assignment, just.assignmentTitle, just.ext, just.late, /^\d+$/.test(just.revision), just.at > Date.now() - 60_000], [CHEM, LAB4, "Lab Report #4", "pdf", true, true, true]);
+  check("no download paths reach the browser", JSON.stringify(data).includes("attachment/sandbox"), false);
+
+  const dl = await call(`/data/submission-file?section=${CHEM}&assignment=${LAB4}&revision=${just.revision}&file=${just.id}`, { cookie });
+  const text = new TextDecoder().decode(await dl.res.arrayBuffer());
+  check("it downloads, byte for byte", [dl.res.status, text, dl.res.headers.get("Content-Type")], [200, "%PDF-1.4\nAlex's lab report\n%%EOF\n", "application/pdf"]);
+  check("under the name the list shows", dl.res.headers.get("Content-Disposition")?.includes('filename="Lab Report 4 - Alex.pdf"'), true);
+
+  const old = data.files[1];
+  const seeded = await call(`/data/submission-file?section=${old.course}&assignment=${old.assignment}&revision=${old.revision}&file=${old.id}`, { cookie });
+  const bytes = new Uint8Array(await seeded.res.arrayBuffer());
+  check("the earlier one downloads as a PDF of the size the list says", [seeded.res.status, new TextDecoder().decode(bytes.slice(0, 8)), bytes.byteLength, old.size], [200, "%PDF-1.4", old.size, old.size]);
+  const wrong = await call(`/data/submission-file?section=${CHEM}&assignment=${LAB4}&revision=${old.revision}&file=${just.id}`, { cookie });
+  check("a revision that isn't that assignment's: 404", [wrong.res.status, wrong.data.error], [404, "not_found"]);
+  const teacher = await call(`/data/submission-file?section=${CHEM}&assignment=${LAB4}&revision=${just.revision}&file=7400000001`, { cookie });
+  check("a teacher's file isn't in the student's turn-ins: 404", teacher.res.status, 404);
+}
+
 console.log("\nintegrations aren't refused as demo");
 {
   const notDemo = (r: { data: any }) => r.data?.error !== "not_available_in_demo";
@@ -364,6 +388,15 @@ console.log("\nthe sandbox itself");
   for (let i = 0; i < 70; i++) await sandboxFetch("POST", "https://api.schoology.com/v1/messages", JSON.stringify({ subject: `s${i}`, message: "m", recipient_ids: "8100000001" }));
   const sentList = await (await sandboxFetch("GET", "https://api.schoology.com/v1/messages/sent?limit=200")).json();
   check("what's remembered is capped", sentList.message.length <= 50 + 2, true);
+  // A turned-in file over 1 MB isn't kept: it downloads as a stand-in PDF.
+  const bigFile = new Uint8Array(1024 * 1024 + 1);
+  const bigStart = await (await sandboxFetch("POST", "https://api.schoology.com/v1/upload", JSON.stringify({ filename: "big.mov", filesize: bigFile.byteLength }))).json();
+  await sandboxFetch("PUT", bigStart.upload_location, bigFile.buffer);
+  const bigRev = await (await sandboxFetch("POST", `https://api.schoology.com/v1/sections/${PE}/submissions/7100000606/file`, JSON.stringify({ "file-attachment": { id: [bigStart.id] } }))).json();
+  const bigPath = bigRev.attachments.files.file[0].download_path;
+  const bigDl = await sandboxFetch("GET", bigPath);
+  check("a turned-in file over 1 MB: a stand-in PDF", [bigDl.status, bigDl.headers.get("Content-Type"), (await bigDl.arrayBuffer()).byteLength < 5000], [200, "application/pdf", true]);
+  check("an upload never turned in doesn't download", (await sandboxFetch("GET", `https://api.schoology.com/v1/attachment/sandbox/${start.id}`)).status, 404);
   const out = await sandboxFetch("GET", "https://api.schoology.com/v1/users/r%3Areviewer/sections");
   check("an encoded uid in the path still answers", (await out.json()).section.length, 6);
 }
