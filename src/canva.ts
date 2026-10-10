@@ -929,8 +929,12 @@ export async function probePermissions(
   let calls = 0;
   let skipped = 0;
 
-  /** One Canva call, recorded as a row. Counts a subrequest; never throws. */
-  async function call(method: string, path: string, body?: any): Promise<ProbeResult> {
+  /**
+   * One Canva call, recorded as a row. Counts a subrequest; never throws.
+   * `full` is Canva's whole answer: the row keeps only 600 characters, which cut
+   * the new design's JSON in half before its id could be read (2026-10-10 run).
+   */
+  async function call(method: string, path: string, body?: any): Promise<ProbeResult & { full: string }> {
     calls++;
     const headers: Record<string, string> = { ...(bearer(token) as Record<string, string>) };
     const init: RequestInit = { method, headers };
@@ -950,27 +954,27 @@ export async function probePermissions(
     }
     const row: ProbeResult = { method, path, body: body ?? null, status, answer: text.slice(0, 600) };
     results.push(row);
-    return row;
+    return { ...row, full: text };
   }
+  const idFrom = (text: string, key: "design" | "folder"): string => {
+    try {
+      const id = String(JSON.parse(text)?.[key]?.id ?? "");
+      return /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : "";
+    } catch {
+      return "";
+    }
+  };
 
   /** Room for `need` more calls without passing the budget. */
   const budgetLeft = (need = 1) => calls + need <= PROBE_BUDGET;
 
   // A throwaway design and folder to try things on. Only these ids are touched.
   const mk = await call("POST", "/designs", { type: "type_and_asset", design_type: { type: "preset", name: "doc" }, title: PROBE_TITLE });
-  let designId = "";
-  try {
-    designId = String(JSON.parse(mk.answer)?.design?.id ?? "");
-  } catch {
-    /* leave empty */
-  }
+  const designId = idFrom(mk.full, "design");
+  // The new design's answer carries signed edit/view links: show only its id and title.
+  if (designId) results[results.length - 1].answer = JSON.stringify({ design: { id: designId, title: PROBE_TITLE } });
   const mf = await call("POST", "/folders", { name: PROBE_TITLE, parent_folder_id: "root" });
-  let folderId = "";
-  try {
-    folderId = String(JSON.parse(mf.answer)?.folder?.id ?? "");
-  } catch {
-    /* leave empty */
-  }
+  const folderId = idFrom(mf.full, "folder");
   // No test design, nothing to probe against: stop here (the two rows above say why).
   if (!designId) return { designId, folderId, results };
 
