@@ -165,10 +165,10 @@ console.log("not connected");
 r = await probe({ env: { CANVA: fakeCanva({ ...BASE_ENV }, null, false) }, body: { key: ADMIN_KEY }, uid: "noconn" });
 check("409 canva_not_connected", [r.status, r.json.error], [409, "canva_not_connected"]);
 
-console.log("strict rate limit (3 per 10 min per student)");
-for (let i = 0; i < 3; i++) await probe({ body: { key: ADMIN_KEY }, uid: "rl" });
+console.log("no extra probe limit (removed 2026-10-10)");
+for (let i = 0; i < 4; i++) await probe({ body: { key: ADMIN_KEY }, uid: "rl" });
 r = await probe({ body: { key: ADMIN_KEY }, uid: "rl" });
-check("4th run refused", [r.status, r.json.error], [429, "rate_limited"]);
+check("5th run in a row still runs", [r.status, r.json.ok], [200, true]);
 
 /* ── connect?probe=1 ──────────────────────────────────────────────── */
 console.log("connect scopes");
