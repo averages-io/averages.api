@@ -199,7 +199,7 @@ signs them out.
 | `GET` | `/canva/exports/:job` and `/canva/exports/:job/file?design=` | yes | The export's status, then the PDF itself (streamed) |
 | `GET` | `/canva/folders/:id/items` | yes | A Canva folder's folders and designs for the Files page (`root` is the top of Projects), 100 a page. 409 `canva_reconnect_needed` until `CANVA_FOLDERS_ENABLED` is `"1"` and the connection has the folder permissions |
 | `POST` | `/canva/folders`, `/canva/folders/:id/rename`, `/canva/folders/move` | yes | New folder `{name, parentId}`, rename `{name}`, move a design or folder `{itemId, toFolderId}`. No delete (Canva would put the contents in the Trash) |
-| `POST` | `/canva/probe` | key | Developer-only Canva permission probe (temporary). `{key, write?}`. 404 unless `CANVA_PERMISSION_PROBE` is `"1"` and `SCHOOLS_ADMIN_KEY` is set; 403 unless `key` matches it. See "Canva permission probe" below |
+| `POST` | `/canva/probe` | key | Developer-only Canva permission probe (temporary). `{key, write?}`. 404 unless `CANVA_PERMISSION_PROBE` is `"1"` and `REVIEW_SECRET` (or `SCHOOLS_ADMIN_KEY`) is set; 403 unless `key` matches one of them. See "Canva permission probe" below |
 | `GET` | `/config/apply` | no | What the school application page needs: `{turnstileSiteKey, emailEndings, verifyEmail}` (site key or `null`; allowed email endings, `[]` = any; whether the email must be verified with a code) |
 | `GET` | `/config/schools?lms=schoology\|canvas` | | The schools the sign-in page lists (`src/schools.ts`) |
 | `POST` | `/schools/apply/code` | | "Verify your email": `{email, turnstileToken?}` emails a 6-digit code from `no-reply@averages.io` (only when `SCHOOLS_VERIFY_EMAIL` is `"1"`). 3 per address per 10 minutes, 45 s apart; 5 per 10 minutes per network |
@@ -354,15 +354,15 @@ What it does, while switched on:
 Turning it on and off:
 
 1. Set `CANVA_PERMISSION_PROBE` to `"1"` in `wrangler.jsonc` and deploy (the
-   `SCHOOLS_ADMIN_KEY` secret must already be set — it is what unlocks the probe).
+   `REVIEW_SECRET` secret, the reviewer sign-in's, must already be set; it is what unlocks the probe. `SCHOOLS_ADMIN_KEY` also works if set).
 2. Reconnect Canva in Settings via `/canva/connect?probe=1` so the connection carries the
    permission scopes.
-3. Call `POST /canva/probe` from the app (same origin) with `{ "key": "<SCHOOLS_ADMIN_KEY>" }`,
+3. Call `POST /canva/probe` from the app (same origin) with `{ "key": "<REVIEW_SECRET>" }`,
    or `{ "key": "...", "write": true }` for the write guesses, and read the `results`.
 4. Set `CANVA_PERMISSION_PROBE` back to `"0"` and deploy. Delete the test design and folder
    in Canva.
 
-Gated hard: `/canva/probe` is 404 unless the switch is `"1"` **and** `SCHOOLS_ADMIN_KEY` is
+Gated hard: `/canva/probe` is 404 unless the switch is `"1"` **and** `REVIEW_SECRET` (or `SCHOOLS_ADMIN_KEY`) is
 set, 403 unless `key` matches it (constant-time), 401 without a session, refused in
 demo/Incognito/Classroom like the other Canva routes, and capped at 3 runs per 10 minutes
 per student on top of the usual `/canva` rate limit.
