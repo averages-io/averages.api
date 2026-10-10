@@ -203,7 +203,7 @@ type Bindings = {
    * "1" only while testing whether Canva's undocumented design:permission:* /
    * folder:permission:write scopes do anything (2026-10-10, developer only).
    * While "1", GET /canva/connect?probe=1 also asks for them and POST
-   * /canva/probe is reachable (it still needs SCHOOLS_ADMIN_KEY). See
+   * /canva/probe is reachable (it still needs REVIEW_SECRET). See
    * canvaProbeEnabled() / probePermissions() in canva.ts.
    */
   CANVA_PERMISSION_PROBE?: string;
@@ -1656,7 +1656,7 @@ app.delete("/canva/connection", requireSession, async (c) => {
  * anything: it makes one throwaway test design and folder and tries the most
  * likely (undocumented) addresses against ONLY those, returning what Canva
  * answered (see probePermissions in canva.ts). Off unless CANVA_PERMISSION_PROBE
- * is "1" AND the SCHOOLS_ADMIN_KEY secret is set, and then only for a caller
+ * is "1" AND the REVIEW_SECRET (or SCHOOLS_ADMIN_KEY) secret is set, and then only for a caller
  * who presents that key. Tokens never appear in the answer or the logs.
  *
  * On top of the /canva rule (30/min) and Flagship's canva-integration switch,
@@ -1670,10 +1670,12 @@ const PROBE_WINDOW_MS = 10 * 60 * 1000;
 
 app.post("/canva/probe", requireSession, async (c) => {
   c.header("Cache-Control", "no-store");
-  // Doesn't exist unless switched on and an admin key is configured: a wrong
-  // flag or a missing key is indistinguishable from an unknown route.
-  const adminKey = c.env.SCHOOLS_ADMIN_KEY ?? "";
-  if (!canvaProbeEnabled(c.env) || adminKey.length < 24) return c.json({ error: "not_found" }, 404);
+  // Doesn't exist unless switched on and a key is configured: a wrong flag or a
+  // missing key is indistinguishable from an unknown route. The key is the
+  // REVIEW_SECRET dashboard secret (2026-10-10, Martin: he has no
+  // SCHOOLS_ADMIN_KEY); SCHOOLS_ADMIN_KEY also works if it's ever set.
+  const keys = [c.env.REVIEW_SECRET ?? "", c.env.SCHOOLS_ADMIN_KEY ?? ""].filter((k) => k.length >= 16);
+  if (!canvaProbeEnabled(c.env) || !keys.length) return c.json({ error: "not_found" }, 404);
 
   const session = c.get("session");
   // Same gates as the other Canva POSTs: no demo/incognito, configured, our app, JSON.
@@ -1688,8 +1690,10 @@ app.post("/canva/probe", requireSession, async (c) => {
   } catch {
     return c.json({ error: "invalid_body" }, 400);
   }
-  // Constant-time, length-safe: the admin key unlocks the probe.
-  if (!sameString(String(body?.key ?? ""), adminKey)) return c.json({ error: "forbidden" }, 403);
+  // Constant-time, length-safe: either key unlocks the probe (both are always compared).
+  const given = String(body?.key ?? "");
+  const matches = keys.map((k) => sameString(given, k));
+  if (!matches.some(Boolean)) return c.json({ error: "forbidden" }, 403);
 
   const gate = probeWindow.hit(`canvaProbe|u:${session.uid}`, PROBE_LIMIT, PROBE_WINDOW_MS, Date.now());
   if (!gate.ok) {
