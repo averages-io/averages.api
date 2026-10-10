@@ -364,8 +364,7 @@ Turning it on and off:
 
 Gated hard: `/canva/probe` is 404 unless the switch is `"1"` **and** `REVIEW_SECRET` (or `SCHOOLS_ADMIN_KEY`) is
 set, 403 unless `key` matches it (constant-time), 401 without a session, refused in
-demo/Incognito/Classroom like the other Canva routes, and capped at 3 runs per 10 minutes
-per student on top of the usual `/canva` rate limit.
+demo/Incognito/Classroom like the other Canva routes. Only the usual `/canva` rate limit applies (the extra probe cap was removed 2026-10-10).
 
 ### Google Drive and OneDrive (staying connected, 2026-10-08)
 
