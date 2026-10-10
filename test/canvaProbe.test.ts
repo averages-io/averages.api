@@ -67,7 +67,8 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   const method = init.method ?? "GET";
   const path = url.slice("https://api.canva.com/rest/v1".length);
   calls.push({ method, path, body: init.body ? JSON.parse(String(init.body)) : null, auth: new Headers(init.headers).get("Authorization") });
-  if (method === "POST" && path === "/designs") return body({ design: { id: "DTEST" } }, 200);
+  // Like real Canva (2026-10-10 run): a long answer with signed links AFTER the id, well past 600 characters.
+  if (method === "POST" && path === "/designs") return body({ design: { id: "DTEST", title: "t", owner: { user_id: "u", team_id: "t" }, urls: { edit_url: "https://www.canva.com/api/design/" + "x".repeat(700) + "/edit", view_url: "https://www.canva.com/api/design/" + "y".repeat(700) + "/view" } } }, 200);
   if (method === "POST" && path === "/folders") return body({ folder: { id: "FTEST" } }, 200);
   if (method === "GET" && path === "/designs/DTEST") return body({ design: { id: "DTEST", title: "t" } }, 200);
   // The design permission writes: accept the third, refuse the rest.
@@ -136,6 +137,8 @@ designWrites = 0;
 r = await probe({ body: { key: ADMIN_KEY, write: true }, uid: "happy" });
 check("ok", [r.status, r.json.ok], [200, true]);
 check("test ids returned", [r.json.designId, r.json.folderId], ["DTEST", "FTEST"]);
+check("a long create answer still gives the design id (it was cut at 600 characters before)", r.json.designId, "DTEST");
+check("the new design's signed links aren't passed on", JSON.stringify(r.json).includes("canva.com/api/design/"), false);
 check("scopes echoed from the connection", r.json.scopes, SCOPES);
 const paths = calls.map((c) => `${c.method} ${c.path}`);
 check("creates a test design and folder", [paths[0], paths[1]], ["POST /designs", "POST /folders"]);
