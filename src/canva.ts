@@ -952,7 +952,9 @@ export async function probePermissions(
       // A timeout or network error is just another answer for a guess: record it.
       text = error instanceof Error ? error.message : String(error);
     }
-    const row: ProbeResult = { method, path, body: body ?? null, status, answer: text.slice(0, 600) };
+    // Design answers carry signed edit/view links: never pass those on.
+    const shown = /"urls"\s*:/.test(text) ? text.replace(/"urls"\s*:\s*\{[^}]*\}/g, '"urls":"(hidden)"') : text;
+    const row: ProbeResult = { method, path, body: body ?? null, status, answer: shown.slice(0, 600) };
     results.push(row);
     return { ...row, full: text };
   }
@@ -1057,4 +1059,109 @@ export async function probePermissions(
     });
   }
   return { designId, folderId, results };
+}
+
+/* ── the full sweep (2026-10-10, Martin: "try everything") ────────────────
+ *
+ * The first probe's 14 likely addresses all came back "Unknown endpoint". The
+ * sweep tries every reasonable name, under the test design, under the test
+ * folder and flat, with GET and with an EMPTY body for POST / PATCH / PUT
+ * (plus DELETE under the test items). An empty body can't change anything on a
+ * real endpoint: it would answer 400 for the missing fields, which is exactly
+ * what shows it exists. Canva answers a missing address with 404
+ * `endpoint_not_found`, so anything else is worth a look.
+ *
+ * Too many calls for one Worker request (50 subrequests on the Free plan), so
+ * it runs in batches: batch 0 makes the test design and folder, later batches
+ * get their ids back and first check (by title) that they really are the
+ * probe's own test items before touching them.
+ */
+export const SWEEP_SUFFIXES = [
+  "permissions", "permissions/read", "permissions/write", "permissions/link", "permissions/public", "permissions/anyone",
+  "permission", "access", "access/link", "access-list", "access_list", "access-requests", "access_requests",
+  "sharing", "sharing-settings", "sharing_settings", "share", "shares", "share-settings", "share_settings",
+  "share-link", "share_link", "share-links", "share_links", "sharelink", "link", "links", "links/view",
+  "view-link", "view_link", "public-link", "public_link", "public", "visibility", "publish", "published",
+  "collaborators", "collaboration", "members", "users", "people", "invites", "invitations", "acl", "roles", "audience", "settings",
+];
+export const SWEEP_FLAT = [
+  "/designs/permissions", "/designs/permissions/read", "/designs/permissions/write", "/designs/sharing", "/designs/share",
+  "/designs/share-links", "/designs/access", "/folders/permissions", "/folders/permissions/write", "/folders/sharing",
+  "/permissions", "/permissions/designs/{D}", "/permissions/folders/{F}", "/design-permissions", "/design_permissions",
+  "/sharing", "/shares", "/share-links", "/links", "/access",
+];
+const SWEEP_PER_BATCH = 40;   // + 2 checks + our own Durable Object calls stays under 50
+
+export interface SweepStep { method: string; path: string; body: any }
+
+/** Every guess, in a fixed order, with {D} / {F} standing for the test design / folder. */
+export function sweepPlan(): SweepStep[] {
+  const out: SweepStep[] = [];
+  const add = (path: string, under: boolean) => {
+    out.push({ method: "GET", path, body: null });
+    for (const method of ["POST", "PATCH", "PUT"]) out.push({ method, path, body: {} });
+    if (under) out.push({ method: "DELETE", path, body: null });
+  };
+  for (const suf of SWEEP_SUFFIXES) add(`/designs/{D}/${suf}`, true);
+  for (const suf of SWEEP_SUFFIXES) add(`/folders/{F}/${suf}`, true);
+  for (const flat of SWEEP_FLAT) add(flat, flat.includes("{D}") || flat.includes("{F}"));
+  return out;
+}
+export const SWEEP_BATCHES = Math.ceil(sweepPlan().length / SWEEP_PER_BATCH);
+
+export async function probeSweep(
+  token: string,
+  opts: { batch: number; designId?: string; folderId?: string },
+  deps: { fetchImpl?: typeof fetch } = {},
+): Promise<{ batch: number; batches: number; designId: string; folderId: string; results: ProbeResult[]; error?: string }> {
+  const doFetch = deps.fetchImpl ?? fetch;
+  const results: ProbeResult[] = [];
+  const ID = /^[A-Za-z0-9_-]{1,64}$/;
+  async function call(method: string, path: string, body: any): Promise<{ status: number; full: string }> {
+    const headers: Record<string, string> = { ...(bearer(token) as Record<string, string>) };
+    const init: RequestInit = { method, headers };
+    if (body !== null && body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    let status = 0;
+    let text = "";
+    try {
+      const r = await doFetch(`${CANVA_API}${path}`, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+      status = r.status;
+      text = await r.text();
+    } catch (error) {
+      text = error instanceof Error ? error.message : String(error);
+    }
+    // Canva's design answers carry signed edit/view links: never pass those on.
+    const shown = /"urls"\s*:/.test(text) ? text.replace(/"urls"\s*:\s*\{[^}]*\}/g, '"urls":"(hidden)"') : text;
+    results.push({ method, path, body: body ?? null, status, answer: shown.slice(0, 600) });
+    return { status, full: text };
+  }
+  const batch = Math.max(0, Math.floor(Number(opts.batch) || 0));
+  let designId = "";
+  let folderId = "";
+  if (batch === 0) {
+    const mk = await call("POST", "/designs", { type: "type_and_asset", design_type: { type: "preset", name: "doc" }, title: PROBE_TITLE });
+    try { designId = String(JSON.parse(mk.full)?.design?.id ?? ""); } catch { /* none */ }
+    const mf = await call("POST", "/folders", { name: PROBE_TITLE, parent_folder_id: "root" });
+    try { folderId = String(JSON.parse(mf.full)?.folder?.id ?? ""); } catch { /* none */ }
+    if (!ID.test(designId) || !ID.test(folderId)) return { batch, batches: SWEEP_BATCHES, designId: "", folderId: "", results, error: "couldnt_make_test_items" };
+  } else {
+    // Only ever the probe's own test items: their titles must match.
+    designId = String(opts.designId ?? "");
+    folderId = String(opts.folderId ?? "");
+    if (!ID.test(designId) || !ID.test(folderId)) return { batch, batches: SWEEP_BATCHES, designId: "", folderId: "", results, error: "not_test_items" };
+    const d = await call("GET", `/designs/${designId}`, null);
+    const f = await call("GET", `/folders/${folderId}`, null);
+    let ok = false;
+    try { ok = JSON.parse(d.full)?.design?.title === PROBE_TITLE && JSON.parse(f.full)?.folder?.name === PROBE_TITLE; } catch { ok = false; }
+    if (!ok) return { batch, batches: SWEEP_BATCHES, designId: "", folderId: "", results, error: "not_test_items" };
+  }
+  const plan = sweepPlan().slice(batch * SWEEP_PER_BATCH, (batch + 1) * SWEEP_PER_BATCH);
+  for (const step of plan) {
+    const path = step.path.replace("{D}", designId).replace("{F}", folderId);
+    await call(step.method, path, step.body);
+  }
+  return { batch, batches: SWEEP_BATCHES, designId, folderId, results };
 }

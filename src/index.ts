@@ -71,6 +71,7 @@ import {
   MAX_IMPORT_BYTES,
   mimeForName,
   probePermissions,
+  probeSweep,
   safeAppPath,
   statusForCode,
   verifyReturnJwt,
@@ -1698,6 +1699,12 @@ app.post("/canva/probe", requireSession, async (c) => {
     // The student's own token through the normal refresh path (409 if not connected).
     const token = await store.accessToken(session.uid);
     const scopes = await store.grantedScopes(session.uid).catch(() => null);
+    // The full sweep (2026-10-10): one batch per request, see probeSweep in canva.ts.
+    if (body?.sweep === true) {
+      const out = await probeSweep(token, { batch: Number(body.batch) || 0, designId: typeof body.designId === "string" ? body.designId : "", folderId: typeof body.folderId === "string" ? body.folderId : "" });
+      if (out.error) return c.json({ ok: false, error: out.error, results: out.results }, 400);
+      return c.json({ ok: true, sweep: true, scopes, ...out });
+    }
     const { designId, folderId, results } = await probePermissions(token, { write });
     return c.json({ ok: true, scopes, designId, folderId, results });
   } catch (error) {
