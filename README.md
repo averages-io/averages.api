@@ -30,6 +30,7 @@ Schoology and Classroom.
 | Canva: connect, Edit in Canva, Drafts, designs list | Built (2026-10-05), stored only in the US. Canva approved the integration (2026-10-05), so any student can connect |
 | Assignment details and attachment downloads | Built (2026-10-05) |
 | Course files (`/data/files`): every class's Materials documents and assignment attachments | Built (2026-10-05) |
+| What the student turned in (`/data/submissions`, `/data/submission-file`): the files in their own Schoology submissions, for the Files page | Built (2026-10-09). Schoology only (Classroom work is turned in on Classroom) |
 | Google Drive and OneDrive | Built (2026-10-05) in the student's browser. Since 2026-10-08 they stay connected like Canva: the Worker signs in and keeps the refresh token (US only), the browser gets short-lived access tokens and still talks to Drive and Graph itself. Live once `MS_CLIENT_SECRET` is set and the callback addresses are registered (see "Google Drive and OneDrive" below) |
 | Per-page extras (`/data/people`, `/data/updates`, `/data/events`, `/data/folders`, `/data/gradebook`) and Schoology messages (read, send, reply) | Built (2026-10-06) |
 | Browser notifications (`/push/*`) | Built (2026-10-05), wired in 2026-10-06; switched on once `PUSH_SECRET` and the VAPID keys are set |
@@ -129,6 +130,11 @@ signs them out.
   jurisdiction, separate from Sync and Canva. Disconnect deletes it (and revokes
   Google's grant when Drive has its own OAuth client). Files never pass through the
   Worker: the browser calls Drive and Graph itself with the access tokens it's given.
+  When Google or Microsoft refuses a connection's grant (the student removed
+  Averages.io from their account), the tokens are deleted and only the account's
+  email and name and when it happened are kept (encrypted the same way), so Settings
+  can say it was disconnected; connecting again or pressing Disconnect deletes that
+  too (2026-10-09).
 - **School applications** (from school staff, not students): the school's name, its
   Canvas address, the contact email and anything they typed, at most 500, in one US
   Durable Object; plus when each address that wrote to schools@averages.io last got the
@@ -165,6 +171,8 @@ signs them out.
 | `GET` | `/data/assignment/locate?id=` | yes | Which class an assignment is in: `{section, title}` or 404. The app's links are `assignment?id=<id>` (2026-10-07); the assignment page asks this for work that isn't in the bundle. Every class is asked at once |
 | `GET` | `/data/attachment?section=&assignment=&file=` | yes | Download one attachment, streamed from Schoology. `document=` instead of `assignment=` for a file a teacher posted in Materials |
 | `GET` | `/data/files` | yes | Every file in the student's classes (Materials documents and assignment attachments): ids, names, class, newest first, `partial: true` if a class didn't answer. No download paths. Classroom: the Google Drive files posted in class materials and assignments, with their Drive links |
+| `GET` | `/data/submissions` | yes | The files the student turned in on Schoology (2026-10-09): `{platform: "schoology", courses: [{id, name, color}], files: [{id, name, ext, size, course, assignment, assignmentTitle, revision, at, late}], partial}`. Their own revisions only, no drafts, newest first, at most 500. Reads the same 12 classes as `/data/files`, then the history of up to 60 assignments that take files (no quizzes, tests or discussions; not `allow_dropbox: "0"`), most recent first, 6 at a time, never more Schoology calls in all than 45 (the Free plan allows 50). `partial: true` when a class or history failed, or assignments were left unread. No download paths. Classroom: `{platform: "classroom", courses: [], files: [], partial: false}` |
+| `GET` | `/data/submission-file?section=&assignment=&revision=&file=` | yes | Download one file the student turned in, streamed from Schoology like `/data/attachment` (same headers). Looked up again in their own history: 404 `not_found` when that revision or file isn't theirs |
 | `GET` | `/canva/status` | yes | Whether Canva is set up and connected, and the account name |
 | `GET` | `/canva/connect?return_to=` | yes | Starts connecting Canva (browser navigation) |
 | `GET` | `/canva/callback` | yes | Where Canva sends the student back after they allow access |
@@ -177,11 +185,11 @@ signs them out.
 | `GET` | `/canva/designs` | yes | The student's Canva designs, newest first, 50 a page |
 | `GET` | `/config/cloud` | | Public IDs the app needs for Google Drive and OneDrive in the browser, including the Picker's key (`null` for anything not set up or switched off) |
 | `GET` | `/config/features` | | Every feature switch (`features`: key → true/false) and `maintenance` (`{ message }` while the banner is on, else `null`). 30 s cache |
-| `GET` | `/cloud/status` | yes | `{gdrive, onedrive}`, each `{configured, connected, email, name, scopes}` (`incognito: true` and nothing connected in Incognito) |
+| `GET` | `/cloud/status` | yes | `{gdrive, onedrive}`, each `{configured, connected, lost, email, name, scopes}` (`incognito: true` and nothing connected in Incognito). `lost: true` (2026-10-09, with `connected: false`): the connection was dropped because Google or Microsoft refused it; `email` and `name` are the account that was connected, until the student connects again or presses Disconnect |
 | `GET` | `/cloud/:app/connect?return_to=&read=1&login_hint=` | yes | `:app` is `gdrive` or `onedrive`. Starts connecting (browser navigation) and sends the student to Google or Microsoft. `read=1`: OneDrive also asks to read their files (`Files.Read`, kept on reconnects once given) |
 | `GET` | `/cloud/:app/callback` | yes | Where Google or Microsoft sends the student back; returns to `return_to` with `?cloud=connected&app=:app` (or `cancelled`, `failed`, `drive_not_allowed`, `not_configured`, `incognito`) |
-| `POST` | `/cloud/:app/token` | yes | JSON from our app: `{access_token, expires_in, email, scopes}`, the cached token while it has over 5 minutes left, otherwise refreshed. 409 `cloud_not_connected` / `cloud_reconnect_needed` (the grant was revoked or expired; the connection is forgotten), 503 `cloud_not_configured`, 502 `cloud_unavailable`, 403 `incognito_mode` |
-| `DELETE` | `/cloud/:app/connection` | yes | Disconnect: forgets the tokens (allowed in Incognito) |
+| `POST` | `/cloud/:app/token` | yes | JSON from our app: `{access_token, expires_in, email, scopes}`, the cached token while it has over 5 minutes left, otherwise refreshed. Body optional (`{}`); `{"refresh": true}` (2026-10-09, sent after Drive or Graph answers 401) refreshes even so, unless that connection was refreshed in the last 30 seconds (then the current token). 409 `cloud_not_connected` / `cloud_reconnect_needed` (the grant was revoked or expired; the connection is forgotten and `/cloud/status` says `lost`), 503 `cloud_not_configured`, 502 `cloud_unavailable`, 403 `incognito_mode`, 400 `invalid_body` |
+| `DELETE` | `/cloud/:app/connection` | yes | Disconnect: forgets the tokens, and a lost connection's `lost` (allowed in Incognito) |
 | `POST` | `/submit/upload` | yes | Turning in (Schoology): `{section, assignment, filename, filesize, md5}` starts an upload; answers with a sealed upload token (Schoology's upload address never reaches the browser) |
 | `PUT` | `/submit/upload/:token` | yes | The file's bytes (95 MB max), streamed straight through to Schoology |
 | `POST` | `/submit/file` | yes | `{section, assignment, fileIds}`: turns the uploaded files in |
@@ -209,7 +217,7 @@ Counted twice: in memory per Worker copy, and by Cloudflare's Rate Limiting bind
 (`RATE_LIMIT_*` in `wrangler.jsonc`, shared per location; since 2026-10-07). Over the
 limit: `429 {"error":"rate_limited"}` with `Retry-After`. Preflights, `GET /` and the
 public config reads are never limited.
-Google sessions get `404 classroom_files_open_in_drive` from `/data/attachment` and
+Google sessions get `404 classroom_files_open_in_drive` from `/data/attachment` and `/data/submission-file`, and
 `403 classroom_not_supported` from `/canva/edit` (their files are in Google Drive).
 
 `/data/bundle` is one call on purpose: Schoology is slow and rate-limited, and
@@ -234,7 +242,9 @@ feature gets its own route with its own fixed Schoology calls.
   `http://localhost:3000` is allowed only when the Worker itself is running locally.
 - **No secrets in the repo.** Everything secret is a Cloudflare secret (below).
 - **Attachments:** the browser only ever sends ids. The Worker looks the file up on
-  that student's own assignment (or Materials document), signs the request only for `api.schoology.com`,
+  that student's own assignment (or Materials document; for a file they turned in,
+  `/data/submission-file`, 2026-10-09: their own submission revisions, by revision
+  and file id), signs the request only for `api.schoology.com`,
   follows Schoology's redirect to its file storage itself (https only, without the
   signature), and refuses files over 25 MB for Canva.
 - **Canva:** PKCE with the state kept in the student's own Durable Object and used
@@ -250,7 +260,10 @@ feature gets its own route with its own fixed Schoology calls.
   connection (decoded, audience checked: it comes straight from the token endpoint over
   TLS). `POST /cloud/:app/token` needs JSON from an allowed Origin. Refreshes are one at a
   time per student, and Microsoft's rotated refresh token is saved before the access token
-  is handed out. Every call to Google or Microsoft gives up after 15 seconds, and errors
+  is handed out. A refresh the browser asks for (`{"refresh": true}`, 2026-10-09) happens
+  at most once per 30 seconds per connection, so a page that keeps getting 401 can't
+  make the Worker hammer Google or Microsoft; a refused grant ends the connection
+  (409 `cloud_reconnect_needed`) instead of handing out the same dead token again. Every call to Google or Microsoft gives up after 15 seconds, and errors
   carry our own short codes, never a token or a provider's message.
 - **Google sign-in:** the state is 256 bits, sealed in its own cookie under a
   different key from sessions, compared in constant time and used once; PKCE (S256)
@@ -406,6 +419,13 @@ TypeScript support.
 - **Course files:** both of Schoology's attachment shapes, extensions kept on names,
   non-numeric ids skipped, no download paths in the answer, the 1,000-file cap, and
   `partial` when a class didn't answer.
+- **What was turned in** (`submissions.test.ts`, 2026-10-09): only dropbox assignments
+  asked about, most recent first; the student's own revisions only, drafts left out;
+  404 histories are "nothing turned in"; the 45-call budget, 6 histories at a time and
+  the 500-file cap (`partial`); downloads found again in their own history (someone
+  else's revision, a file from another revision, odd ids refused), Schoology's redirect
+  followed by hand, no signature off `api.schoology.com`, no http; Classroom and demo.
+  The reviewer account (`reviewSandbox.test.ts`) lists and downloads what it turned in.
 - **Cloud config:** `/config/cloud` serves IDs in the right shapes and leaves out
   anything that looks like a secret pasted into the wrong box.
 - **Google Classroom** (`classroom.test.ts`): due dates in the student's time zone
@@ -448,7 +468,10 @@ TypeScript support.
   unticked), cached and refreshed tokens (one refresh for many requests, Microsoft's
   rotated refresh token saved), revoked grants, Disconnect (revoke only with a Drive-only
   client, beating a refresh in flight), demo, Incognito, the reviewer account and
-  `return_to` never leaving the app.
+  `return_to` never leaving the app. Since 2026-10-09: `{"refresh": true}` (refreshes,
+  30-second throttle, shared by many tabs, old `{}` body unchanged, bad bodies refused),
+  and lost connections (`lost: true` with the account after a refused grant, sealed, no
+  token kept, cleared by connecting again or Disconnect).
 - **Schools** (`schools.test.ts`, `schoolsApply.test.ts`): the sign-in page's lists, the
   application's checks and spam trap, saving and duplicates, Martin's list behind its
   key, the email builder (no header injection, encoded subjects, both parts decode),
