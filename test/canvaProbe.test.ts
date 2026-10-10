@@ -113,6 +113,14 @@ r = await probe({ env: { SCHOOLS_ADMIN_KEY: undefined }, body: { key: ADMIN_KEY 
 check("no admin key set: 404", [r.status, r.json.error], [404, "not_found"]);
 r = await probe({ env: { SCHOOLS_ADMIN_KEY: "short" }, body: { key: "short" } });
 check("admin key too short: 404", [r.status, r.json.error], [404, "not_found"]);
+// 2026-10-10: REVIEW_SECRET unlocks it too (Martin has no SCHOOLS_ADMIN_KEY).
+const REVIEW = "review-secret-" + "r".repeat(20);
+r = await probe({ env: { SCHOOLS_ADMIN_KEY: undefined, REVIEW_SECRET: REVIEW }, body: { key: REVIEW }, uid: "rev" });
+check("REVIEW_SECRET as the key: runs", [r.status, r.json.ok], [200, true]);
+r = await probe({ env: { SCHOOLS_ADMIN_KEY: undefined, REVIEW_SECRET: REVIEW }, body: { key: ADMIN_KEY }, uid: "rev2" });
+check("REVIEW_SECRET set, other key: 403", [r.status, r.json.error], [403, "forbidden"]);
+r = await probe({ env: { SCHOOLS_ADMIN_KEY: undefined, REVIEW_SECRET: "short" }, body: { key: "short" } });
+check("REVIEW_SECRET too short and no admin key: 404", [r.status, r.json.error], [404, "not_found"]);
 r = await probe({ body: { key: "k".repeat(31) + "X" } });
 check("wrong key: 403", [r.status, r.json.error], [403, "forbidden"]);
 r = await probe({ cookie: false, body: { key: ADMIN_KEY } });
