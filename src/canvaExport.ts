@@ -115,6 +115,8 @@ async function readJson(res: Response): Promise<any> {
  */
 function exportFailure(res: Response, json: any): CanvaError {
   const code = String(json?.code ?? "");
+  // What Canva said, for `wrangler tail` (2026-10-12: "canva is not exporting the files"). No tokens in it.
+  console.error("canva_export_call_failed", res.status, code, String(json?.message ?? "").slice(0, 200));
   if (code === "too_many_requests" || code.endsWith("_throttled") || res.status === 429) return new CanvaError("canva_rate_limited", 429);
   if (res.status === 401 || res.status === 403) return new CanvaError("canva_reconnect_needed", 409);
   if (res.status === 404) return new CanvaError("canva_design_gone", 404);
@@ -164,7 +166,10 @@ export async function getExportJob(token: string, jobId: string): Promise<Export
   const job = json?.job ?? {};
   const urls = Array.isArray(job.urls) ? job.urls.filter((u: unknown) => typeof u === "string") : [];
   if (job.status === "success") return { status: "success", urls };
-  if (job.status === "failed") return { status: "failed", urls: [], error: jobError(job.error?.code) };
+  if (job.status === "failed") {
+    console.error("canva_export_job_failed", String(job.error?.code ?? ""), String(job.error?.message ?? "").slice(0, 200));
+    return { status: "failed", urls: [], error: jobError(job.error?.code) };
+  }
   // Anything else (a status Canva adds later) reads as still working; the app gives up after a while.
   return { status: "in_progress", urls: [] };
 }
@@ -216,6 +221,7 @@ export async function openExportFile(url: string): Promise<Response> {
       continue;
     }
     if (!res.ok) {
+      console.error("canva_export_download_failed", res.status, new URL(current).hostname);
       await res.body?.cancel().catch(() => {});
       throw new CanvaError("canva_export_unavailable", 502);
     }
