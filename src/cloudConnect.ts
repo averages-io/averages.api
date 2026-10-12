@@ -61,6 +61,14 @@ export const GOOGLE_SCOPES = ["openid", "email", "profile", DRIVE_FILE_SCOPE, DR
 export const MS_SCOPES = ["openid", "profile", "email", "offline_access", "User.Read", "Files.ReadWrite.AppFolder"];
 /** Reading the student's own OneDrive files (adding one from OneDrive), asked for only when the app needs it. */
 export const MS_READ_SCOPE = "Files.Read";
+/**
+ * Sharing a OneDrive file as a link when it's turned in (2026-10-12, Martin):
+ * createLink needs Files.ReadWrite. Asked for only when a student picks Share
+ * as a Link on a OneDrive file; the app never makes an edit link with it.
+ * (Files.ReadWrite.Selected can't do this: Microsoft keeps it for Office file
+ * handlers, work and school accounts only.) Must be added to the Entra app.
+ */
+export const MS_WRITE_SCOPE = "Files.ReadWrite";
 
 /** Every call to Google or Microsoft gives up after 15 seconds. */
 const TIMEOUT_MS = 15_000;
@@ -215,9 +223,9 @@ function hasScope(list: string[], scope: string): boolean {
   return list.some((s) => s.toLowerCase() === want);
 }
 
-/** OneDrive's scopes for a connect or a refresh. Files.Read only when wanted: a scope they gave is never dropped (see beginConnect). */
-export function msScopes(withRead: boolean): string {
-  return (withRead ? [...MS_SCOPES, MS_READ_SCOPE] : MS_SCOPES).join(" ");
+/** OneDrive's scopes for a connect or a refresh. Files.Read / Files.ReadWrite only when wanted: a scope they gave is never dropped (see beginConnect). */
+export function msScopes(withRead: boolean, withWrite = false): string {
+  return [...MS_SCOPES, ...(withRead ? [MS_READ_SCOPE] : []), ...(withWrite ? [MS_WRITE_SCOPE] : [])].join(" ");
 }
 
 /** Strips control characters and caps the length, for names and emails shown in Settings. */
@@ -417,6 +425,8 @@ export interface ConnectOptions {
   returnTo: string;
   /** OneDrive: also ask for Files.Read. */
   read?: boolean;
+  /** OneDrive: also ask for Files.ReadWrite (sharing links, 2026-10-12). */
+  write?: boolean;
   loginHint?: string | null;
   /** This Worker's own /cloud/:app/callback, as the browser reached it. */
   redirectUri: string;
@@ -570,7 +580,10 @@ export class CloudAccount {
       // Never drop a scope they already gave: reconnecting without "read"
       // mustn't take away adding files from OneDrive.
       const existing = await this.load(uid, app);
-      scope = msScopes(!!opts.read || (!!existing && hasScope(existing.scopes, MS_READ_SCOPE)));
+      scope = msScopes(
+        !!opts.read || !!opts.write || (!!existing && hasScope(existing.scopes, MS_READ_SCOPE)),
+        !!opts.write || (!!existing && hasScope(existing.scopes, MS_WRITE_SCOPE)),
+      );
       params = [
         ["client_id", client.clientId],
         ["response_type", "code"],
@@ -724,7 +737,7 @@ export class CloudAccount {
           client_id: client.clientId,
           client_secret: client.clientSecret,
         };
-        if (app === "onedrive") body.scope = msScopes(hasScope(conn.scopes, MS_READ_SCOPE));
+        if (app === "onedrive") body.scope = msScopes(hasScope(conn.scopes, MS_READ_SCOPE), hasScope(conn.scopes, MS_WRITE_SCOPE));
         const json = await tokenCall(app, body);
         if (gen !== this.generation[app]) return null;
         const next: Connection = {

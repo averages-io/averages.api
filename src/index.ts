@@ -2011,6 +2011,7 @@ app.get("/cloud/:app/connect", async (c) => {
     const url = await cloudStore(c.env, session.uid, c.req.url).beginConnect(session.uid, cloudApp, {
       returnTo,
       read: c.req.query("read") === "1",
+      write: c.req.query("write") === "1",
       loginHint: c.req.query("login_hint") ?? null,
       // This Worker's own address as the browser reached it, so wrangler dev
       // works too. It must be listed with Google / Microsoft (see README).

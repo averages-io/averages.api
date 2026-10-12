@@ -65,6 +65,8 @@ const TEST_STATUS: Record<string, number> = {
   too_soon: 429,
   subscription_gone: 410,
   push_failed: 502,
+  push_rejected: 502,
+  push_misconfigured: 503,
 };
 
 async function jsonBody(c: any): Promise<any> {
@@ -194,7 +196,8 @@ export function pushRoutes(deps: PushDeps) {
     try {
       const result = await storeFor(c.env, c.get("session").uid, c.req.url).test(endpoint);
       if (result.ok) return c.json({ ok: true });
-      return c.json({ error: result.code }, (TEST_STATUS[result.code] ?? 502) as any);
+      // The push service's own status, when there was one, so Settings can say which (no secrets in it).
+      return c.json(result.status ? { error: result.code, status: result.status } : { error: result.code }, (TEST_STATUS[result.code] ?? 502) as any);
     } catch (err) {
       return unavailable(c, err);
     }

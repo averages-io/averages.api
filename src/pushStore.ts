@@ -163,7 +163,9 @@ export interface PushStatus {
   checkedAt: number | null;
 }
 
-export type TestResult = { ok: true } | { ok: false; code: "push_not_configured" | "not_subscribed" | "too_soon" | "subscription_gone" | "push_failed"; status?: number };
+export type TestResult =
+  | { ok: true }
+  | { ok: false; code: "push_not_configured" | "push_misconfigured" | "push_rejected" | "not_subscribed" | "too_soon" | "subscription_gone" | "push_failed"; status?: number };
 
 /** The endpoint and keys from a browser subscription, or null when it isn't one we can send to. */
 export function cleanSubscription(sub: unknown): PushSubscriptionLike | null {
@@ -405,7 +407,15 @@ export class PushStore extends DurableObject<PushEnv> {
       await this.dropEndpoints([endpoint]);
       return { ok: false, code: "subscription_gone" };
     }
-    return res.ok ? { ok: true } : { ok: false, code: "push_failed", status: res.status };
+    if (res.ok) return { ok: true };
+    // 2026-10-12 (Martin: "the test notis dont work"): say which kind of failure it was.
+    // A VAPID key we can't sign with (the private JWK doesn't match the public key, or
+    // isn't a JWK at all) never reaches the push service; a 401/403 from the push
+    // service means it didn't accept our signature for this subscription (usually a
+    // subscription made with an older public key: turning notifications off and on fixes it).
+    if ("misconfigured" in res && res.misconfigured) return { ok: false, code: "push_misconfigured" };
+    if (res.status === 401 || res.status === 403) return { ok: false, code: "push_rejected", status: res.status };
+    return { ok: false, code: "push_failed", status: res.status };
   }
 
   async status(endpoint?: string): Promise<PushStatus> {
@@ -561,7 +571,7 @@ export class PushStore extends DurableObject<PushEnv> {
     } catch (err) {
       // Only configuration mistakes throw (a bad VAPID key): same for every browser, so log it once per send.
       console.error("push_send_failed", describe(err));
-      return { ok: false, status: 0, gone: false };
+      return { ok: false, status: 0, gone: false, misconfigured: true };
     }
   }
 
