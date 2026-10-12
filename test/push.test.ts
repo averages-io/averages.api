@@ -875,6 +875,25 @@ section("PushStore: touch, test, status, unsubscribe");
   check("expired subscription: gone, and forgotten", [await store.test(phone.subscription.endpoint), storage.data.size], [{ ok: false, code: "subscription_gone" }, 0]);
   world.pushStatus = {};
 
+  // 2026-10-12: which kind of failure, so Settings can say so.
+  await store.subscribe({ subscription: phone.subscription, types: ALL, ...(await credentialFor(SCHOOLOGY_SESSION)) });
+  world.pushStatus = { phone: 403 };
+  check("push service turns down our signature: push_rejected with its status, subscription kept", [await store.test(phone.subscription.endpoint), (storage.data.get("subs") as any[]).length], [{ ok: false, code: "push_rejected", status: 403 }, 1]);
+  (storage.data.get("meta") as any).lastTestAt = 0;
+  world.pushStatus = { phone: 500 };
+  check("push service error: push_failed with its status", await store.test(phone.subscription.endpoint), { ok: false, code: "push_failed", status: 500 });
+  world.pushStatus = {};
+  (storage.data.get("meta") as any).lastTestAt = 0;
+  {
+    // A private key that isn't the public key's other half: we can't sign, nothing is sent.
+    const other = await generateVapidKeys();
+    const bad = newStore({ ...ENV, VAPID_PRIVATE_JWK: JSON.stringify(other.privateKeyJwk) });
+    await bad.store.subscribe({ subscription: phone.subscription, types: ALL, ...(await credentialFor(SCHOOLOGY_SESSION)) });
+    const before = world.sent.length;
+    check("mismatched VAPID keys: push_misconfigured, nothing sent", [await quiet(() => bad.store.test(phone.subscription.endpoint)), world.sent.length - before], [{ ok: false, code: "push_misconfigured" }, 0]);
+  }
+  await store.unsubscribe(phone.subscription.endpoint);
+
   await store.subscribe({ subscription: phone.subscription, types: only("grades", "due"), ...(await credentialFor(SCHOOLOGY_SESSION)) });
   await store.subscribe({ subscription: laptop.subscription, types: only("grades", "due"), ...(await credentialFor(SCHOOLOGY_SESSION)) });
   const st = await store.status(phone.subscription.endpoint);

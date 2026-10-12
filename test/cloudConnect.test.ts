@@ -22,6 +22,7 @@ import {
   GOOGLE_TOKEN_ENDPOINT,
   MS_AUTHORIZE_URL,
   MS_TOKEN_URL,
+  msScopes,
   openConnection,
   openLost,
   parseScopes,
@@ -86,9 +87,10 @@ function defaultAnswers() {
       expires_in: 3600,
       refresh_token: "ms-rt-1",
       // Microsoft names Graph scopes in full sometimes.
-      scope: f.scope.includes("Files.Read ") || f.scope.endsWith("Files.Read")
-        ? "https://graph.microsoft.com/Files.Read https://graph.microsoft.com/Files.ReadWrite.AppFolder https://graph.microsoft.com/User.Read openid profile email"
-        : "https://graph.microsoft.com/Files.ReadWrite.AppFolder https://graph.microsoft.com/User.Read openid profile email",
+      scope: (f.scope.split(" ").includes("Files.ReadWrite") ? "https://graph.microsoft.com/Files.ReadWrite " : "")
+        + (f.scope.split(" ").includes("Files.Read")
+          ? "https://graph.microsoft.com/Files.Read https://graph.microsoft.com/Files.ReadWrite.AppFolder https://graph.microsoft.com/User.Read openid profile email"
+          : "https://graph.microsoft.com/Files.ReadWrite.AppFolder https://graph.microsoft.com/User.Read openid profile email"),
       id_token: idToken({ aud: f.client_id, preferred_username: "sam@outlook.com", name: "Sam O" }),
     });
   let ms = 1;
@@ -282,6 +284,9 @@ console.log("\nconnect: OneDrive");
   check("PKCE and login_hint", [p.code_challenge_method, p.login_hint], ["S256", "sam@outlook.com"]);
   const read = await startConnect("onedrive", sam, "?read=1");
   check("read=1 adds Files.Read", read.params.scope, "openid profile email offline_access User.Read Files.ReadWrite.AppFolder Files.Read");
+  const write = await startConnect("onedrive", sam, "?write=1");
+  check("write=1 adds Files.Read and Files.ReadWrite (sharing links)", write.params.scope, "openid profile email offline_access User.Read Files.ReadWrite.AppFolder Files.Read Files.ReadWrite");
+  check("msScopes: read and write", [msScopes(false), msScopes(true, true)], ["openid profile email offline_access User.Read Files.ReadWrite.AppFolder", "openid profile email offline_access User.Read Files.ReadWrite.AppFolder Files.Read Files.ReadWrite"]);
 }
 
 /* ── where the browser goes ────────────────────────────────────────────── */
@@ -439,6 +444,18 @@ console.log("\nOneDrive");
   await token("onedrive", sam);
   check("the next refresh spends the new one", [tokenCalls(MS_TOKEN_URL)[0]?.form.refresh_token, (await stored(SAM, "onedrive"))?.refresh], ["ms-rt-2", "ms-rt-3"]);
   check("scopes after refreshes: still with Files.Read", (await stored(SAM, "onedrive"))?.scopes, ["openid", "profile", "email", "User.Read", "Files.ReadWrite.AppFolder", "Files.Read"]);
+
+  // Share as a Link (2026-10-12): write=1 adds Files.ReadWrite, and nothing later drops it.
+  const w = await connect("onedrive", sam, "?return_to=/assignment&write=1");
+  check("write=1: connected and asked for Files.ReadWrite", [w.back.location, w.start.params.scope.split(" ").includes("Files.ReadWrite")], [`${APP}/assignment?cloud=connected&app=onedrive`, true]);
+  check("status: Files.ReadWrite granted", (await status(sam)).data.onedrive.scopes.includes("Files.ReadWrite"), true);
+  const keep = await startConnect("onedrive", sam, "?read=1");
+  check("reconnecting with only read=1 keeps Files.ReadWrite", keep.params.scope, "openid profile email offline_access User.Read Files.ReadWrite.AppFolder Files.Read Files.ReadWrite");
+  await setAccessLeft(SAM, "onedrive", 60);
+  calls.length = 0;
+  await token("onedrive", sam);
+  check("refresh asks for Files.ReadWrite too", tokenCalls(MS_TOKEN_URL)[0]?.form.scope, "openid profile email offline_access User.Read Files.ReadWrite.AppFolder Files.Read Files.ReadWrite");
+  check("scopes after the refresh: still with Files.ReadWrite", (await stored(SAM, "onedrive"))?.scopes.includes("Files.ReadWrite"), true);
 }
 {
   const LOST = "6100";
