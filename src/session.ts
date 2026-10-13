@@ -42,6 +42,55 @@ export interface SessionData extends Credentials {
    * browser can't read it, and nothing about it is stored on our servers.
    */
   g?: GoogleSession;
+  /**
+   * Who this is, for /auth/me (2026-10-13). Saved from the /users/me call the
+   * Schoology sign-in already makes, so /auth/me can answer from the cookie
+   * instead of asking Schoology again on every page load (that call was
+   * ~3 s of the login page's wait). Only on Schoology and reviewer sessions;
+   * Google keeps its own in `g`. Optional: sessions sealed before this have
+   * none, and /auth/me adds it the first time it sees one (resealSession).
+   */
+  p?: SessionProfile;
+}
+
+/** n: display name, f: first name, em: email, pic: photo link. */
+export interface SessionProfile {
+  n: string;
+  f: string;
+  em?: string;
+  pic?: string;
+}
+
+/** Caps so a strange profile can never push the cookie past what browsers keep (~4 KB). */
+const PROFILE_TEXT_MAX = 200;
+const PROFILE_PIC_MAX = 600;
+
+/** The profile to seal, from Schoology's /users/me. */
+export function profileFrom(me: {
+  name_display?: string;
+  name_first?: string;
+  primary_email?: string;
+  picture_url?: string;
+}): SessionProfile {
+  const text = (v: unknown) => (typeof v === "string" ? v.slice(0, PROFILE_TEXT_MAX) : "");
+  const p: SessionProfile = { n: text(me.name_display) || text(me.name_first) || "Student", f: text(me.name_first) };
+  const em = text(me.primary_email);
+  if (em) p.em = em;
+  const pic = typeof me.picture_url === "string" ? me.picture_url : "";
+  if (pic && pic.length <= PROFILE_PIC_MAX && /^https:\/\//.test(pic)) p.pic = pic;
+  return p;
+}
+
+export function validProfile(p: unknown): p is SessionProfile {
+  if (!p || typeof p !== "object") return false;
+  const v = p as Record<string, unknown>;
+  const str = (x: unknown, max: number) => typeof x === "string" && x.length <= max;
+  return (
+    str(v.n, PROFILE_TEXT_MAX) && (v.n as string).length > 0 &&
+    str(v.f, PROFILE_TEXT_MAX) &&
+    (v.em === undefined || str(v.em, PROFILE_TEXT_MAX)) &&
+    (v.pic === undefined || str(v.pic, PROFILE_PIC_MAX))
+  );
 }
 
 export interface GoogleSession {
@@ -129,10 +178,10 @@ export async function sealSession(
   data: Omit<SessionData, "exp">,
   secret: string
 ): Promise<string> {
-  const payload: SessionData = {
-    ...data,
-    exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
-  };
+  return seal({ ...data, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS } as SessionData, secret);
+}
+
+async function seal(payload: SessionData, secret: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await aesKey(secret);
   const ciphertext = await crypto.subtle.encrypt(
@@ -226,6 +275,9 @@ export async function openSession(
       return { ...data, key: "", secret: "" };
     }
 
+    // A profile that isn't the right shape is dropped, not fatal: /auth/me just asks Schoology.
+    if (data.p !== undefined && !validProfile(data.p)) delete data.p;
+
     // The reviewer account (reviewSandbox.ts): its uid only ever with the sandbox's own credentials.
     if (String(data.uid).startsWith("r:") && !(data.key === SANDBOX_KEY && data.secret === SANDBOX_SECRET && data.uid === REVIEW_UID)) return null;
     if (!data.key || !data.secret) return null;
@@ -272,4 +324,33 @@ export function readCookie(header: string | null, name: string): string | null {
     if (k === name) return rest.join("=");
   }
   return null;
+}
+
+/**
+ * The profile for a session sealed before 2026-10-13, which has none inside it.
+ *
+ * Its own cookie, never a rewrite of the session cookie: /auth/me fetches it
+ * from Schoology (the slow way, once), and if a student signed out while that
+ * was still running, a rewritten session cookie arriving afterwards would sign
+ * them straight back in. This one is useless on its own. It is sealed under
+ * its own purpose, tied to the session's uid AND expiry (so it can't be
+ * carried over to a later sign-in), host-only on the API, and cleared on
+ * sign-out like the Google access cookie.
+ */
+export const PROFILE_COOKIE = "averages_profile";
+export const PROFILE_PURPOSE = "session-profile";
+
+export function profileForSession(value: unknown, session: SessionData): SessionProfile | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (v.uid !== session.uid || v.exp !== session.exp || !validProfile(v.p)) return null;
+  return v.p;
+}
+
+export function profileCookie(value: string, maxAge: number, secure: boolean): string {
+  return [`${PROFILE_COOKIE}=${value}`, "Path=/", "HttpOnly", ...(secure ? ["Secure"] : []), "SameSite=Lax", `Max-Age=${Math.max(0, Math.floor(maxAge))}`].join("; ");
+}
+
+export function clearProfileCookie(secure: boolean): string {
+  return [`${PROFILE_COOKIE}=`, "Path=/", "HttpOnly", ...(secure ? ["Secure"] : []), "SameSite=Lax", "Max-Age=0"].join("; ");
 }

@@ -20,6 +20,12 @@ import {
   isIncognitoSession as isIncognito,
   openSession,
   openValue,
+  clearProfileCookie,
+  profileCookie,
+  profileForSession,
+  profileFrom,
+  PROFILE_COOKIE,
+  PROFILE_PURPOSE,
   readCookie,
   sealSession,
   sealValue,
@@ -605,9 +611,9 @@ app.post("/auth/session", async (c) => {
   const signin: FeatureKey = reviewer ? "test-signin" : "schoology-signin";
   if (!featureOn(c.env, signin)) return c.json({ error: "feature_off", feature: signin }, 503);
   if (reviewer) {
-    const token = await sealSession({ key: SANDBOX_KEY, secret: SANDBOX_SECRET, uid: REVIEW_UID }, c.env.SESSION_SECRET);
-    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
     const me = await getMe({ key: SANDBOX_KEY, secret: SANDBOX_SECRET });
+    const token = await sealSession({ key: SANDBOX_KEY, secret: SANDBOX_SECRET, uid: REVIEW_UID, p: profileFrom(me) }, c.env.SESSION_SECRET);
+    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
     return c.json({
       ok: true,
       user: { uid: REVIEW_UID, name: me.name_display ?? "Reviewer", firstName: me.name_first ?? "", email: me.primary_email ?? "", pictureUrl: "" },
@@ -650,7 +656,9 @@ app.post("/auth/session", async (c) => {
     // Under 13 (the login page's 13+ box left unticked): Incognito only, sealed
     // into the session so nothing stored on our servers can be turned on.
     const under13 = body.under13 === true;
-    const token = await sealSession(under13 ? { key, secret, uid, inc: true } : { key, secret, uid }, c.env.SESSION_SECRET);
+    // The name rides along in the sealed cookie so /auth/me never has to ask Schoology for it.
+    const p = profileFrom(me);
+    const token = await sealSession(under13 ? { key, secret, uid, inc: true, p } : { key, secret, uid, p }, c.env.SESSION_SECRET);
     c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
 
     return c.json({
@@ -686,6 +694,8 @@ app.delete("/auth/session", async (c) => {
   c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
   // A Google sign-in's refreshed access token, if any (see googleAccess).
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
+  // An older Schoology session's name (see /auth/me).
+  c.header("Set-Cookie", clearProfileCookie(!isLocalRequest(c.req.url)), { append: true });
   return c.json({ ok: true });
 });
 
@@ -843,20 +853,55 @@ app.get("/auth/me", requireSession, async (c) => {
     });
   }
 
-  try {
-    const me = await getMe(session);
+  /**
+   * Schoology (2026-10-13): answered from the profile sealed into the cookie
+   * at sign-in. This used to call Schoology's /users/me on every page load
+   * just for the name, ~3 s that the login page and every page's first load
+   * waited on. Opening the cookie (requireSession, above) is what proves the
+   * session; the Schoology call never did, since a refusal there came back
+   * as a 502, not a 401.
+   *
+   * A cookie from before this has no profile: ask Schoology once, the old
+   * way, and keep the answer in a small side cookie (PROFILE_COOKIE, see
+   * session.ts) until the session ends. Not by rewriting the session cookie,
+   * which a sign-out racing this slow call could otherwise undo. No one has
+   * to sign in again; their next visit takes the fast path.
+   *
+   * Server-Timing shows which way it went in the browser's Network tab.
+   */
+  const started = Date.now();
+  const answer = (p: NonNullable<SessionData["p"]>, how: string) => {
+    c.header("Server-Timing", `auth;desc="${how}";dur=${Date.now() - started}`);
+    const origin = c.req.header("Origin");
+    if (origin && allowedOrigins(c.req.url).includes(origin)) c.header("Timing-Allow-Origin", origin);
     return c.json({
       uid: session.uid,
-      name: me.name_display || me.name_first || "Student",
-      firstName: me.name_first ?? "",
-      email: me.primary_email ?? "",
-      pictureUrl: me.picture_url ?? "",
+      name: p.n,
+      firstName: p.f,
+      email: p.em ?? "",
+      pictureUrl: p.pic ?? "",
       incognito: isIncognito(session),
       provider: "schoology",
     });
+  };
+  if (session.p) return answer(session.p, "cookie");
+  const sealed = readCookie(c.req.header("Cookie") ?? null, PROFILE_COOKIE);
+  const kept = sealed ? profileForSession(await openValue(sealed, c.env.SESSION_SECRET, PROFILE_PURPOSE), session) : null;
+  if (kept) return answer(kept, "cookie");
+
+  let me;
+  try {
+    me = await getMe(session);
   } catch {
     return c.json({ error: "schoology_unreachable" }, 502);
   }
+  const p = profileFrom(me);
+  const left = session.exp - nowSeconds();
+  if (left > 0) {
+    const value = await sealValue({ uid: session.uid, exp: session.exp, p }, c.env.SESSION_SECRET, PROFILE_PURPOSE, left);
+    c.header("Set-Cookie", profileCookie(value, left, !isLocalRequest(c.req.url)));
+  }
+  return answer(p, "schoology");
 });
 
 /**
