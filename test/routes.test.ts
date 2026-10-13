@@ -586,7 +586,7 @@ resetRateLimits();
   for (let i = 0; i < 91; i++) statuses.push((await call("/data/updates", { cookie: googleBasic })).status);
   const limited = await call("/data/updates", { cookie: googleBasic });
   check("/data/*: 90 a minute per student, then 429", [statuses.slice(0, 90).every((s) => s === 200), statuses[90], limited.status, (await json(limited)).error], [true, 429, 429, "rate_limited"]);
-  check("Retry-After, readable by the app (CORS)", [Number(limited.headers.get("Retry-After")) > 0, (await call("/data/updates", { cookie: googleBasic, headers: { Origin: "https://app.averages.io" } })).headers.get("Access-Control-Expose-Headers")], [true, "Retry-After,Content-Disposition"]);
+  check("Retry-After, readable by the app (CORS)", [Number(limited.headers.get("Retry-After")) > 0, (await call("/data/updates", { cookie: googleBasic, headers: { Origin: "https://app.averages.io" } })).headers.get("Access-Control-Expose-Headers")], [true, "Retry-After,Content-Disposition,X-Media-Version"]);
   check("the same student signed in again (another cookie) is still limited", (await call("/data/updates", { cookie: googleAll })).status, 429);
   check("a different student isn't", (await call("/data/bundle", { cookie: schoologySession })).status, 200);
   const preflight = await app.fetch(new Request(API + "/data/updates", { method: "OPTIONS", headers: { Origin: "https://app.averages.io", "Access-Control-Request-Method": "GET", Cookie: googleBasic } }), ENV as any, CTX as any);

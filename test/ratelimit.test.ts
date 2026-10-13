@@ -37,6 +37,7 @@ check("send: POST /messages*", [name("POST", "/messages"), name("POST", "/messag
 check("submit, push, canva", [name("POST", "/submit/upload"), name("PUT", "/submit/upload/tok"), name("POST", "/push/subscribe"), name("DELETE", "/push"), name("GET", "/canva/status"), name("POST", "/canva/edit")], ["submit", "submit", "push", "push", "canva", "canva"]);
 // 2026-10-08: Google Drive and OneDrive staying connected.
 check("cloud: every /cloud/* route, per student", [name("GET", "/cloud/status"), name("GET", "/cloud/gdrive/connect"), name("GET", "/cloud/onedrive/callback"), name("POST", "/cloud/gdrive/token"), name("DELETE", "/cloud/onedrive/connection"), name("GET", "/cloudy"), ruleFor("POST", "/cloud/gdrive/token")?.by], ["cloud", "cloud", "cloud", "cloud", "cloud", null, "student"]);
+check("media: every /media/* route, per student", [name("PUT", "/media/photo"), name("GET", "/media/background"), name("DELETE", "/media/photo"), name("GET", "/mediax"), ruleFor("PUT", "/media/photo")?.by], ["media", "media", "media", null, "student"]);
 check("look-alike paths don't count as a prefix", [name("GET", "/database"), name("GET", "/messagesx"), name("GET", "/pushy")], [null, null, null]);
 check("the numbers", Object.values(RATE_RULES).map((r) => [r.name, r.limit, r.windowMs, r.by]), [
   ["signin", 30, 60000, "ip"],
@@ -48,6 +49,7 @@ check("the numbers", Object.values(RATE_RULES).map((r) => [r.name, r.limit, r.wi
   ["canvaPoll", 120, 60000, "student"],
   ["canvaBrowse", 90, 60000, "student"],
   ["cloud", 60, 60000, "student"],
+  ["media", 20, 60000, "student"],
   ["apply", 5, 600000, "ip"],
   ["applyCode", 5, 600000, "ip"],
   ["applyVerify", 20, 600000, "ip"],
