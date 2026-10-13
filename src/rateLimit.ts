@@ -54,7 +54,7 @@ import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
 
 export interface RateRule {
-  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "apply" | "applyCode" | "applyVerify";
+  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "apply" | "applyCode" | "applyVerify";
   limit: number;
   windowMs: number;
   by: "ip" | "student";
@@ -83,6 +83,9 @@ export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   // every ~55 minutes per tab, plus Settings' status; 60 leaves room for many
   // tabs and a few reconnects without letting a loop hammer Google or Microsoft.
   cloud: { name: "cloud", limit: 60, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CLOUD" },
+  // Profile photo and background for Sync (2026-10-13): a picture changes a
+  // few times at most; this stops a loop from filling the bucket.
+  media: { name: "media", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_MEDIA" },
   // School applications (2026-10-06): a few per school network per 10 minutes is plenty.
   apply: { name: "apply", limit: 5, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY" },
   // "Verify your email" (2026-10-07): each code is an email we send, so few;
@@ -114,6 +117,7 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (method === "GET" && /^\/canva\/folders\/[^/]+\/items$/.test(path)) return RATE_RULES.canvaBrowse;
   if (under(path, "/canva")) return RATE_RULES.canva;
   if (under(path, "/cloud")) return RATE_RULES.cloud;
+  if (under(path, "/media")) return RATE_RULES.media;
   return null;
 }
 

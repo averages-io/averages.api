@@ -152,6 +152,7 @@ import type { CloudStore } from "./cloudStore.ts";
 import type { PushStore } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
 import { submitRoutes } from "./submitRoutes.ts";
+import { deleteAllMedia, mediaRoutes, type MediaBucket } from "./media.ts";
 import {
   findSubmittedFile,
   getHistory,
@@ -184,6 +185,12 @@ type Bindings = {
    * sync.ts.)
    */
   SYNC: DurableObjectNamespace<SyncStore>;
+  /**
+   * Profile photos and uploaded backgrounds (src/media.ts), 2026-10-13. A
+   * private R2 bucket in the "us" jurisdiction. Optional: without it /media
+   * answers 503 and the app keeps pictures inside the Sync record as before.
+   */
+  MEDIA?: R2Bucket;
   /**
    * Canva connections and drafts: one CanvaStore Durable Object per student,
    * also in the "us" jurisdiction (see canvaStore below). Added 2026-10-05.
@@ -452,7 +459,7 @@ app.use("*", async (c, next) => {
     allowHeaders: ["Content-Type"],
     // So the app can read how long to wait after a 429 (rate limits, below).
     // Content-Disposition: the Canva PDF's file name when turning a design in (2026-10-06 review).
-    exposeHeaders: ["Retry-After", "Content-Disposition"],
+    exposeHeaders: ["Retry-After", "Content-Disposition", "X-Media-Version"],
   })(c, next);
 });
 
@@ -1004,6 +1011,8 @@ app.delete("/sync/settings", requireSession, async (c) => {
     return c.json({ error: "not_available_in_demo" }, 403);
   }
   await deleteSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
+  // The profile photo and background in R2 (src/media.ts) are Sync data too.
+  await deleteAllMedia(c.env.MEDIA as unknown as MediaBucket | undefined, session.uid);
   return c.json({ ok: true });
 });
 
@@ -2206,6 +2215,9 @@ app.route("/messages", messagesRoutes(extrasDeps));
 
 /** Browser notifications (src/push.ts). */
 app.route("/push", pushRoutes({ requireSession, fromOurApp: notFromOurApp }));
+
+/** Profile photo and background for Sync Across Devices, in R2 (src/media.ts). */
+app.route("/media", mediaRoutes({ requireSession, fromOurApp: notFromOurApp }) as any);
 
 /**
  * Turning in work on Schoology (2026-10-06): file uploads (streamed straight
