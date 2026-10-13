@@ -47,7 +47,11 @@
     { "name": "RATE_LIMIT_APPLY", "namespace_id": "1009", "simple": { "limit": 3, "period": 60 } },
     { "name": "RATE_LIMIT_APPLY_CODE", "namespace_id": "1010", "simple": { "limit": 3, "period": 60 } },
     { "name": "RATE_LIMIT_APPLY_VERIFY", "namespace_id": "1011", "simple": { "limit": 10, "period": 60 } },
-    { "name": "RATE_LIMIT_CLOUD", "namespace_id": "1012", "simple": { "limit": 60, "period": 60 } }
+    { "name": "RATE_LIMIT_CLOUD", "namespace_id": "1012", "simple": { "limit": 60, "period": 60 } },
+    { "name": "RATE_LIMIT_MEDIA", "namespace_id": "1013", "simple": { "limit": 20, "period": 60 } }
+  ],
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "averages-media", "jurisdiction": "us" }
   ],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SyncStore"] },
