@@ -565,6 +565,20 @@ app.get("/", (c) => {
  * accepting them — so a typo fails here, at the login screen, rather than
  * silently producing an app full of empty pages.
  */
+/**
+ * Every connected app this student has on our servers, disconnected: Canva
+ * (tokens and drafts) and Google Drive / OneDrive (sign-ins, Google's revoked
+ * too). Each one on its own, so one failing doesn't keep the others. Never
+ * throws: it runs after sign-out has already answered.
+ */
+async function forgetConnections(env: Bindings, uid: string, requestUrl: string): Promise<void> {
+  const jobs: Promise<unknown>[] = [];
+  if (env.CANVA) jobs.push(Promise.resolve().then(() => canvaStore(env, uid, requestUrl).disconnect()));
+  if (env.CLOUD) for (const app of CLOUD_APPS) jobs.push(Promise.resolve().then(() => cloudStore(env, uid, requestUrl).disconnect(uid, app)));
+  const results = await Promise.allSettled(jobs);
+  for (const r of results) if (r.status === "rejected") console.error("signout_forget_failed", r.reason);
+}
+
 /** Constant-time match against the reviewer secrets; off unless both are set and at least 16 characters. */
 function reviewSecretsMatch(env: Bindings, key: string, secret: string): boolean {
   const k = env.REVIEW_KEY ?? "";
@@ -697,7 +711,18 @@ app.delete("/auth/session", async (c) => {
   // never in the way: forgetPush never throws, and does nothing without the
   // PUSH binding.
   const session = await sessionFrom(c);
+  // ?forget=1 (2026-10-13): the app sends it when Sync Across Devices is off,
+  // where signing out means "leave nothing behind". Besides this device's
+  // data (which the app deletes itself), that's the connected apps kept here
+  // for this student: Canva (and its Edit in Canva drafts), Google Drive and
+  // OneDrive. Our own app only: a page on another site can't ask for it.
+  const forget = c.req.query("forget") === "1";
+  if (forget) {
+    const foreign = notFromOurApp(c);
+    if (foreign) return foreign;
+  }
   if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetPush(c.env, session.uid, c.req.url));
+  if (forget && session && !isDemo(session)) c.executionCtx.waitUntil(forgetConnections(c.env, session.uid, c.req.url));
   c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
   // A Google sign-in's refreshed access token, if any (see googleAccess).
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
