@@ -756,6 +756,22 @@ export async function getDesign(token: string, designId: string): Promise<Design
   return json?.design ? toDesign(json.design) : null;
 }
 
+/**
+ * Which formats Canva can export this design as (2026-10-15, the type pill):
+ * the keys of GET /designs/{id}/export-formats ("pdf", "pptx", "png"...). A
+ * format only some pages support still counts. Null when the design is gone
+ * or isn't theirs. Needs design:content:read.
+ */
+export async function getExportFormats(token: string, designId: string): Promise<string[] | null> {
+  const res = await canvaFetch(`${CANVA_API}/designs/${encodeURIComponent(designId)}/export-formats`, { headers: bearer(token) });
+  if (res.status === 404) return null;
+  const json = await readJson(res);
+  if (res.status === 401 || res.status === 403) throw new CanvaError("canva_reconnect_needed", 409);
+  if (!res.ok) throw failure(res, "formats", json);
+  const formats = json?.formats && typeof json.formats === "object" ? Object.keys(json.formats) : [];
+  return formats.filter((f) => /^[a-z_]{1,20}$/.test(f));
+}
+
 /** The student's own designs, newest first. Thumbnails expire, so the route must not be cached. */
 export async function listDesigns(
   token: string,
