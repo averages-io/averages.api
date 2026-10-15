@@ -174,6 +174,7 @@ console.log("\nassignment, attachments, files");
   const { res, data } = await call(`/data/assignment?section=${CHEM}&id=${LAB4}&tz=${TZ}`, { cookie });
   check("assignment: 200", res.status, 200);
   check("its details", [data.id, data.sectionId, data.title, data.type, data.time], [LAB4, CHEM, "Lab Report #4", "assignment", "11:59 PM"]);
+  check("what it's worth", typeof data.maxPoints === "number" && data.maxPoints > 0, true);
   check("description flattened to text", data.description.startsWith("Write up the acid-base titration lab."), true);
   check("two attached files, ids and names only", data.files, [
     { id: "7400000001", name: "Lab Report #4 Instructions", ext: "pdf", size: data.files[0].size },

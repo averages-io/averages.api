@@ -358,6 +358,7 @@ console.log("attachments");
     description: "<p>Write it up.</p>",
     due: "2026-08-21 23:59:00",
     type: "assignment",
+    max_points: "20",
     attachments: {
       files: { file: [{ id: 901, title: "Titration Data Sheet", filename: "titration.pdf", filesize: 2048, download_path: "https://api.schoology.com/v1/attachment/901/source/x.pdf" }] },
       links: { link: { id: 3, title: "Simulator", url: "https://phet.colorado.edu/" } },
@@ -371,6 +372,10 @@ console.log("attachments");
   const flat = adaptAssignmentDetail({ attachments: { files: [{ id: 1, filename: "a.docx" }], links: [{ url: "javascript:alert(1)" }] } }, "1");
   check("the flat array shape works too", flat.files.map((f) => f.ext), ["docx"]);
   check("non-http links are dropped", flat.links, []);
+  check("points it's worth come through as a number", detail.maxPoints, 20);
+  check("no points on Schoology: null", flat.maxPoints, null);
+  check("decimal points keep two places", adaptAssignmentDetail({ max_points: "12.5" }, "1").maxPoints, 12.5);
+  check("zero, negative or junk points: null", ["0", "-5", "abc", "Infinity"].map((v) => adaptAssignmentDetail({ max_points: v }, "1").maxPoints), [null, null, null, null]);
   check("findAttachment adds the real extension to a bare title", findAttachment(raw, "901")?.name, "Titration Data Sheet.pdf");
   check("findAttachment only finds that assignment's files", findAttachment(raw, "902"), null);
 }
