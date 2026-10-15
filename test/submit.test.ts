@@ -138,7 +138,15 @@ const accountFor = (uid: string) => {
 
 const app = new Hono();
 app.route("/submit", submitRoutes({ requireSession, fromOurApp }));
-app.route("/canva", canvaExportRoutes({ requireSession, canvaGuard, fromOurApp, storeFor: (_c, uid) => accountFor(uid) }));
+// The converter (src/convert.ts) is faked here: off until a test turns it on.
+let convertOn = false;
+let convertImpl: (pdf: Uint8Array) => Promise<Uint8Array> = async () => new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]);
+const converted: Uint8Array[] = [];
+app.route("/canva", canvaExportRoutes({
+  requireSession, canvaGuard, fromOurApp, storeFor: (_c, uid) => accountFor(uid),
+  converterOn: () => convertOn,
+  pdfToDocx: async (_c, pdf) => { converted.push(pdf); return convertImpl(pdf); },
+}));
 
 const UID = "4242";
 const KEY = "consumer-key";
@@ -606,9 +614,12 @@ let jobStatus: any = { id: JOB, status: "in_progress" };
 let exportCreate: (c: Call) => Response = () => json({ job: { id: JOB, status: "in_progress" } });
 let downloadUrl = "https://export-download.canva.com/DES1/1/0/0001.pdf?X-Amz-Signature=abc";
 let download: (c: Call) => Response = () => new Response(PDF, { headers: { "Content-Type": "binary/octet-stream", "Content-Length": String(PDF.byteLength) } });
+let exportFormats: any = { pdf: {}, jpg: {}, png: {}, pptx: {}, gif: {} };
 function canva(c: Call): Response {
   const p = c.url.pathname;
   if (c.url.hostname === "api.canva.com") {
+    if (p === "/rest/v1/designs/DES1/export-formats") return json({ formats: exportFormats });
+    if (p === "/rest/v1/designs/GONE/export-formats") return json({ code: "not_found" }, 404);
     if (p === "/rest/v1/designs/DES1") return json({ design: { id: "DES1", title: "Lab Report: Final/v2", urls: { edit_url: "https://www.canva.com/design/DES1/edit", view_url: "https://www.canva.com/design/DES1/view" }, updated_at: 1759700000 } });
     if (p === "/rest/v1/designs/GONE") return json({ code: "not_found" }, 404);
     if (p === "/rest/v1/exports" && c.method === "POST") return exportCreate(c);
@@ -668,7 +679,7 @@ const startExport = (id: string, opts: Init = {}, env = ENV) => call(`/canva/des
   check("in progress", [status.res.status, status.data], [200, { status: "in_progress" }]);
   check("asked Canva about that job with the student's token", [calls[0].url.href, calls[0].headers.get("Authorization")], [`https://api.canva.com/rest/v1/exports/${JOB}`, "Bearer CANVA_AT"]);
   jobStatus = { id: JOB, status: "success", urls: [downloadUrl] };
-  check("success (no download URL to the browser)", (await call(`/canva/exports/${job}`, { cookie: student })).data, { status: "success" });
+  check("success (no download URL to the browser), one file", (await call(`/canva/exports/${job}`, { cookie: student })).data, { status: "success", files: 1 });
   jobStatus = { id: JOB, status: "failed", error: { code: "license_required", message: "x" } };
   check("failed, saying why", (await call(`/canva/exports/${job}`, { cookie: student })).data, { status: "failed", error: "canva_export_license_required" });
   calls = [];
@@ -715,6 +726,86 @@ const startExport = (id: string, opts: Init = {}, env = ENV) => call(`/canva/des
   check("no length given: still streams through (counted)", [unsized.res.status, unsized.res.headers.get("Content-Length"), Array.from(new Uint8Array(await unsized.res.arrayBuffer()))], [200, null, Array.from(PDF)]);
   download = () => new Response("gone", { status: 403 });
   check("an expired download link: 502", await errorOf(call(`/canva/exports/${job}/file?design=DES1`, { cookie: student })), [502, "canva_export_unavailable"]);
+}
+
+/* ── The type pill: PowerPoint, PNG pages, Word (2026-10-15) ─────────── */
+{
+  console.log("\ntype pill: what a design can be");
+  const formats = (id = "DES1", env = ENV) => call(`/canva/designs/${id}/formats`, { cookie: student }, env);
+  calls = [];
+  exportFormats = { pdf: {}, jpg: {}, png: {}, pptx: {}, gif: {}, mp4: {} };
+  let r = await formats();
+  check("a presentation: PDF, PowerPoint, PNG (Canva's other formats left out)", [r.res.status, r.data], [200, { formats: ["pdf", "pptx", "png"] }]);
+  check("asked Canva's export-formats with the student's token", [calls[0]?.url.href, calls[0]?.headers.get("Authorization")], ["https://api.canva.com/rest/v1/designs/DES1/export-formats", "Bearer CANVA_AT"]);
+  exportFormats = { pdf: {}, png: { page_numbers: [1, 2] }, jpg: {} };
+  check("a Canva Doc (no PowerPoint), converter off: PDF and PNG", (await formats()).data, { formats: ["pdf", "png"] });
+  convertOn = true;
+  check("...converter on: Word too, right after PDF", (await formats()).data, { formats: ["pdf", "docx", "png"] });
+  exportFormats = { pdf: {}, pptx: {} };
+  check("a presentation never offers Word", (await formats()).data, { formats: ["pdf", "pptx"] });
+  exportFormats = {};
+  check("Canva lists nothing we can use: PDF", (await formats()).data, { formats: ["pdf"] });
+  check("a design that's gone: 404", await errorOf(formats("GONE")), [404, "canva_design_gone"]);
+  check("bad id: 400", await errorOf(formats("bad!id")), [400, "bad_request"]);
+  check("export flag off: reconnect", await errorOf(formats("DES1", { ...ENV, CANVA_EXPORT_ENABLED: undefined })), [409, "canva_reconnect_needed"]);
+
+  console.log("\ntype pill: exporting as each type");
+  const startAs = (format: unknown) => call(`/canva/designs/DES1/export`, { method: "POST", cookie: student, json: format === undefined ? {} : { format } });
+  calls = [];
+  const pptx = await startAs("pptx");
+  const created = calls.find((x) => x.url.pathname === "/rest/v1/exports");
+  check("PowerPoint: Canva is asked for pptx", [pptx.res.status, JSON.parse(String(created?.init.body)).format], [200, { type: "pptx" }]);
+  calls = [];
+  const word = await startAs("docx");
+  check("Word: Canva is asked for a PDF (the converter makes the Word)", [word.res.status, JSON.parse(String(calls.find((x) => x.url.pathname === "/rest/v1/exports")?.init.body)).format], [200, { type: "pdf" }]);
+  const png = await startAs("png");
+  check("an unknown format: 400", await errorOf(startAs("exe")), [400, "bad_request"]);
+  check("a format that isn't a string: 400", await errorOf(startAs(["pdf"])), [400, "bad_request"]);
+  convertOn = false;
+  check("Word with the converter off: 503", await errorOf(startAs("docx")), [503, "convert_unavailable"]);
+
+  console.log("\ntype pill: the files");
+  jobStatus = { id: JOB, status: "success", urls: [downloadUrl] };
+  download = () => new Response(PDF, { headers: { "Content-Length": String(PDF.byteLength) } });
+  const pp = await call(`/canva/exports/${pptx.data.job}/file?design=DES1`, { cookie: student });
+  check("PowerPoint: named .pptx, PowerPoint's type", [pp.res.status, pp.res.headers.get("Content-Type"), pp.res.headers.get("Content-Disposition")], [200, "application/vnd.openxmlformats-officedocument.presentationml.presentation", contentDisposition("Lab Report: Final v2.pptx")]);
+  check("PowerPoint: only page 1 exists", await errorOf(call(`/canva/exports/${pptx.data.job}/file?design=DES1&page=2`, { cookie: student })), [400, "bad_request"]);
+
+  const pages = ["https://export-download.canva.com/DES1/p1.png", "https://export-download.canva.com/DES1/p2.png", "https://export-download.canva.com/DES1/p3.png"];
+  jobStatus = { id: JOB, status: "success", urls: pages };
+  check("PNG: the status says how many files (one per page)", (await call(`/canva/exports/${png.data.job}`, { cookie: student })).data, { status: "success", files: 3 });
+  calls = [];
+  const p2 = await call(`/canva/exports/${png.data.job}/file?design=DES1&page=2`, { cookie: student });
+  check("PNG page 2: that page's URL, named for its page", [p2.res.status, calls.find((x) => x.url.hostname === "export-download.canva.com")?.url.href, p2.res.headers.get("Content-Type"), p2.res.headers.get("Content-Disposition")], [200, pages[1], "image/png", contentDisposition("Lab Report: Final v2 (page 2 of 3).png")]);
+  check("PNG: no page 4", await errorOf(call(`/canva/exports/${png.data.job}/file?design=DES1&page=4`, { cookie: student })), [400, "bad_request"]);
+  check("PNG: page 0 and junk refused", [await errorOf(call(`/canva/exports/${png.data.job}/file?design=DES1&page=0`, { cookie: student })), await errorOf(call(`/canva/exports/${png.data.job}/file?design=DES1&page=x`, { cookie: student }))], [[400, "bad_request"], [400, "bad_request"]]);
+  jobStatus = { id: JOB, status: "success", urls: Array.from({ length: 21 }, (_, i) => `https://export-download.canva.com/DES1/p${i}.png`) };
+  check("PNG: more than 20 pages can't be one turn-in", (await call(`/canva/exports/${png.data.job}`, { cookie: student })).data, { status: "failed", error: "canva_export_too_many_pages" });
+  check("...nor fetched", await errorOf(call(`/canva/exports/${png.data.job}/file?design=DES1`, { cookie: student })), [422, "canva_export_too_many_pages"]);
+
+  jobStatus = { id: JOB, status: "success", urls: [downloadUrl] };
+  convertOn = true;
+  converted.length = 0;
+  const w = await call(`/canva/exports/${word.data.job}/file?design=DES1`, { cookie: student });
+  const wb = new Uint8Array(await w.res.arrayBuffer());
+  check("Word: the PDF went to the converter", converted.map((b) => Array.from(b)), [Array.from(PDF)]);
+  check("Word: the converter's .docx comes back, named .docx", [w.res.status, Array.from(wb.slice(0, 4)), w.res.headers.get("Content-Type"), w.res.headers.get("Content-Disposition"), w.res.headers.get("Content-Length")], [200, [0x50, 0x4b, 3, 4], "application/vnd.openxmlformats-officedocument.wordprocessingml.document", contentDisposition("Lab Report: Final v2.docx"), "7"]);
+  convertImpl = async () => { const e = new Error("convert_failed") as Error & { status: number }; e.name = "ConvertError"; e.status = 422; throw e; };
+  check("Word: the converter can't: 422 convert_failed", await errorOf(call(`/canva/exports/${word.data.job}/file?design=DES1`, { cookie: student })), [422, "convert_failed"]);
+  convertImpl = async () => { const e = new Error("convert_unavailable") as Error & { status: number }; e.name = "ConvertError"; e.status = 503; throw e; };
+  check("Word: the converter is down: 503", await errorOf(call(`/canva/exports/${word.data.job}/file?design=DES1`, { cookie: student })), [503, "convert_unavailable"]);
+  download = () => new Response(PDF, { headers: { "Content-Length": String(40 * 1024 * 1024 + 1) } });
+  converted.length = 0;
+  check("Word: a PDF over 40 MB isn't sent to the converter", [await errorOf(call(`/canva/exports/${word.data.job}/file?design=DES1`, { cookie: student })), converted.length], [[413, "file_too_large"], 0]);
+  download = () => new Response(PDF, { headers: { "Content-Length": String(PDF.byteLength) } });
+  convertOn = false;
+  check("Word with the converter switched off later: 503", await errorOf(call(`/canva/exports/${word.data.job}/file?design=DES1`, { cookie: student })), [503, "convert_unavailable"]);
+  convertImpl = async () => new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]);
+  const old = await sealExport({ j: JOB, d: "DES1", t: "Old token", u: UID }, SECRET);
+  const o = await call(`/canva/exports/${old}/file?design=DES1`, { cookie: student });
+  check("a job token from before types: still a PDF", [o.res.status, o.res.headers.get("Content-Type"), o.res.headers.get("Content-Disposition")], [200, "application/pdf", contentDisposition("Old token.pdf")]);
+  const forged = await sealExport({ j: JOB, d: "DES1", t: "x", u: UID, f: "exe" as any }, SECRET);
+  check("a token with a made-up type: 404", await errorOf(call(`/canva/exports/${forged}/file?design=DES1`, { cookie: student })), [404, "canva_export_not_found"]);
 }
 
 /* ── Real editor output (2026-10-06 review) ───────────────────────────── */
