@@ -595,6 +595,8 @@ export interface AssignmentDetail {
   dueAt?: string;
   time?: string;
   type: string;
+  /** What it's worth (Schoology's max_points), or null when it isn't graded with points (2026-10-15). */
+  maxPoints: number | null;
   files: AttachmentFile[];
   links: { title: string; url: string }[];
 }
@@ -643,9 +645,17 @@ export function adaptAssignmentDetail(raw: Raw, sectionId: string, tz = "UTC"): 
     due: formatDue(raw?.due),
     ...dueParts(raw?.due, tz),
     type: TYPE_MAP[String(raw?.type ?? "").toLowerCase()] ?? "assignment",
+    maxPoints: pointsOf(raw?.max_points),
     files,
     links,
   };
+}
+
+/** A points total the assignment page can show: positive and finite, up to two decimals; anything else is null. */
+function pointsOf(value: unknown): number | null {
+  const n = num(value);
+  if (n === null || !Number.isFinite(n) || n <= 0 || n > 100000) return null;
+  return Math.round(n * 100) / 100;
 }
 
 /** The raw file entry for an attachment id, with its Schoology download path (Worker only). */
