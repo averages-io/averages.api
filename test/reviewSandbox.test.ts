@@ -153,6 +153,8 @@ console.log("\nwho's signed in, the bundle");
   check("trends: chemistry up, English down", [data.COURSES[0].trend, data.COURSES[2].trend], ["up", "down"]);
   check("five graded points behind every prediction", Object.values(data.HISTORY).map((h: any) => h.points.length), [5, 5, 5, 5, 5, 5]);
   check("chemistry's scores", data.HISTORY[CHEM].points, [72, 79, 84, 88, 90]);
+  check("each trend point has its assignment's name", data.HISTORY[CHEM].titles.every((t: any) => typeof t[0] === "string" && t[0].length > 0), true);
+  check("no assignment ids in the trend", Object.values(data.HISTORY).some((h: any) => "ids" in h), false);
   const overdue = data.OVERDUE.map((o: any) => o.title);
   // Starts with these three (the quiz due today joins them in the last minute of a Pacific day).
   check("overdue: the three past-due items, oldest first", overdue.slice(0, 3), ["Reading Response", "Chapter 6 Discussion", "Lab Report #4"]);
@@ -175,6 +177,9 @@ console.log("\nassignment, attachments, files");
   check("assignment: 200", res.status, 200);
   check("its details", [data.id, data.sectionId, data.title, data.type, data.time], [LAB4, CHEM, "Lab Report #4", "assignment", "11:59 PM"]);
   check("what it's worth", typeof data.maxPoints === "number" && data.maxPoints > 0, true);
+  check("not graded yet: no score", data.score, null);
+  const graded = await call(`/data/assignment?section=${CHEM}&id=7100000104&tz=${TZ}`, { cookie });
+  check("graded: the student's score comes with it", graded.data.score, { earned: 88, possible: 100 });
   check("description flattened to text", data.description.startsWith("Write up the acid-base titration lab."), true);
   check("two attached files, ids and names only", data.files, [
     { id: "7400000001", name: "Lab Report #4 Instructions", ext: "pdf", size: data.files[0].size },

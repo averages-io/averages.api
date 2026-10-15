@@ -143,7 +143,7 @@ const raw: CourseRaw[] = [
 const b = adaptClassroomBundle(raw, NOW, "America/Los_Angeles");
 check("courses", b.COURSES.map((c) => [c.id, c.name, c.grade, c.pct, c.graded, c.platform]), [["111", "Biology", "C+", 78, true, "classroom"], ["222", "New elective", "—", 0, false, "classroom"]]);
 check("course color assigned", /^#[0-9a-f]{6}$/.test(b.COURSES[0].color), true);
-check("history: last graded, oldest first", b.HISTORY["111"], { points: [90, 90, 70], dates: ["Oct 1", "Oct 3", "Oct 5"] });
+check("history: last graded, oldest first, each with its assignment", b.HISTORY["111"], { points: [90, 90, 70], dates: ["Oct 1", "Oct 3", "Oct 5"], titles: [["Cell worksheet", "assignment"], ["Lab report", "assignment"], ["Unit test", "assignment"]] });
 check("overdue: past due and not turned in", b.OVERDUE.map((x) => x.title), ["Missing reading"]);
 check("overdue item shape", b.OVERDUE[0], { type: "assignment", title: "Missing reading", courseId: "111", due: "Mon Oct 5", dueAt: "2026-10-06T06:59:00.000Z", id: "4", platform: "classroom" });
 check("upcoming: soonest first, turned-in work left out", b.UPCOMING.map((x) => x.title), ["Due tonight", "Next week"]);

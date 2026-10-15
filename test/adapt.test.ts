@@ -12,6 +12,8 @@
 import {
   adaptAssignments,
   adaptCourses,
+  addHistoryTitles,
+  assignmentScore,
   adaptMessages,
   colorForCourse,
   computeProjectedGPA,
@@ -289,6 +291,23 @@ console.log("\nmessage bodies are flattened to plain text (they arrive as HTML)"
   check("messageText: a flood of unclosed tags is fast", tMsg < 50, true);
   check("...and still plain text", plain.endsWith("x"), true);
   check("normal markup still flattened", toPlainText("<p>Hi <b>there</b></p><br>next &amp; last"), "Hi there next & last");
+}
+
+console.log("\ntrend titles and one assignment's score (2026-10-15)");
+{
+  const grades = [{ section_id: "11", period: [{ assignment: [
+    { assignment_id: "501", grade: "18", max_points: "20", timestamp: "1759300000" },
+    { assignment_id: "502", grade: "45", max_points: "50", timestamp: "1759400000" },
+    { assignment_id: "503", grade: "9", max_points: "10", timestamp: "1759500000" },
+    { assignment_id: "504", grade: "0", max_points: "10", exception: "1", timestamp: "1759600000" },
+  ] }] }];
+  const { HISTORY } = adaptCourses([{ id: "11", course_title: "Chem" }], grades);
+  addHistoryTitles(HISTORY, { "11": [{ id: "501", title: "Lab <b>1</b>", type: "assignment" }, { id: "502", title: "Unit Test", type: "assessment" }] });
+  check("each point named, in order, with its type", HISTORY["11"].titles, [["Lab 1", "assignment"], ["Unit Test", "assessment"], ["", "assignment"]]);
+  check("ids don't reach the page", "ids" in HISTORY["11"], false);
+  check("score found by assignment id", assignmentScore(grades, "11", "502"), { earned: 45, possible: 50 });
+  check("excused work has no score", assignmentScore(grades, "11", "504"), null);
+  check("not graded / other class: null", [assignmentScore(grades, "11", "999"), assignmentScore(grades, "12", "501"), assignmentScore([], "11", "501")], [null, null, null]);
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
