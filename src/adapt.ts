@@ -340,9 +340,21 @@ export function sectionLabel(text: unknown, courseName: string): string {
   return rest ? label : "";
 }
 
+/**
+ * One class's last graded scores for the trend chart. `titles` is
+ * [title, type] per point, for the chart's hover labels (2026-10-15); `ids`
+ * only lives on the server long enough to look the titles up.
+ */
+export interface HistorySeries {
+  points: number[];
+  dates: string[];
+  titles?: [string, string][];
+  ids?: string[];
+}
+
 export interface AdaptedBundle {
   COURSES: AdaptedCourse[];
-  HISTORY: Record<string, { points: number[]; dates: string[] }>;
+  HISTORY: Record<string, HistorySeries>;
   OVERDUE: Raw[];
   UPCOMING: Raw[];
   TODAY: Raw[];
@@ -353,7 +365,7 @@ export interface AdaptedBundle {
  * Pulls the last few graded assignments for one section out of a grades
  * payload and turns them into the percentage series the prediction chart draws.
  */
-function historyForSection(gradeEntry: Raw): { points: number[]; dates: string[] } {
+function historyForSection(gradeEntry: Raw): HistorySeries {
   const buckets: Raw[] = [];
   for (const period of asArray(gradeEntry?.period)) {
     for (const assignment of asArray(period?.assignment)) {
@@ -373,16 +385,52 @@ function historyForSection(gradeEntry: Raw): { points: number[]; dates: string[]
         pct: Math.round((earned / possible) * 100),
         at: toDate(a?.timestamp ?? a?.created)?.getTime() ?? 0,
         raw: a?.timestamp ?? a?.created,
+        id: String(a?.assignment_id ?? ""),
       };
     })
-    .filter((x): x is { pct: number; at: number; raw: any } => x !== null)
+    .filter((x): x is { pct: number; at: number; raw: any; id: string } => x !== null)
     .sort((a, b) => a.at - b.at)
     .slice(-5);
 
   return {
     points: scored.map((s) => s.pct),
     dates: scored.map((s) => formatShortDate(s.raw)),
+    ids: scored.map((s) => s.id),
   };
+}
+
+/**
+ * Names each trend point (2026-10-15): the grades payload only has assignment
+ * ids, so the titles come from the assignments lists the bundle already
+ * fetched. A score whose assignment isn't in the list gets "". The ids are
+ * dropped afterwards; the page never needed them.
+ */
+export function addHistoryTitles(history: Record<string, HistorySeries>, assignmentsBySection: Record<string, Raw[]>): void {
+  for (const [sectionId, series] of Object.entries(history)) {
+    const ids = series.ids ?? [];
+    delete series.ids;
+    const byId = new Map<string, Raw>();
+    for (const a of assignmentsBySection[sectionId] ?? []) {
+      const id = String(a?.id ?? "");
+      if (/^\d{1,20}$/.test(id)) byId.set(id, a);
+    }
+    series.titles = series.points.map((_, i) => {
+      const a = byId.get(ids[i] ?? "");
+      if (!a) return ["", "assignment"];
+      return [toPlainText(a?.title ?? "").slice(0, 200), TYPE_MAP[String(a?.type ?? "").toLowerCase()] ?? "assignment"];
+    });
+  }
+}
+
+/** The student's own score on one assignment, from GET /users/{uid}/grades?section_id= (2026-10-15). */
+export function assignmentScore(gradeSections: Raw[], sectionId: string, assignmentId: string): { earned: number; possible: number } | null {
+  for (const entry of gradeSections ?? []) {
+    if (String(entry?.section_id ?? entry?.id ?? "") !== sectionId) continue;
+    for (const row of gradeRows(entry)) {
+      if (String(row?.assignment_id ?? "") === assignmentId) return scoreOf(row);
+    }
+  }
+  return null;
 }
 
 function asArray(value: unknown): Raw[] {
@@ -597,6 +645,8 @@ export interface AssignmentDetail {
   type: string;
   /** What it's worth (Schoology's max_points), or null when it isn't graded with points (2026-10-15). */
   maxPoints: number | null;
+  /** The student's score once graded, from their grades (the route adds it); null when not graded. */
+  score?: { earned: number; possible: number } | null;
   files: AttachmentFile[];
   links: { title: string; url: string }[];
 }

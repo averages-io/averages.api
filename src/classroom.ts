@@ -421,7 +421,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function adaptClassroomBundle(raw: CourseRaw[], now: number, tz: string) {
   const COURSES: ClassroomCourse[] = [];
-  const HISTORY: Record<string, { points: number[]; dates: string[] }> = {};
+  const HISTORY: Record<string, { points: number[]; dates: string[]; titles?: [string, string][] }> = {};
   const overdue: { at: number; item: ClassroomItem }[] = [];
   const upcoming: { at: number; item: ClassroomItem }[] = [];
   const submitted: { at: number; item: Raw }[] = [];
@@ -515,6 +515,8 @@ export function adaptClassroomBundle(raw: CourseRaw[], now: number, tz: string) 
     HISTORY[courseId] = {
       points: recent.map((g) => Math.round((g.earned / g.possible) * 100)),
       dates: recent.map((g) => (g.at ? formatShortIn(g.at, tz) : "")),
+      // Each point's assignment, for the trend chart's hover labels (2026-10-15).
+      titles: recent.map((g) => [String(g.title ?? ""), "assignment"] as [string, string]),
     };
 
     // A teacher can hide the overall grade from students in Classroom; it's

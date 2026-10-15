@@ -56,6 +56,8 @@ import {
   adaptMessages,
   adaptRecentGrades,
   adaptSchoologyGradebook,
+  addHistoryTitles,
+  assignmentScore,
   colorForCourse,
   computeProjectedGPA,
   findAttachment,
@@ -144,6 +146,7 @@ import {
   safeTimeZone,
 } from "./classroom.ts";
 import { getRecipients, namesFrom } from "./messages.ts";
+import { getSectionGrades } from "./extras.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
 import { rateLimit } from "./rateLimit.ts";
 import type { SyncStore } from "./syncStore.ts";
@@ -1111,6 +1114,12 @@ app.get("/data/bundle", requireSession, async (c) => {
     );
 
     const { OVERDUE, UPCOMING, TODAY } = adaptAssignments(assignmentsBySection, studentTimeZone(c));
+    // Names for the trend chart's points, from the lists just fetched (no extra calls).
+    try {
+      addHistoryTitles(HISTORY, assignmentsBySection);
+    } catch (error) {
+      console.error("bundle_history_titles_failed", error instanceof Error ? error.message : String(error));
+    }
 
     // The fetch already happened up in wave 1; this is just the mapping. It
     // keeps its own guard because adaptMessages walks a shape Schoology varies
@@ -1353,9 +1362,21 @@ app.get("/data/assignment", requireSession, async (c) => {
     return c.json({ error: "bad_request" }, 400);
   }
   try {
-    const raw = await getAssignment(section, id, session);
+    // The student's score comes from their grades in this class, asked for at
+    // the same time (2026-10-15, the Submissions box's "18/20 A-"). It never
+    // fails the page: without it the box shows just the points.
+    const [raw, gradeSections] = await Promise.all([
+      getAssignment(section, id, session),
+      getSectionGrades(session.uid, section, session).catch(() => null),
+    ]);
     c.header("Cache-Control", "private, no-store");
-    return c.json(adaptAssignmentDetail(raw, section, studentTimeZone(c)));
+    let score: { earned: number; possible: number } | null = null;
+    try {
+      score = gradeSections ? assignmentScore(gradeSections, section, id) : null;
+    } catch {
+      score = null;
+    }
+    return c.json({ ...adaptAssignmentDetail(raw, section, studentTimeZone(c)), score });
   } catch (error) {
     if (error instanceof SchoologyError) {
       return c.json({ error: "schoology_error", status: error.status }, error.status === 404 ? 404 : 502);
