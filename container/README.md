@@ -23,4 +23,4 @@ curl -X POST --data-binary @some.pdf http://localhost:8080/pdf-to-docx -o out.do
 
 ## Licenses
 
-pdf2docx is GPL-3.0 and PyMuPDF is AGPL-3.0. The API itself is GPL-3.0, so the licenses fit. AGPL also covers software used over a network: the source of this container (these files, unchanged libraries) has to be available to the people it serves. Keep it published, for example in a public copy of this repository, and list both libraries in the API's third-party notices.
+pdf2docx is GPL-3.0 and PyMuPDF is AGPL-3.0. The API itself is GPL-3.0, so the licenses fit. AGPL also covers software used over a network: the source of this container (these files, unchanged libraries) has to be available to the people it serves. Keep it published, for example in a public copy of this repository. Both libraries and the rest of the image are listed in `THIRD-PARTY-NOTICES.md` at the repository root, and the privacy policy links the code.
