@@ -283,6 +283,26 @@ export function isSchoologyApiUrl(raw: string): boolean {
 }
 
 /**
+ * A URL an attachment download may be redirected to (2026-10-16 hardening).
+ * Schoology serves file bodies off a public CDN, so a redirect to a public
+ * https host is expected. This refuses the rest, matching the guard the Canva
+ * export (isExportUrl) and the upload (isUploadLocation) already use: https
+ * only, no embedded credentials, the default port, a real dotted hostname,
+ * and never an IP literal or localhost. It closes any chance of a redirect
+ * (which Schoology, not the student, controls) steering the Worker's fetch at
+ * an internal or metadata address. The OAuth header is already withheld from
+ * non-Schoology hosts, so this is defence in depth, brought in line with the
+ * rest of the codebase.
+ */
+export function isSafeAttachmentTarget(u: URL): boolean {
+  const host = u.hostname.toLowerCase();
+  if (u.protocol !== "https:" || u.username || u.password || u.port !== "") return false;
+  if (!host.includes(".") || host === "localhost" || host.endsWith(".localhost")) return false;
+  if (/^[\d.]+$/.test(host) || host.startsWith("[")) return false; // IPv4 / IPv6 literals
+  return true;
+}
+
+/**
  * Reads a response body, stopping (and failing) as soon as it passes
  * `maxBytes`. When the size is announced up front, the bytes go straight into
  * one buffer of that size, so a big file isn't held twice in memory.
@@ -372,7 +392,7 @@ export async function openAttachment(downloadPath: string, creds: Credentials): 
     const location = res.headers.get("Location");
     if (!location) break;
     const next = new URL(location, url);
-    if (next.protocol !== "https:") throw new SchoologyError("Attachment redirect is not https", 502);
+    if (!isSafeAttachmentTarget(next)) throw new SchoologyError("Attachment redirect is not allowed", 502);
     url = next.toString();
     res = await get(url);
   }
