@@ -114,6 +114,8 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (under(path, "/submit")) return RATE_RULES.submit;
   if (under(path, "/push")) return method === "GET" && path === "/push/config" ? null : RATE_RULES.push;
   if (method === "GET" && /^\/canva\/exports\/[^/]+$/.test(path)) return RATE_RULES.canvaPoll;
+  // Save folder to Canva progress (2026-10-16): polled every few seconds, like an export.
+  if (method === "GET" && /^\/canva\/save-folder\/[^/]+$/.test(path)) return RATE_RULES.canvaPoll;
   if (method === "GET" && /^\/canva\/folders\/[^/]+\/items$/.test(path)) return RATE_RULES.canvaBrowse;
   if (under(path, "/canva")) return RATE_RULES.canva;
   if (under(path, "/cloud")) return RATE_RULES.cloud;

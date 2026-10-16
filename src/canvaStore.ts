@@ -15,6 +15,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { CanvaAccount, type CanvaConfig, type Draft, type ReturnContext } from "./canva.ts";
+import { SaveJobs, type SaveFile, type SaveItem, type SaveStatus } from "./canvaSave.ts";
 
 export class CanvaStore extends DurableObject<CanvaConfig> {
   account: CanvaAccount;
@@ -83,5 +84,27 @@ export class CanvaStore extends DurableObject<CanvaConfig> {
   }
   removeDraft(designId: string): Promise<boolean> {
     return this.account.removeDraft(designId);
+  }
+
+  /* Save folder to Canva (2026-10-16, src/canvaSave.ts). Disconnecting deletes these too. */
+  private jobs(): SaveJobs {
+    return new SaveJobs(this.ctx.storage);
+  }
+  /** The new job's status, or null when two are already running. */
+  async saveCreate(input: { id: string; name: string; folderId: string | null; files: SaveFile[]; sealed: string; uid: string }): Promise<SaveStatus | null> {
+    const job = await this.jobs().create(input);
+    return job ? this.jobs().status(job.id) : null;
+  }
+  saveStatus(id: string): Promise<SaveStatus | null> {
+    return this.jobs().status(id);
+  }
+  saveTake(id: string, i: number): Promise<{ item: SaveItem; sealed: string; uid: string; folderId: string | null } | null> {
+    return this.jobs().take(id, i);
+  }
+  saveRecord(id: string, i: number, result: { state: "done" | "failed"; name?: string; designs?: string[]; error?: string }): Promise<void> {
+    return this.jobs().record(id, i, result);
+  }
+  saveStop(id: string): Promise<SaveStatus | null> {
+    return this.jobs().stop(id);
   }
 }

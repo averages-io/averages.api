@@ -14,6 +14,12 @@
  *     subscription address and the notification's generic text ("A new grade
  *     was posted."). The PushStore sends it again to that one browser.
  *
+ *   - "canva_save" (2026-10-16, src/canvaSave.ts): one file of a "Save folder
+ *     to Canva" job. Not a retry: every file goes through the queue, spaced
+ *     out so Canva's 20-imports-a-minute limit is never reached. The message
+ *     carries the student's CanvaStore id (opaque), the job id and the file's
+ *     number; the job itself is in the CanvaStore.
+ *
  * So nothing in a queue message is student data: no names, grades, titles,
  * email addresses or subscription keys.
  *
@@ -37,10 +43,11 @@ export interface RetryNote {
 }
 export type RetryMessage =
   | { k: "school_email"; id: string; dup: boolean; at: number }
-  | { k: "push"; obj: string; ep: string; note: RetryNote; at: number };
+  | { k: "push"; obj: string; ep: string; note: RetryNote; at: number }
+  | { k: "canva_save"; obj: string; job: string; i: number; at: number };
 
-/** What one try came to. */
-export type RetryOutcome = "done" | "retry" | "drop";
+/** What one try came to. `retryIn`: try again after that many seconds (a "slow down" with its own wait). */
+export type RetryOutcome = "done" | "retry" | "drop" | { retryIn: number };
 
 export interface RetryEnv {
   RETRY?: Queue<RetryMessage>;
@@ -57,6 +64,11 @@ export const MAX_ATTEMPTS = RETRY_DELAYS.length;
 export const PUSH_RETRY_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 /** An application email is still worth sending for a day (the queue keeps messages 24 hours on Workers Free). */
 export const EMAIL_RETRY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** A Canva save job's sign-in lasts two hours (SAVE_CRED_TTL_S in canvaSave.ts); after that its files can't be fetched. */
+export const SAVE_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+/** Files in one save job (SAVE_MAX_FILES in canvaSave.ts). */
+const SAVE_MAX_INDEX = 49;
+const JOB_RE = /^[A-Za-z0-9_-]{8,40}$/;
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const OBJ_RE = /^[0-9a-f]{64}$/;
@@ -75,6 +87,13 @@ export function isRetryMessage(body: unknown): body is RetryMessage {
       typeof m.ep === "string" && EP_RE.test(m.ep) &&
       !!n && typeof n === "object" &&
       ["title", "body", "url", "tag"].every((key) => typeof n[key] === "string" && (n[key] as string).length <= 200)
+    );
+  }
+  if (m.k === "canva_save") {
+    return (
+      typeof m.obj === "string" && OBJ_RE.test(m.obj) &&
+      typeof m.job === "string" && JOB_RE.test(m.job) &&
+      Number.isInteger(m.i) && (m.i as number) >= 0 && (m.i as number) <= SAVE_MAX_INDEX
     );
   }
   return false;
@@ -113,10 +132,36 @@ export async function enqueueRetry(env: RetryEnv, message: RetryMessage, delaySe
   }
 }
 
+/**
+ * Several messages at once, each with its own delay (a Canva save job's files,
+ * spaced out). Never throws; false when there's no queue or it refused.
+ */
+export async function enqueueMany(env: RetryEnv, items: { message: RetryMessage; delaySeconds: number }[]): Promise<boolean> {
+  if (!env.RETRY || items.length === 0) return false;
+  if (!items.every((x) => isRetryMessage(x.message))) {
+    console.error("retry_enqueue_refused", "batch");
+    return false;
+  }
+  try {
+    // The queue takes up to 100 messages a call.
+    for (let n = 0; n < items.length; n += 100) {
+      await env.RETRY.sendBatch(items.slice(n, n + 100).map((x) => ({ body: x.message, delaySeconds: Math.max(0, Math.min(43200, Math.round(x.delaySeconds))) })));
+    }
+    console.log("retry_queued_batch", items[0].message.k, items.length);
+    return true;
+  } catch (error) {
+    console.error("retry_enqueue_failed", items[0].message.k, error instanceof Error ? error.message : String(error));
+    return false;
+  }
+}
+
 /** One try for each kind; real ones in index.ts, fakes in the tests. Each returns an outcome and doesn't throw on purpose (a throw counts as "retry"). */
 export interface RetryHandlers {
   schoolEmail(id: string, duplicate: boolean): Promise<RetryOutcome>;
   push(obj: string, ep: string, note: RetryNote, at: number): Promise<RetryOutcome>;
+  canvaSave(obj: string, job: string, i: number): Promise<RetryOutcome>;
+  /** The last try failed too, or the message is too old: a chance to record that (a save job's file is marked failed). */
+  gaveUp?(message: RetryMessage): Promise<void>;
 }
 
 /**
@@ -131,15 +176,19 @@ export async function handleRetryBatch(batch: MessageBatch<unknown>, handlers: R
       msg.ack();
       continue;
     }
-    const maxAge = body.k === "push" ? PUSH_RETRY_MAX_AGE_MS : EMAIL_RETRY_MAX_AGE_MS;
+    const maxAge = body.k === "push" ? PUSH_RETRY_MAX_AGE_MS : body.k === "canva_save" ? SAVE_MAX_AGE_MS : EMAIL_RETRY_MAX_AGE_MS;
     if (now - body.at > maxAge) {
       console.log("retry_too_old", body.k);
+      await giveUp(handlers, body);
       msg.ack();
       continue;
     }
     let outcome: RetryOutcome;
     try {
-      outcome = body.k === "school_email" ? await handlers.schoolEmail(body.id, body.dup) : await handlers.push(body.obj, body.ep, body.note, body.at);
+      outcome =
+        body.k === "school_email" ? await handlers.schoolEmail(body.id, body.dup)
+        : body.k === "push" ? await handlers.push(body.obj, body.ep, body.note, body.at)
+        : await handlers.canvaSave(body.obj, body.job, body.i);
     } catch (error) {
       console.error("retry_try_failed", body.k, error instanceof Error ? error.message : String(error));
       outcome = "retry";
@@ -152,9 +201,19 @@ export async function handleRetryBatch(batch: MessageBatch<unknown>, handlers: R
       msg.ack();
     } else if (msg.attempts >= MAX_ATTEMPTS) {
       console.error("retry_gave_up", body.k, msg.attempts);
+      await giveUp(handlers, body);
       msg.ack();
     } else {
-      msg.retry({ delaySeconds: delayFor(msg.attempts) });
+      msg.retry({ delaySeconds: typeof outcome === "object" ? Math.max(1, Math.min(3600, Math.round(outcome.retryIn))) : delayFor(msg.attempts) });
     }
+  }
+}
+
+async function giveUp(handlers: RetryHandlers, body: RetryMessage): Promise<void> {
+  if (!handlers.gaveUp) return;
+  try {
+    await handlers.gaveUp(body);
+  } catch (error) {
+    console.error("retry_give_up_failed", body.k, error instanceof Error ? error.message : String(error));
   }
 }

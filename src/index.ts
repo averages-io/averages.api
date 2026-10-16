@@ -101,7 +101,7 @@ import { checkTurnstile, emailAllowList, emailEndings, emailKey, emailProblem, s
 import { EmailMessage } from "cloudflare:email";
 import { autoReplyAllowed, buildMime, cleanEmail, NOREPLY_ADDRESS, SCHOOLS_ADDRESS } from "./mail.ts";
 import { applicationEmail, autoReplyEmail, inboundCopyEmail, verifyCodeEmail } from "./schoolsMail.ts";
-import { enqueueRetry, handleRetryBatch, type RetryHandlers, type RetryMessage } from "./retryQueue.ts";
+import { enqueueMany, enqueueRetry, handleRetryBatch, type RetryHandlers, type RetryMessage } from "./retryQueue.ts";
 import { readEmailText } from "./mailRead.ts";
 import { withFlags, featureOn, featureForRoute, FEATURE_KEYS, type FeatureKey, type Features } from "./flags.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
@@ -170,7 +170,8 @@ import {
 } from "./submit.ts";
 import { canvaExportRoutes } from "./canvaExport.ts";
 import { converterOn, pdfToDocx, type Converter } from "./convert.ts";
-import { canvaFolderRoutes } from "./canvaFolders.ts";
+import { canvaFolderRoutes, createFolder, moveItem } from "./canvaFolders.ts";
+import { cleanFolderName, newJobId, parseSaveFiles, SAVE_CRED_TTL_S, SAVE_JOB_RE, SAVE_MAX_FILES, SAVE_SPACING_S, saveOneFile } from "./canvaSave.ts";
 
 // The Durable Object classes have to be exported from the Worker's main module
 // for Cloudflare to find them (see wrangler.jsonc's durable_objects).
@@ -1921,6 +1922,88 @@ app.post("/canva/edit", requireSession, async (c) => {
 });
 
 /**
+ * Save a folder to Canva (2026-10-16, src/canvaSave.ts): every file in one of
+ * the teacher's folders (or a single file) becomes a design in the student's
+ * Canva, in a new Canva folder with the folder's name. The files go through
+ * the queue one at a time, spaced out under Canva's limit; this answers at
+ * once with the job, and GET /canva/save-folder/:job shows how it's going.
+ */
+const SAVE_PURPOSE = "canva-save";
+app.post("/canva/save-folder", requireSession, async (c) => {
+  const blocked = canvaGuard(c) ?? notFromOurApp(c);
+  if (blocked) return blocked;
+  const session = c.get("session");
+  if (isGoogle(session)) return c.json({ error: "classroom_not_supported" }, 403);
+  // Runs on the queue: without it there's nothing to run the job.
+  if (!c.env.RETRY) return c.json({ error: "save_unavailable" }, 503);
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_body" }, 400);
+  }
+  if (Array.isArray(body?.files) && body.files.length > SAVE_MAX_FILES) return c.json({ error: "too_many_files", max: SAVE_MAX_FILES }, 413);
+  const files = parseSaveFiles(body?.files);
+  if (!files) return c.json({ error: "bad_request" }, 400);
+  const name = cleanFolderName(body?.name);
+  const store = canvaStore(c.env, session.uid, c.req.url);
+  try {
+    // Connected? (409 canva_not_connected / canva_reconnect_needed otherwise.)
+    await store.accessToken(session.uid);
+    // A Canva folder for more than one file, when the connection may make folders. Without, they go to Projects.
+    let folderId: string | null = null;
+    if (files.length > 1 && canvaFoldersEnabled(c.env)) {
+      try {
+        const token = await store.accessTokenWithScope(session.uid, FOLDER_WRITE_SCOPE);
+        folderId = (await createFolder(token, name, "root")).id || null;
+      } catch (error) {
+        console.log("canva_save_no_folder", errorCode(error, "canva_folder_failed"));
+      }
+    }
+    // The sign-in, sealed, so the queue can fetch the files from Schoology; gone when the job ends.
+    const sealed = await sealValue(JSON.stringify(session), c.env.SESSION_SECRET, SAVE_PURPOSE, SAVE_CRED_TTL_S);
+    const id = newJobId();
+    const status = await store.saveCreate({ id, name, folderId, files, sealed, uid: session.uid });
+    if (!status) return c.json({ error: "too_many_save_jobs" }, 429);
+    const obj = store.id.toString();
+    const at = Date.now();
+    const queued = await enqueueMany(
+      c.env,
+      files.map((_, i) => ({ message: { k: "canva_save" as const, obj, job: id, i, at }, delaySeconds: i * SAVE_SPACING_S })),
+    );
+    if (!queued) {
+      await store.saveStop(id);
+      return c.json({ error: "save_unavailable" }, 503);
+    }
+    c.header("Cache-Control", "no-store");
+    return c.json(status);
+  } catch (error) {
+    return canvaFailure(c, error, "canva_save_failed");
+  }
+});
+
+app.get("/canva/save-folder/:job", requireSession, async (c) => {
+  const blocked = canvaGuard(c);
+  if (blocked) return blocked;
+  const id = c.req.param("job");
+  if (!SAVE_JOB_RE.test(id)) return c.json({ error: "bad_request" }, 400);
+  const session = c.get("session");
+  const status = await canvaStore(c.env, session.uid, c.req.url).saveStatus(id);
+  c.header("Cache-Control", "no-store");
+  return status ? c.json(status) : c.json({ error: "not_found" }, 404);
+});
+
+app.delete("/canva/save-folder/:job", requireSession, async (c) => {
+  const blocked = canvaGuard(c) ?? notFromOurApp(c);
+  if (blocked) return blocked;
+  const id = c.req.param("job");
+  if (!SAVE_JOB_RE.test(id)) return c.json({ error: "bad_request" }, 400);
+  const session = c.get("session");
+  const status = await canvaStore(c.env, session.uid, c.req.url).saveStop(id);
+  return status ? c.json(status) : c.json({ error: "not_found" }, 404);
+});
+
+/**
  * Reopen a design (a draft, or one from the Files tab) with a fresh Return
  * key, so Canva's Return button comes back to the page it was opened from.
  */
@@ -2591,6 +2674,41 @@ export function retryHandlers(env: Bindings): RetryHandlers {
       if (!env.PUSH) return "drop";
       const stub = env.PUSH.get(env.PUSH.idFromString(obj));
       return stub.resend(ep, note, at);
+    },
+    async canvaSave(obj, job, i) {
+      if (!env.CANVA) return "drop";
+      const stub = env.CANVA.get(env.CANVA.idFromString(obj));
+      return saveOneFile({
+        take: () => stub.saveTake(job, i),
+        record: (result) => stub.saveRecord(job, i, result),
+        openSession: async (sealed) => {
+          const opened = await openValue(sealed, env.SESSION_SECRET, SAVE_PURPOSE);
+          if (typeof opened !== "string") return null;
+          try {
+            const s = JSON.parse(opened) as SessionData;
+            return s && typeof s.uid === "string" && s.uid && typeof s.key === "string" ? s : null;
+          } catch {
+            return null;
+          }
+        },
+        findFile: async (session, item) => {
+          const creds = session as SessionData;
+          const raw = item.kind === "assignment" ? await getAssignment(item.section, item.parent, creds) : await getDocument(item.section, item.parent, creds);
+          const file = findAttachment(raw, item.file);
+          return file && file.downloadPath ? file : null;
+        },
+        download: (session, path) => downloadAttachment(path, session as SessionData, MAX_IMPORT_BYTES),
+        canvaToken: (uid) => stub.accessToken(uid),
+        importFile: (token, name, bytes, contentType) => importFile(token, name, bytes, mimeForName(name) ?? (contentType || undefined)),
+        findImported: (token, name) => findDesignByTitle(token, importTitle(name)),
+        moveToFolder: async (uid, designId, folderId) => moveItem(await stub.accessTokenWithScope(uid, FOLDER_WRITE_SCOPE), designId, folderId),
+        maxBytes: MAX_IMPORT_BYTES,
+      });
+    },
+    async gaveUp(message) {
+      if (message.k !== "canva_save" || !env.CANVA) return;
+      const stub = env.CANVA.get(env.CANVA.idFromString(message.obj));
+      await stub.saveRecord(message.job, message.i, { state: "failed", error: "gave_up" });
     },
   };
 }
