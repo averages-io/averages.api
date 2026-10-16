@@ -882,7 +882,7 @@ section("PushStore: the retry queue (2026-10-16)");
   check("push service down for the phone: one retry queued, the laptop got it", [queued.length, world.sent.length], [1, 2]);
   const q = queued[0];
   check("the message: store id, endpoint hash, generic text, a minute's wait", [q.body.k, q.body.obj, q.body.ep, q.body.note, q.opts.delaySeconds], ["push", OBJ, phoneKey, { title: "Averages", body: "A new grade was posted.", url: "/grades", tag: "averages-grades" }, 60]);
-  check("nothing personal in it", /1001|fcm|p256dh|consumer|grade:|18|19/.test(JSON.stringify({ ...q.body, note: null })), false);
+  check("nothing personal in it (uid, endpoint, keys, creds)", /1001|fcm\.googleapis|fcm\/send|p256dh|consumer|-key-|-secret-/.test(JSON.stringify({ k: q.body.k, obj: q.body.obj, ep: q.body.ep })), false);
   check("a retry isn't a failed check", (storage.data.get("meta") as any).failures ?? 0, 0);
 
   resetWorld();

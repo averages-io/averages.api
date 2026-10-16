@@ -28,7 +28,7 @@ import {
   type CanvaStorage,
 } from "../src/canva.ts";
 import { adaptAssignmentDetail, findAttachment } from "../src/adapt.ts";
-import { downloadAttachment, isSchoologyApiUrl } from "../src/schoology.ts";
+import { downloadAttachment, isSafeAttachmentTarget, isSchoologyApiUrl } from "../src/schoology.ts";
 
 let passed = 0;
 let failed = 0;
@@ -405,7 +405,40 @@ console.log("download");
   handler = () => new Response(new Uint8Array(200));
   await rejects("a file over the cap is refused", downloadAttachment("https://api.schoology.com/v1/attachment/1/source/y.pdf", creds, 100), "Attachment is too large");
   handler = (u) => new Response(null, { status: 302, headers: { Location: "http://insecure.example.com/x" } });
-  await rejects("an http redirect is refused", downloadAttachment("https://api.schoology.com/v1/attachment/1/source/y.pdf", creds, 100), "Attachment redirect is not https");
+  await rejects("an http redirect is refused", downloadAttachment("https://api.schoology.com/v1/attachment/1/source/y.pdf", creds, 100), "Attachment redirect is not allowed");
+
+  // SSRF hardening (2026-10-16): a redirect may only land on a public https host.
+  check("isSafeAttachmentTarget: a public CDN host is fine", [
+    isSafeAttachmentTarget(new URL("https://files.schoologycdn.com/a.pdf")),
+    isSafeAttachmentTarget(new URL("https://s3.amazonaws.com/bucket/a.pdf")),
+  ], [true, true]);
+  check("isSafeAttachmentTarget: internal, metadata, creds, ports and literals are refused", [
+    isSafeAttachmentTarget(new URL("https://127.0.0.1/x")),
+    isSafeAttachmentTarget(new URL("https://169.254.169.254/latest/meta-data/")),
+    isSafeAttachmentTarget(new URL("https://[::1]/x")),
+    isSafeAttachmentTarget(new URL("https://10.0.0.5/x")),
+    isSafeAttachmentTarget(new URL("https://localhost/x")),
+    isSafeAttachmentTarget(new URL("https://internal/x")),
+    isSafeAttachmentTarget(new URL("https://u:p@cdn.example.com/x")),
+    isSafeAttachmentTarget(new URL("https://cdn.example.com:8443/x")),
+    isSafeAttachmentTarget(new URL("http://cdn.example.com/x")),
+  ], [false, false, false, false, false, false, false, false, false]);
+  for (const bad of ["https://169.254.169.254/latest/meta-data/", "https://127.0.0.1/x", "https://[::1]/x", "https://internal-admin/x", "https://u:p@evil.example/x"]) {
+    handler = () => new Response(null, { status: 302, headers: { Location: bad } });
+    await rejects("a redirect to " + bad.slice(8, 32) + " is refused", downloadAttachment("https://api.schoology.com/v1/attachment/1/source/y.pdf", creds, 100), "Attachment redirect is not allowed");
+  }
+  // A legit CDN redirect still works, and still drops the signature.
+  {
+    let hop = 0;
+    handler = (u, init) => {
+      seen.push({ url: String(u), auth: !!(init?.headers && new Headers(init.headers).get("Authorization")) });
+      if (hop++ === 0) return new Response(null, { status: 302, headers: { Location: "https://files.schoologycdn.com/real.pdf" } });
+      return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "application/pdf" } });
+    };
+    seen.length = 0;
+    const ok = await downloadAttachment("https://api.schoology.com/v1/attachment/9/source/z.pdf", creds, 100);
+    check("a redirect to a public CDN still downloads, signature only to Schoology", [ok.bytes.byteLength, seen.map((x) => x.auth)], [3, [true, false]]);
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
