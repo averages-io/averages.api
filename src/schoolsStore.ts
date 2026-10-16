@@ -92,6 +92,11 @@ export class SchoolsBook {
     return (await this.storage.get<Application[]>("apps")) ?? [];
   }
 
+  /** One application by id, or null (the retry queue rebuilds its email from this, 2026-10-16). */
+  async get(id: string): Promise<Application | null> {
+    return (await this.list()).find((a) => a.id === id) ?? null;
+  }
+
   /**
    * A new code for `email` (already lowercased), or how many seconds to wait:
    * CODE_GAP_MS between codes and CODE_SENDS per CODE_SEND_WINDOW_MS. A new
@@ -164,6 +169,9 @@ export class SchoolsStore extends DurableObject {
   }
   list(): Promise<Application[]> {
     return this.book().list();
+  }
+  get(id: string): Promise<Application | null> {
+    return this.book().get(id);
   }
   claimReply(sender: string): Promise<boolean> {
     return this.book().claimReply(sender);

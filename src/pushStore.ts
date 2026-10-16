@@ -36,6 +36,7 @@ import { CALL_BUDGET, CallBudget, ClassroomError, fetchClassroomBundle } from ".
 import { googleConfig, GoogleError, hasRequiredScopes, refreshAccessToken, type GoogleEnv } from "./google.ts";
 import { readFeatures } from "./flags.ts";
 import { isValidSubscription, sendWebPush, type PushSubscriptionLike, type VapidConfig } from "./webpush.ts";
+import { endpointKey, enqueueRetry, PUSH_RETRY_MAX_AGE_MS, type RetryEnv, type RetryNote, type RetryOutcome } from "./retryQueue.ts";
 import {
   classroomObservation,
   diffSnapshots,
@@ -76,7 +77,7 @@ export const TEST_EVERY_MS = 10 * 1000;
 const PUSH_TTL_SECONDS = 12 * 60 * 60;
 const MAX_ENDPOINT_LENGTH = 2048;
 
-export type PushEnv = GoogleEnv & {
+export type PushEnv = GoogleEnv & RetryEnv & {
   SESSION_SECRET?: string;
   /** Separate from SESSION_SECRET: seals the stored sign-in and keys the snapshot hashes. */
   PUSH_SECRET?: string;
@@ -529,6 +530,17 @@ export class PushStore extends DurableObject<PushEnv> {
       const results = await Promise.all(targets.map((sub) => this.sendOne(sub, note, vapid, PUSH_TTL_SECONDS)));
       const gone = targets.filter((_, i) => results[i].gone).map((sub) => sub.endpoint);
       if (gone.length) await this.dropEndpoints(gone);
+      // A push service that's busy or down for now (2026-10-16): tried again from the queue (src/retryQueue.ts).
+      // Never the reason a check counts as failed: the change is already saved, and enqueueRetry logs its own problems.
+      const later = targets.filter((_, i) => worthRetrying(results[i]));
+      if (later.length && this.env.RETRY) {
+        try {
+          const obj = this.ctx.id.toString();
+          await Promise.all(later.map(async (sub) => enqueueRetry(this.env, { k: "push", obj, ep: await endpointKey(sub.endpoint), note, at: now })));
+        } catch (err) {
+          console.error("push_retry_enqueue_failed", describe(err));
+        }
+      }
       if (results.some((r) => r.ok)) {
         const m = (await s.get("meta")) as Meta | undefined;
         if (m && m.gen === gen) await s.put("meta", { ...m, lastSentAt: now });
@@ -539,6 +551,41 @@ export class PushStore extends DurableObject<PushEnv> {
     } finally {
       await this.scheduleNext(gen, failed, now);
     }
+  }
+
+  /**
+   * A notification the push service refused for now, tried again from the
+   * retry queue (2026-10-16) to the one browser `ep` names (endpointKey).
+   * "drop" when notifications were turned off, that browser is gone, or the
+   * notification is too old; "retry" when the push service is still busy.
+   */
+  async resend(ep: string, note: RetryNote, at: number): Promise<RetryOutcome> {
+    if (Date.now() - at > PUSH_RETRY_MAX_AGE_MS) return "drop";
+    const vapid = vapidFrom(this.env);
+    if (!vapid) return "retry";
+    const got = await this.ctx.storage.get<unknown>(["subs", "meta"]);
+    if (!got.get("meta")) return "drop";
+    let sub: StoredSubscription | undefined;
+    for (const x of this.subsFrom(got.get("subs"))) {
+      if ((await endpointKey(x.endpoint)) === ep) {
+        sub = x;
+        break;
+      }
+    }
+    if (!sub) return "drop";
+    // What's left of the 12-hour life it started with, so a late copy never outlives the original.
+    const ttl = Math.max(60, PUSH_TTL_SECONDS - Math.floor((Date.now() - at) / 1000));
+    const res = await this.sendOne(sub, note, vapid, ttl);
+    if (res.ok) {
+      const m = (await this.ctx.storage.get("meta")) as Meta | undefined;
+      if (m) await this.ctx.storage.put("meta", { ...m, lastSentAt: Date.now() });
+      return "done";
+    }
+    if (res.gone) {
+      await this.dropEndpoints([sub.endpoint]);
+      return "drop";
+    }
+    return worthRetrying(res) ? "retry" : "drop";
   }
 
   /* ── Helpers ───────────────────────────────────────────────────────── */
@@ -607,4 +654,14 @@ export class PushStore extends DurableObject<PushEnv> {
       return null;
     }
   }
+}
+
+/**
+ * A send that may work later (2026-10-16): the push service was busy (429),
+ * broken (5xx) or didn't answer (status 0, not a bad VAPID key). Gone, refused
+ * (401/403) and other 4xx won't get better by waiting.
+ */
+export function worthRetrying(res: { ok: boolean; status: number; gone: boolean; misconfigured?: boolean }): boolean {
+  if (res.ok || res.gone || res.misconfigured) return false;
+  return res.status === 0 || res.status === 429 || res.status >= 500;
 }

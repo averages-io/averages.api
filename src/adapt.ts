@@ -503,6 +503,37 @@ export function adaptCourses(
   return { COURSES, HISTORY };
 }
 
+/**
+ * An assignment that runs in an outside tool (2026-10-16): Google Assignments,
+ * Turnitin and other LTI tools a teacher adds to Schoology. The student opens
+ * and turns it in on Schoology, never in Averages.io, and its turn-in isn't a
+ * Schoology dropbox submission we can see. So it's never called Missing: it's
+ * "Pending" until a grade comes back.
+ *
+ * Schoology's docs don't list the field's values. Plain assignments say
+ * `assignment_type: "basic"`; anything naming LTI, an external tool or a tool
+ * counts. GET /data/bundle logs the values it sees (assignment_types) so the
+ * real ones can be checked.
+ */
+export function isOutsideTool(raw: Raw): boolean {
+  const kind = String(raw?.assignment_type ?? "").toLowerCase();
+  return /lti|external|tool/.test(kind);
+}
+
+/** The distinct assignment_type values in a bundle, for the log above: short plain words only, nothing a teacher wrote. */
+export function assignmentTypesSeen(bySection: Record<string, Raw[]>): string[] {
+  const seen = new Set<string>();
+  for (const list of Object.values(bySection)) {
+    if (!Array.isArray(list)) continue;
+    for (const a of list) {
+      const kind = String(a?.assignment_type ?? "");
+      seen.add(/^[A-Za-z0-9_-]{1,40}$/.test(kind) ? kind : kind ? "(other)" : "(none)");
+      if (seen.size >= 20) break;
+    }
+  }
+  return [...seen].sort();
+}
+
 const TYPE_MAP: Record<string, string> = {
   assignment: "assignment",
   discussion: "discussion",
@@ -536,11 +567,13 @@ export function adaptAssignments(
         dueAt: new Date(dueMs).toISOString(),
         time: timeLabel(dueMs, tz),
         id: String(assignment?.id ?? ""),
+        // Runs in an outside tool (2026-10-16): Pending, not Missing, and opened on Schoology.
+        ...(isOutsideTool(assignment) ? { outside: true } : {}),
       };
 
       if (dayIn(dueMs, tz) === today) {
         // With its id (2026-10-07): Home links to it as assignment?id=<id>.
-        TODAY.push({ title: item.title, courseId, id: item.id });
+        TODAY.push({ title: item.title, courseId, id: item.id, ...(item.outside ? { outside: true } : {}) });
       }
 
       // "Completed" is deliberately not inferred here — Schoology reports
@@ -649,6 +682,8 @@ export interface AssignmentDetail {
   score?: { earned: number; possible: number } | null;
   files: AttachmentFile[];
   links: { title: string; url: string }[];
+  /** Runs in an outside tool like Google Assignments or Turnitin (2026-10-16): opened and turned in on Schoology. */
+  outside: boolean;
 }
 
 /**
@@ -698,6 +733,7 @@ export function adaptAssignmentDetail(raw: Raw, sectionId: string, tz = "UTC"): 
     maxPoints: pointsOf(raw?.max_points),
     files,
     links,
+    outside: isOutsideTool(raw),
   };
 }
 

@@ -51,6 +51,7 @@ import {
 import {
   adaptAssignmentDetail,
   adaptAssignments,
+  assignmentTypesSeen,
   adaptCourseFiles,
   adaptCourses,
   adaptMessages,
@@ -100,6 +101,7 @@ import { checkTurnstile, emailAllowList, emailEndings, emailKey, emailProblem, s
 import { EmailMessage } from "cloudflare:email";
 import { autoReplyAllowed, buildMime, cleanEmail, NOREPLY_ADDRESS, SCHOOLS_ADDRESS } from "./mail.ts";
 import { applicationEmail, autoReplyEmail, inboundCopyEmail, verifyCodeEmail } from "./schoolsMail.ts";
+import { enqueueRetry, handleRetryBatch, type RetryHandlers, type RetryMessage } from "./retryQueue.ts";
 import { readEmailText } from "./mailRead.ts";
 import { withFlags, featureOn, featureForRoute, FEATURE_KEYS, type FeatureKey, type Features } from "./flags.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
@@ -294,6 +296,8 @@ type Bindings = {
    */
   SCHOOLS?: DurableObjectNamespace<SchoolsStore>;
   SCHOOLS_MAIL?: SendEmail;
+  /** The retry queue (2026-10-16, src/retryQueue.ts): failed application emails and notifications, tried again later. */
+  RETRY?: Queue<RetryMessage>;
   SCHOOLS_NOTIFY_TO?: string;
   SCHOOLS_ADMIN_KEY?: string;
   /** Cloudflare Turnstile on the school application (2026-10-07): the site key (public, a var) and its secret. */
@@ -1123,6 +1127,14 @@ app.get("/data/bundle", requireSession, async (c) => {
     );
 
     const { OVERDUE, UPCOMING, TODAY } = adaptAssignments(assignmentsBySection, studentTimeZone(c));
+    // Which assignment_type values real districts send (2026-10-16), to check
+    // how Google Assignments and Turnitin show up (see isOutsideTool). Plain
+    // words only, never titles or grades. Remove once confirmed.
+    try {
+      console.log("assignment_types", assignmentTypesSeen(assignmentsBySection).join(","));
+    } catch {
+      /* logging never costs the student their grades */
+    }
     // Names for the trend chart's points, from the lists just fetched (no extra calls).
     try {
       addHistoryTitles(HISTORY, assignmentsBySection);
@@ -2431,8 +2443,12 @@ app.post("/schools/apply", async (c) => {
       const mail = applicationEmail(saved, duplicate);
       const raw = buildMime({ from: SCHOOLS_ADDRESS, fromName: "Averages.io schools", to: notifyTo, replyTo: saved.email, ...mail });
       // After the answer: a slow or failed email never costs the school its "sent".
+      // Failed: tried again from the retry queue (2026-10-16), rebuilt from the saved application.
       c.executionCtx.waitUntil(
-        c.env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, notifyTo, raw)).catch((error: unknown) => console.error("schools_notify_failed", error))
+        c.env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, notifyTo, raw)).catch(async (error: unknown) => {
+          console.error("schools_notify_failed", error);
+          await enqueueRetry(c.env, { k: "school_email", id: saved.id, dup: duplicate, at: Date.now() });
+        })
       );
     }
     return c.json({ ok: true });
@@ -2548,8 +2564,41 @@ export async function handleSchoolsEmail(message: ForwardableEmailMessage, env: 
  * The Worker: HTTP through Hono, email through handleSchoolsEmail. Tests call
  * `app.fetch` on this object exactly as they did on the Hono app.
  */
+/**
+ * The retry queue's tries (2026-10-16, src/retryQueue.ts). Each says "done",
+ * "retry" (a passing failure: the queue tries again later) or "drop" (it
+ * can't work: the application or the browser is gone).
+ */
+export function retryHandlers(env: Bindings): RetryHandlers {
+  return {
+    async schoolEmail(id, duplicate) {
+      const notifyTo = cleanEmail(env.SCHOOLS_NOTIFY_TO);
+      const store = schoolsStoreFor(env, null);
+      if (!env.SCHOOLS_MAIL || !notifyTo || !store) return "drop";
+      const saved = await store.get(id);
+      if (!saved) return "drop";
+      const mail = applicationEmail(saved, duplicate);
+      const raw = buildMime({ from: SCHOOLS_ADDRESS, fromName: "Averages.io schools", to: notifyTo, replyTo: saved.email, ...mail });
+      try {
+        await env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, notifyTo, raw));
+        return "done";
+      } catch (error) {
+        console.error("schools_notify_failed", error);
+        return "retry";
+      }
+    },
+    async push(obj, ep, note, at) {
+      if (!env.PUSH) return "drop";
+      const stub = env.PUSH.get(env.PUSH.idFromString(obj));
+      return stub.resend(ep, note, at);
+    },
+  };
+}
+
 export default {
   // Flagship switches (src/flags.ts) are read once per request, before the app sees env.
   fetch: async (request: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(request, await withFlags(env), ctx),
   email: handleSchoolsEmail,
+  // The retry queue (2026-10-16): see src/retryQueue.ts.
+  queue: async (batch: MessageBatch<unknown>, env: Bindings) => handleRetryBatch(batch, retryHandlers(env)),
 };

@@ -22,7 +22,7 @@
 import { buildAuthHeader, type Credentials } from "./oauth.ts";
 import { isSchoologyApiUrl, listOf, schoologyGet, SchoologyError, SCHOOLOGY_BASE, UPSTREAM_TIMEOUT_MS } from "./schoology.ts";
 import { isSandboxCreds, sandboxFetch } from "./reviewSandbox.ts";
-import { findAttachment, toPlainText } from "./adapt.ts";
+import { findAttachment, isOutsideTool, toPlainText } from "./adapt.ts";
 import { openValue, sealValue } from "./session.ts";
 
 /** Biggest file we pass on: 95 MB, under the Free plan's 100 MB request body limit. */
@@ -477,7 +477,8 @@ function orderMs(value: unknown): number {
 
 /**
  * The assignments a student can turn files in to, most relevant first: no
- * quizzes, tests or discussions, nothing whose `allow_dropbox` is "0", ids
+ * quizzes, tests or discussions, nothing whose `allow_dropbox` is "0", no
+ * outside-tool assignments (Google Assignments, Turnitin), ids
  * that are digits. "Most relevant" is the due date (else Schoology's
  * last_updated), newest first; work due more than two weeks from `now` goes
  * after everything else, soonest first. All of them: the caller cuts.
@@ -492,6 +493,8 @@ export function turnInAssignments(bySection: Record<string, Raw[] | null>, now: 
       if (!ID_RE.test(id)) continue;
       if (NO_DROPBOX_TYPES.has(String(raw.type ?? "").toLowerCase())) continue;
       if (saysNo(raw.allow_dropbox)) continue;
+      // Google Assignments, Turnitin and other outside tools are turned in there, not to a dropbox (2026-10-16).
+      if (isOutsideTool(raw)) continue;
       const at = orderMs(raw.due) || orderMs(raw.last_updated);
       const title = toPlainText(raw.title ?? "").slice(0, 255) || "Assignment";
       ranked.push({ a: { course, id, title }, at, ahead: at > now + FAR_AHEAD_MS });
