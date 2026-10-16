@@ -4,7 +4,7 @@
  *
  * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/schoolsApply.test.ts
  */
-import worker, { handleSchoolsEmail } from "../src/index.ts";
+import worker, { handleSchoolsEmail, retryHandlers } from "../src/index.ts";
 import { autoReplyAllowed, buildMime, cleanEmail, encodeHeaderWord, SCHOOLS_ADDRESS } from "../src/mail.ts";
 import { canvasHost, emailEndingAllowed, emailEndings, validateApplication } from "../src/schools.ts";
 import { SchoolsBook, MAX_APPS, REPLY_EVERY_MS, CODE_GAP_MS, CODE_SEND_WINDOW_MS, CODE_TTL_MS, newCode } from "../src/schoolsStore.ts";
@@ -119,7 +119,7 @@ console.log("\nroutes");
 const sent: { from: string; to: string; raw: string }[] = [];
 function fakeSchools() {
   const book = new SchoolsBook(memStorage());
-  const stub = { add: (v: any) => book.add(v), list: () => book.list(), claimReply: (s: string) => book.claimReply(s), issueCode: (e: string) => book.issueCode(e), checkCode: (e: string, c: string) => book.checkCode(e, c), book };
+  const stub = { add: (v: any) => book.add(v), list: () => book.list(), get: (id: string) => book.get(id), claimReply: (s: string) => book.claimReply(s), issueCode: (e: string) => book.issueCode(e), checkCode: (e: string, c: string) => book.checkCode(e, c), book };
   const ns: any = { idFromName: (n: string) => n, get: () => stub, jurisdiction: () => ns };
   return ns;
 }
@@ -422,6 +422,36 @@ console.log("\nemail endings and codes");
   const ips = [];
   for (let i = 0; i < 6; i++) ips.push((await call("/schools/apply/code", { email: `a${i}@z.org` }, "198.51.100.90")).status);
   check("code: 5 per IP per 10 minutes", ips, [200, 200, 200, 200, 200, 429]);
+  resetRateLimits();
+}
+
+/* ── The retry queue (2026-10-16): a failed application email is tried again ── */
+console.log("\nretry queue: application emails");
+{
+  const queued: { body: any; opts: any }[] = [];
+  const RETRY = { send: async (body: any, opts: any) => void queued.push({ body: JSON.parse(JSON.stringify(body)), opts }) };
+  const schools = fakeSchools();
+  let down = true;
+  const mails: string[] = [];
+  const QENV: any = { ...ENV, SCHOOLS: schools, RETRY, SCHOOLS_MAIL: { send: async (m: any) => { if (down) throw new Error("email service down"); mails.push(m.raw); } } };
+  resetRateLimits();
+  const r = await worker.fetch(new Request("https://api.averages.io/schools/apply", { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://app.averages.io", "CF-Connecting-IP": "203.0.113.70" }, body: JSON.stringify(good) }), QENV, CTX);
+  await Promise.all(waits);
+  check("email failed: the school still gets ok", r.status, 200);
+  const saved = (await schools.get().list())[0];
+  check("a retry queued with the application id only", [queued.length, queued[0]?.body.k, queued[0]?.body.id, queued[0]?.body.dup, queued[0]?.opts.delaySeconds], [1, "school_email", saved.id, false, 60]);
+  check("no school details in the message", /nmusd|@|Canvas|instructure/i.test(JSON.stringify(queued[0]?.body)), false);
+  const h = retryHandlers(QENV);
+  check("still down: retry", await h.schoolEmail(saved.id, false), "retry");
+  down = false;
+  check("back up: sent, rebuilt from the saved application", [await h.schoolEmail(saved.id, false), mails.length, headerOf(mails[0] ?? "", "Reply-To")], ["done", 1, "IT@nmusd.us"]);
+  check("an application that's gone: dropped", await h.schoolEmail("nope123", false), "drop");
+  check("no mail binding: dropped", await retryHandlers({ ...QENV, SCHOOLS_MAIL: undefined }).schoolEmail(saved.id, false), "drop");
+  queued.length = 0;
+  resetRateLimits();
+  await worker.fetch(new Request("https://api.averages.io/schools/apply", { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://app.averages.io", "CF-Connecting-IP": "203.0.113.71" }, body: JSON.stringify({ ...good, email: "other@nmusd.us" }) }), { ...QENV, RETRY: undefined, SCHOOLS_MAIL: { send: async () => { throw new Error("down"); } } }, CTX);
+  await Promise.all(waits);
+  check("no queue bound: nothing queued, nothing breaks", queued.length, 0);
   resetRateLimits();
 }
 

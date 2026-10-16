@@ -10,7 +10,10 @@
  */
 
 import {
+  adaptAssignmentDetail,
   adaptAssignments,
+  assignmentTypesSeen,
+  isOutsideTool,
   adaptCourses,
   addHistoryTitles,
   assignmentScore,
@@ -187,6 +190,22 @@ console.log("\ndue times in the student's zone (2026-10-07)");
   check("earlier today is overdue", r.OVERDUE.map((x: any) => x.title), ["This morning"]);
   check("items carry dueAt and time", [r.UPCOMING[0].dueAt, r.UPCOMING[0].time], ["2026-10-10T06:59:00.000Z", "11:59 PM"]);
   check("today is the student's today", r.TODAY.map((x: any) => x.title).sort(), ["This morning", "Tonight"]);
+}
+
+console.log("\noutside-tool assignments: Google Assignments, Turnitin (2026-10-16)");
+{
+  check("basic, missing or junk: not an outside tool", [isOutsideTool({ assignment_type: "basic" }), isOutsideTool({}), isOutsideTool(null), isOutsideTool({ assignment_type: 7 })], [false, false, false, false]);
+  check("LTI, external tool, tool: outside", [isOutsideTool({ assignment_type: "lti_submission" }), isOutsideTool({ assignment_type: "External_Tool" }), isOutsideTool({ assignment_type: "tool" })], [true, true, true]);
+  const r = adaptAssignments({ "101": [
+    { id: 1, title: "Essay", due: String(past), type: "assignment", assignment_type: "basic" },
+    { id: 2, title: "¿Qué estoy haciendo?", due: String(past), type: "assignment", assignment_type: "lti_submission" },
+    { id: 3, title: "Turnitin draft", due: String(future), type: "assignment", assignment_type: "external_tool" },
+  ] });
+  check("marked outside, the rest unmarked", [r.OVERDUE.map((x: any) => [x.title, x.outside === true]), r.UPCOMING.map((x: any) => x.outside)], [[["Essay", false], ["¿Qué estoy haciendo?", true]], [true]]);
+  check("a plain item gets no outside key at all", "outside" in r.OVERDUE[0], false);
+  const d = adaptAssignmentDetail({ id: 2, title: "T", assignment_type: "lti_submission" }, "101");
+  check("assignment page detail says outside", [d.outside, adaptAssignmentDetail({ id: 1, title: "T", assignment_type: "basic" }, "101").outside], [true, false]);
+  check("log: distinct plain values, sorted, nothing a teacher wrote", assignmentTypesSeen({ a: [{ assignment_type: "basic" }, { assignment_type: "lti_submission" }, { assignment_type: "basic" }, {}, { assignment_type: "<b>Turnitin</b> essay" }], b: null as any }), ["(none)", "(other)", "basic", "lti_submission"]);
 }
 
 console.log("\nmessages");

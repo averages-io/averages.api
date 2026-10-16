@@ -853,6 +853,68 @@ const GOOGLE_SESSION: SessionData = {
   check("Google sign-in not configured: kept, tried later", [storage.data.has("cred"), storage.alarm !== null, (storage.data.get("meta") as any).failures], [true, true, 1]);
 }
 
+section("PushStore: the retry queue (2026-10-16)");
+{
+  const { endpointKey } = await import("../src/retryQueue.ts");
+  const { worthRetrying } = await import("../src/pushStore.ts");
+  check("worth retrying: 429, 5xx, no answer", [worthRetrying({ ok: false, status: 429, gone: false }), worthRetrying({ ok: false, status: 503, gone: false }), worthRetrying({ ok: false, status: 0, gone: false })], [true, true, true]);
+  check("not: sent, gone, refused, bad key", [worthRetrying({ ok: true, status: 201, gone: false }), worthRetrying({ ok: false, status: 410, gone: true }), worthRetrying({ ok: false, status: 403, gone: false }), worthRetrying({ ok: false, status: 0, gone: false, misconfigured: true })], [false, false, false, false]);
+
+  const queued: { body: any; opts: any }[] = [];
+  const RETRY = { send: async (body: unknown, opts: unknown) => void queued.push({ body: JSON.parse(JSON.stringify(body)), opts }) };
+  const OBJ = "ab".repeat(32);
+  const storage = new FakeStorage();
+  const store = new PushStore({ storage, id: { toString: () => OBJ } } as any, { ...ENV, RETRY } as any);
+  resetWorld();
+  world.grades = sGrades(sGrade(1, 18));
+  world.assignments = { "111": [sAssignment(10, null)], "222": [] };
+  world.inbox = [];
+  world.updates = { "111": [], "222": [] };
+  await store.subscribe({ subscription: phone.subscription, types: ALL, ...(await credentialFor(SCHOOLOGY_SESSION)) });
+  await store.subscribe({ subscription: laptop.subscription, types: ALL, ...(await credentialFor(SCHOOLOGY_SESSION)) });
+  await quiet(() => store.alarm()); // baseline
+  resetWorld();
+  world.grades = sGrades(sGrade(1, 18), sGrade(2, 19));
+  world.pushStatus = { phone: 503 };
+  const t = Date.now();
+  await quiet(() => store.alarm());
+  const phoneKey = await endpointKey(phone.subscription.endpoint);
+  check("push service down for the phone: one retry queued, the laptop got it", [queued.length, world.sent.length], [1, 2]);
+  const q = queued[0];
+  check("the message: store id, endpoint hash, generic text, a minute's wait", [q.body.k, q.body.obj, q.body.ep, q.body.note, q.opts.delaySeconds], ["push", OBJ, phoneKey, { title: "Averages", body: "A new grade was posted.", url: "/grades", tag: "averages-grades" }, 60]);
+  check("nothing personal in it", /1001|fcm|p256dh|consumer|grade:|18|19/.test(JSON.stringify({ ...q.body, note: null })), false);
+  check("a retry isn't a failed check", (storage.data.get("meta") as any).failures ?? 0, 0);
+
+  resetWorld();
+  world.pushStatus = { phone: 503 };
+  check("still down: retry", await quiet(() => store.resend(phoneKey, q.body.note, t)), "retry");
+  resetWorld();
+  check("back up: sent to the phone only", [await quiet(() => store.resend(phoneKey, q.body.note, t)), world.sent.map((x) => x.endpoint.split("/").pop())], ["done", ["phone"]]);
+  check("the phone shows it", (await lastShown(phone)).body, "A new grade was posted.");
+  const ttl = Number(world.sent[0].headers.ttl);
+  check("a late copy never outlives the original 12 hours", ttl <= 12 * 3600 && ttl > 11 * 3600, true);
+  resetWorld();
+  check("too old (over 3 hours): dropped, nothing sent", [await store.resend(phoneKey, q.body.note, t - 4 * 3600e3), world.sent.length], ["drop", 0]);
+  check("a browser it doesn't know: dropped", await store.resend("0".repeat(32), q.body.note, t), "drop");
+  world.pushStatus = { phone: 410 };
+  check("the phone unsubscribed meanwhile: dropped and forgotten", [await quiet(() => store.resend(phoneKey, q.body.note, t)), (storage.data.get("subs") as any[]).map((x) => x.endpoint.split("/").pop())], ["drop", ["laptop"]]);
+  world.pushStatus = {};
+  await store.deleteAll();
+  check("notifications turned off: dropped", await store.resend(await endpointKey(laptop.subscription.endpoint), q.body.note, t), "drop");
+
+  // No queue bound: as before (nothing queued, nothing breaks).
+  const plain = newStore();
+  resetWorld();
+  world.grades = sGrades(sGrade(1, 18));
+  await plain.store.subscribe({ subscription: phone.subscription, types: ALL, ...(await credentialFor(SCHOOLOGY_SESSION)) });
+  await quiet(() => plain.store.alarm());
+  world.grades = sGrades(sGrade(1, 18), sGrade(3, 20));
+  world.pushStatus = { phone: 503 };
+  const before = queued.length;
+  await quiet(() => plain.store.alarm());
+  check("no queue: nothing queued, check not failed", [queued.length - before, (plain.storage.data.get("meta") as any).failures ?? 0], [0, 0]);
+}
+
 section("PushStore: touch, test, status, unsubscribe");
 {
   resetWorld();

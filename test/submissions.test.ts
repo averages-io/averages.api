@@ -56,6 +56,7 @@ console.log("\nhelpers");
       { id: 10, title: "Further ahead", type: "assignment", due: due(90) },
       { id: 11, title: "New quiz", type: "assessment_v2" },
       { id: 12, title: "Nothing at all" },
+      { id: 14, title: "Google Assignments", type: "assignment", allow_dropbox: "1", assignment_type: "lti_submission", due: due(-1) },
       null,
     ],
     "102": null,
