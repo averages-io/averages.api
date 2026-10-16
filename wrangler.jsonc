@@ -58,6 +58,12 @@
   "containers": [
     { "class_name": "Converter", "image": "./container/Dockerfile", "max_instances": 3, "instance_type": "basic" }
   ],
+  // The retry queue (src/retryQueue.ts): failed application emails and notifications, tried again later.
+  // Create it once before deploying: npx wrangler queues create averages-retry
+  "queues": {
+    "producers": [{ "binding": "RETRY", "queue": "averages-retry" }],
+    "consumers": [{ "queue": "averages-retry", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 8 }]
+  },
   "r2_buckets": [
     { "binding": "MEDIA", "bucket_name": "averages-media", "jurisdiction": "us" }
   ],
