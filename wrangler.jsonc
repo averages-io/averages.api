@@ -19,10 +19,7 @@
     "CONVERT_ENABLED": "1",
     "CANVA_FOLDERS_ENABLED": "1",
     "CANVA_PERMISSION_PROBE": "0",
-    "VAPID_PUBLIC_KEY": "BOiujaTWwvcGdegG6HdCOCkyuYqKK-WgOMx8HAde1XZP4jN9wPfnDvjlLdjOFKNImJWzR3GHRf8vvsAmVZXyGg0",
-    "TURNSTILE_SITE_KEY": "0x4AAAAAAFP990oRx5vTqbEf",
-    "SCHOOLS_EMAIL_ENDINGS": "edu,org,us,net",
-    "SCHOOLS_VERIFY_EMAIL": "1"
+    "VAPID_PUBLIC_KEY": "BOiujaTWwvcGdegG6HdCOCkyuYqKK-WgOMx8HAde1XZP4jN9wPfnDvjlLdjOFKNImJWzR3GHRf8vvsAmVZXyGg0"
   },
   "durable_objects": {
     "bindings": [
@@ -30,13 +27,9 @@
       { "name": "CANVA", "class_name": "CanvaStore" },
       { "name": "PUSH", "class_name": "PushStore" },
       { "name": "CLOUD", "class_name": "CloudStore" },
-      { "name": "SCHOOLS", "class_name": "SchoolsStore" },
       { "name": "CONVERTER", "class_name": "Converter" }
     ]
   },
-  "send_email": [
-    { "name": "SCHOOLS_MAIL" }
-  ],
   "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
   "ratelimits": [
     { "name": "RATE_LIMIT_SIGNIN", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
@@ -76,6 +69,7 @@
     { "tag": "v3", "new_sqlite_classes": ["PushStore"] },
     { "tag": "v4", "new_sqlite_classes": ["SchoolsStore"] },
     { "tag": "v5", "new_sqlite_classes": ["CloudStore"] },
-    { "tag": "v6", "new_sqlite_classes": ["Converter"] }
+    { "tag": "v6", "new_sqlite_classes": ["Converter"] },
+    { "tag": "v7", "deleted_classes": ["SchoolsStore"] }
   ]
 }
