@@ -7,11 +7,8 @@
  *   onedrive-integration           all of OneDrive
  *   drive-integration              all of Google Drive
  *   schoology-signin               signing in with a Schoology API key
- *   gclassroom-signin              "Sign in with Google" (Classroom)
- *   canvas-signin                  the Canvas option on the sign-in page (app only for now)
  *   test-signin                    the reviewer account (REVIEW_KEY / REVIEW_SECRET)
  *   maintenance-banner             a banner across the app (text: MAINTENANCE_MESSAGE)
- *   schoolsform-page               the school application form
  *   coursematerialpreview-feature  previews of course materials (not built yet: off)
  *   turnin-feature                 turning in work (history stays readable)
  *   messaging-features             Messages
@@ -36,11 +33,8 @@ export const DEFAULTS = {
   "onedrive-integration": true,
   "drive-integration": true,
   "schoology-signin": true,
-  "gclassroom-signin": true,
-  "canvas-signin": true,
   "test-signin": true,
   "maintenance-banner": false,
-  "schoolsform-page": true,
   "coursematerialpreview-feature": false,
   "turnin-feature": true,
   "messaging-features": true,
@@ -129,7 +123,5 @@ export function featureForRoute(method: string, path: string): FeatureKey[] {
   if (path.startsWith("/submit/") && !(m === "GET" && path === "/submit/history")) need.push("turnin-feature");
   if (path === "/messages" || path.startsWith("/messages/")) need.push("messaging-features");
   if (path.startsWith("/push/") && m !== "DELETE" && path !== "/push/config") need.push("notifications-features");
-  if (path.startsWith("/schools/apply")) need.push("schoolsform-page");
-  if (m === "GET" && path === "/auth/google/start") need.push("gclassroom-signin");
   return need;
 }

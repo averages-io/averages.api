@@ -97,15 +97,10 @@ import {
 } from "./sync.ts";
 import { cloudConfig } from "./cloud.ts";
 import { CLOUD_APPS, cloudConfigured, isCloudApp, statusForCloudCode, type CloudApp } from "./cloudConnect.ts";
-import { checkTurnstile, emailAllowList, emailEndings, emailKey, emailProblem, schoolsFor, turnstileOn, validateApplication } from "./schools.ts";
-import { EmailMessage } from "cloudflare:email";
-import { autoReplyAllowed, buildMime, cleanEmail, NOREPLY_ADDRESS, SCHOOLS_ADDRESS } from "./mail.ts";
-import { applicationEmail, autoReplyEmail, inboundCopyEmail, verifyCodeEmail } from "./schoolsMail.ts";
+import { schoolsFor } from "./schools.ts";
 import { enqueueMany, enqueueRetry, handleRetryBatch, type RetryHandlers, type RetryMessage } from "./retryQueue.ts";
-import { readEmailText } from "./mailRead.ts";
 import { withFlags, featureOn, featureForRoute, FEATURE_KEYS, type FeatureKey, type Features } from "./flags.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
-import type { SchoolsStore } from "./schoolsStore.ts";
 import {
   accessCookie,
   ACCESS_COOKIE,
@@ -179,7 +174,6 @@ export { SyncStore } from "./syncStore.ts";
 export { CanvaStore } from "./canvaStore.ts";
 export { CloudStore } from "./cloudStore.ts";
 export { PushStore } from "./pushStore.ts";
-export { SchoolsStore } from "./schoolsStore.ts";
 export { Converter } from "./convert.ts";
 
 type Bindings = {
@@ -287,33 +281,8 @@ type Bindings = {
    * "Coming soon".
    */
   PUSH: DurableObjectNamespace<PushStore>;
-  /**
-   * Schools (2026-10-06): applications from app.averages.io/schools/apply
-   * and the auto-reply log, one SchoolsStore Durable Object in the US.
-   * SCHOOLS_MAIL is Email Routing's send_email binding (emails Martin each
-   * application). SCHOOLS_NOTIFY_TO (dashboard secret) is Martin's inbox: a
-   * verified Email Routing destination, never written in this public repo.
-   * SCHOOLS_ADMIN_KEY (dashboard secret) unlocks GET /schools/applications.
-   */
-  SCHOOLS?: DurableObjectNamespace<SchoolsStore>;
-  SCHOOLS_MAIL?: SendEmail;
-  /** The retry queue (2026-10-16, src/retryQueue.ts): failed application emails and notifications, tried again later. */
+  /** The retry queue (2026-10-16, src/retryQueue.ts): failed push notifications and queued Canva-save files, tried again later. */
   RETRY?: Queue<RetryMessage>;
-  SCHOOLS_NOTIFY_TO?: string;
-  SCHOOLS_ADMIN_KEY?: string;
-  /** Cloudflare Turnstile on the school application (2026-10-07): the site key (public, a var) and its secret. */
-  TURNSTILE_SITE_KEY?: string;
-  TURNSTILE_SECRET?: string;
-  /**
-   * The application's email rules (2026-10-07, vars): SCHOOLS_EMAIL_ENDINGS
-   * is the allowed endings ("edu,org,us,net"; unset = any), and
-   * SCHOOLS_VERIFY_EMAIL "1" asks for a 6-digit code sent to that address
-   * before applying. Turn that on only once averages.io is set up for sending
-   * in Cloudflare Email Service (Workers Paid): until then SCHOOLS_MAIL can
-   * only reach verified addresses and the codes wouldn't arrive.
-   */
-  SCHOOLS_EMAIL_ENDINGS?: string;
-  SCHOOLS_VERIFY_EMAIL?: string;
   /**
    * Feature switches (src/flags.ts, 2026-10-09). FEATURES is filled in per
    * request (Flagship, else the vars). FEATURES_OFF / FEATURES_ON: optional
@@ -324,8 +293,6 @@ type Bindings = {
   FEATURES_OFF?: string;
   FEATURES_ON?: string;
   MAINTENANCE_MESSAGE?: string;
-  /** Dashboard SECRET: exact addresses allowed whatever their ending (comma-separated). */
-  SCHOOLS_EMAIL_ALLOW?: string;
   /**
    * The reviewer account (2026-10-07, dashboard SECRETS, 16+ characters
    * each): typed into the hidden API-key sign-in, they open sample classes
@@ -335,6 +302,12 @@ type Bindings = {
   /** Cloudflare Flagship (2026-10-08, optional): see src/flags.ts. */
   FLAGS?: { getBooleanValue(key: string, defaultValue: boolean, context?: Record<string, unknown>): Promise<boolean> };
   REVIEW_SECRET?: string;
+  /**
+   * Optional developer secret (16+ characters). The schools admin endpoint it
+   * was made for is gone (2026-10-17); it now only also unlocks the temporary
+   * Canva permission probe, alongside REVIEW_SECRET. Unset = off.
+   */
+  SCHOOLS_ADMIN_KEY?: string;
   PUSH_SECRET?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_JWK?: string;
@@ -388,16 +361,6 @@ function canvaStore(env: Bindings, uid: string, requestUrl: string) {
 function cloudStore(env: Bindings, uid: string, requestUrl: string) {
   const ns = isLocalRequest(requestUrl) ? env.CLOUD : env.CLOUD.jurisdiction("us" as DurableObjectJurisdiction);
   return ns.get(ns.idFromName(uid));
-}
-
-/**
- * The one SchoolsStore, in the US (local-dev exception as above). The email
- * handler has no request URL: email only ever reaches the deployed Worker.
- */
-function schoolsStoreFor(env: Bindings, requestUrl: string | null) {
-  if (!env.SCHOOLS) return null;
-  const ns = requestUrl && isLocalRequest(requestUrl) ? env.SCHOOLS : env.SCHOOLS.jurisdiction("us" as DurableObjectJurisdiction);
-  return ns.get(ns.idFromName("schools"));
 }
 
 type Variables = {
@@ -514,7 +477,7 @@ app.use("*", rateLimit({ studentOf: async (c) => (await openedSession(c))?.uid ?
  * (Settings with ?feature_off=<key>, or the sign-in page for Google), so
  * nobody lands on a JSON page.
  */
-const NAVIGATED = /^\/(canva\/(connect|callback|return)|cloud\/[^/]+\/(connect|callback)|auth\/google\/start)$/;
+const NAVIGATED = /^\/(canva\/(connect|callback|return)|cloud\/[^/]+\/(connect|callback))$/;
 app.use("*", async (c, next) => {
   if (c.req.method === "OPTIONS") return next();
   const path = new URL(c.req.url).pathname;
@@ -522,8 +485,6 @@ app.use("*", async (c, next) => {
   if (!off) return next();
   c.header("Cache-Control", "no-store");
   if (c.req.method === "GET" && NAVIGATED.test(path)) {
-    // Google sign-in: the sign-in page's own "isn't switched on" message.
-    if (off === "gclassroom-signin") return c.redirect(`${appOrigin(c.req.url)}/?google=unavailable`);
     return c.redirect(`${appOrigin(c.req.url)}/settings?feature_off=${off}`);
   }
   return c.json({ error: "feature_off", feature: off }, 503);
@@ -749,78 +710,12 @@ app.delete("/auth/session", async (c) => {
 });
 
 /* ────────────────────────────────────────────────────────────────────
- * Sign in with Google, for Google Classroom (2026-10-05)
+ * Sign in with Google (Google Classroom) was removed on 2026-10-19: the public
+ * beta is Schoology only. With /auth/google/start and /auth/google/callback
+ * gone there is no way to get a Google session, so the Classroom branches
+ * below (isGoogle, googleAccess, src/classroom.ts, src/google.ts) are dormant.
+ * classroom.ts also holds helpers the Schoology side uses, so it stays.
  * ──────────────────────────────────────────────────────────────────── */
-
-/**
- * Step 1: the login page's "Continue with Google" button navigates here. The
- * sign-in's random state and PKCE verifier go into a sealed, 10-minute cookie
- * that only this Worker's /auth/google paths ever see, and the browser is sent
- * on to Google's consent screen.
- *
- * `under13` is the login page's 13+ box: anything but "0" means under 13
- * (the safe default), which seals Incognito into the session.
- */
-app.get("/auth/google/start", async (c) => {
-  const origin = appOrigin(c.req.url);
-  const config = googleConfig(c.env);
-  if (!config || !c.env.SESSION_SECRET) return c.redirect(`${origin}/?google=unavailable`);
-  const signIn = newSignInState(c.req.query("under13") !== "0");
-  const sealed = await sealValue(signIn, c.env.SESSION_SECRET, STATE_PURPOSE, STATE_TTL_SECONDS);
-  c.header("Set-Cookie", stateCookie(sealed, !isLocalRequest(c.req.url)));
-  c.header("Cache-Control", "no-store");
-  c.header("Referrer-Policy", "no-referrer");
-  return c.redirect(await authorizationUrl(config, signIn));
-});
-
-/**
- * Step 2: Google sends the browser back here with ?code&state (or ?error when
- * the student cancels). The state must match the cookie this same browser got
- * in step 1, so a sign-in can't be finished in someone else's browser. The
- * code is traded for tokens with the client secret, the permissions actually
- * granted are checked, and the tokens are sealed into the session cookie.
- * Every outcome goes back to the login page, which either moves on (signed
- * in) or explains what happened (?google=...).
- */
-app.get("/auth/google/callback", async (c) => {
-  const origin = appOrigin(c.req.url);
-  const secure = !isLocalRequest(c.req.url);
-  const back = (outcome: string) => {
-    c.header("Cache-Control", "no-store");
-    c.header("Referrer-Policy", "no-referrer");
-    return c.redirect(`${origin}/?google=${outcome}`);
-  };
-  // The state cookie is single-use: cleared whatever happens next.
-  c.header("Set-Cookie", clearStateCookie(secure), { append: true });
-
-  const config = googleConfig(c.env);
-  if (!config || !c.env.SESSION_SECRET) return back("unavailable");
-
-  const sealed = readCookie(c.req.header("Cookie") ?? null, STATE_COOKIE);
-  const signIn = sealed ? await openValue(sealed, c.env.SESSION_SECRET, STATE_PURPOSE) : null;
-  const state = c.req.query("state") ?? "";
-  if (!validSignInState(signIn) || !STATE_RE.test(state) || !sameString(state, signIn.state)) return back("expired");
-
-  const error = c.req.query("error");
-  if (error) return back(error === "access_denied" ? "cancelled" : "failed");
-  const code = c.req.query("code") ?? "";
-  if (!code || code.length > 2048) return back("failed");
-
-  try {
-    const exchange = await exchangeCode(config, code, signIn.verifier);
-    if (!hasRequiredScopes(exchange.letters)) return back("permissions");
-    const claims = idTokenClaims(exchange.idToken, config.clientId);
-    if (!claims || !exchange.refreshToken) return back("failed");
-    const google = googleSessionFrom(exchange, claims);
-    const session = { key: "", secret: "", ...google, ...(signIn.under13 ? { inc: true as const } : {}) };
-    const token = await sealSession(session, c.env.SESSION_SECRET);
-    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN), { append: true });
-    return back("ok");
-  } catch (err) {
-    if (!(err instanceof GoogleError)) console.error("google_callback_failed", err);
-    return back("failed");
-  }
-});
 
 /**
  * A working Google access token for this request. The one sealed at sign-in
@@ -1639,21 +1534,6 @@ app.get("/data/submission-file", async (c) => {
  * The schools the sign-in page can search (2026-10-06): public, no sign-in
  * needed (the page asks before anyone is signed in). See src/schools.ts.
  */
-/**
- * What the school application page needs (public): the Turnstile site key
- * (null when it's off), the allowed email endings ([] = any), and whether
- * the email has to be verified with a code.
- */
-app.get("/config/apply", (c) => {
-  c.header("Cache-Control", "public, max-age=300");
-  return c.json({
-    turnstileSiteKey: turnstileOn(c.env) ? c.env.TURNSTILE_SITE_KEY : null,
-    emailEndings: emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS),
-    verifyEmail: verifyEmailOn(c.env),
-    open: featureOn(c.env, "schoolsform-page"),
-  });
-});
-
 app.get("/config/schools", (c) => {
   const schools = schoolsFor(c.req.query("lms"));
   if (!schools) return c.json({ error: "bad_request" }, 400);
@@ -2398,278 +2278,17 @@ app.route(
   })
 );
 
-/* ── Schools (2026-10-06) ──────────────────────────────────────────────
- * A student's Email Template asks their school's IT team to write to
- * schools@averages.io; they get an automatic reply (handleSchoolsEmail
- * below) with the link to app.averages.io/schools/apply; the form posts here.
- */
-
-/* ── "Verify your email" on the application (2026-10-07, Martin) ───────
- * POST /schools/apply/code emails a 6-digit code (Turnstile-checked, at most
- * 3 per address per 10 minutes, 45 s apart, plus per-IP limits); POST
- * /schools/apply/verify checks it (5 tries, 10 minutes) and hands back an
- * emailProof, sealed with SESSION_SECRET for 2 hours, that POST
- * /schools/apply needs. Only a hash of each code is kept (SchoolsStore).
- */
-const EMAIL_PROOF_PURPOSE = "schools-email-proof";
-const EMAIL_PROOF_TTL_SECONDS = 2 * 60 * 60;
-
-function verifyEmailOn(env: Bindings): boolean {
-  return env.SCHOOLS_VERIFY_EMAIL === "1" && !!env.SCHOOLS_MAIL && !!env.SCHOOLS && !!env.SESSION_SECRET;
-}
-
-async function applyJson(c: any): Promise<Record<string, unknown> | null> {
-  try {
-    const body = await c.req.json();
-    return body && typeof body === "object" ? body : null;
-  } catch {
-    return null;
-  }
-}
-
-app.post("/schools/apply/code", async (c) => {
-  const blocked = notFromOurApp(c);
-  if (blocked) return blocked;
-  c.header("Cache-Control", "no-store");
-  if (!verifyEmailOn(c.env)) return c.json({ error: "verify_off" }, 404);
-  const body = await applyJson(c);
-  if (!body) return c.json({ error: "invalid_body" }, 400);
-  const problem = emailProblem(body.email, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS), emailAllowList(c.env.SCHOOLS_EMAIL_ALLOW));
-  if (problem) return c.json({ error: "invalid", fields: { email: problem } }, 400);
-  const email = String(body.email).trim();
-  if (turnstileOn(c.env)) {
-    const apiHost = new URL(c.req.url).hostname;
-    const local = apiHost === "localhost" || apiHost === "127.0.0.1";
-    const verdict = await checkTurnstile(body.turnstileToken, c.env.TURNSTILE_SECRET!, c.req.header("CF-Connecting-IP") ?? null, fetch, local);
-    if (verdict === "failed") return c.json({ error: "captcha_failed" }, 400);
-    if (verdict === "unavailable") return c.json({ error: "captcha_unavailable" }, 503);
-  }
-  const store = schoolsStoreFor(c.env, c.req.url);
-  if (!store) return c.json({ error: "unavailable" }, 503);
-  const issued = await store.issueCode(emailKey(email));
-  if ("wait" in issued) {
-    c.header("Retry-After", String(issued.wait));
-    return c.json({ error: "code_wait", retryAfter: issued.wait }, 429);
-  }
-  // From no-reply@averages.io, with Email Service's structured send (it
-  // builds the message; replies would go nowhere useful, so none is offered).
-  const mail = verifyCodeEmail(issued.code);
-  try {
-    await c.env.SCHOOLS_MAIL!.send({ from: { email: NOREPLY_ADDRESS, name: "Averages.io" }, to: email, subject: mail.subject, text: mail.text, html: mail.html });
-  } catch (error: any) {
-    // e.g. E_RECIPIENT_SUPPRESSED (it bounced before), E_SENDER_NOT_VERIFIED / E_RECIPIENT_NOT_ALLOWED (sending isn't set up).
-    console.error("schools_code_send_failed", error?.code ?? "", error?.message ?? error);
-    return c.json({ error: "code_send_failed" }, 502);
-  }
-  return c.json({ ok: true });
-});
-
-app.post("/schools/apply/verify", async (c) => {
-  const blocked = notFromOurApp(c);
-  if (blocked) return blocked;
-  c.header("Cache-Control", "no-store");
-  if (!verifyEmailOn(c.env)) return c.json({ error: "verify_off" }, 404);
-  const body = await applyJson(c);
-  if (!body) return c.json({ error: "invalid_body" }, 400);
-  if (emailProblem(body.email, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS), emailAllowList(c.env.SCHOOLS_EMAIL_ALLOW))) return c.json({ error: "code_expired" }, 400);
-  const email = emailKey(String(body.email));
-  const code = String(body.code ?? "").replace(/\s+/g, "");
-  const store = schoolsStoreFor(c.env, c.req.url);
-  if (!store) return c.json({ error: "unavailable" }, 503);
-  const checked = await store.checkCode(email, code);
-  if (checked.result === "ok") {
-    const emailProof = await sealValue({ e: email }, c.env.SESSION_SECRET, EMAIL_PROOF_PURPOSE, EMAIL_PROOF_TTL_SECONDS);
-    return c.json({ ok: true, emailProof });
-  }
-  if (checked.result === "wrong") return c.json({ error: "code_wrong", triesLeft: checked.left }, 400);
-  return c.json({ error: checked.result === "too_many" ? "code_too_many" : "code_expired" }, 400);
-});
-
 /**
- * One application. Public (school IT staff aren't signed in), JSON from our
- * own app only, rate-limited per IP. Saved first, then emailed to Martin.
- */
-app.post("/schools/apply", async (c) => {
-  const blocked = notFromOurApp(c);
-  if (blocked) return blocked;
-  c.header("Cache-Control", "no-store");
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "invalid_body" }, 400);
-  }
-  const checked = validateApplication(body, emailEndings(c.env.SCHOOLS_EMAIL_ENDINGS), emailAllowList(c.env.SCHOOLS_EMAIL_ALLOW));
-  if (!checked.ok) return c.json({ error: "invalid", fields: checked.fields }, 400);
-  // The hidden field a person never fills in: a bot. Polite "ok", nothing kept.
-  if (checked.spam) return c.json({ ok: true });
-  // Verified email (2026-10-07): the proof POST /schools/apply/verify handed out, for this address.
-  if (verifyEmailOn(c.env)) {
-    const proof = await openValue(String((body as any)?.emailProof ?? ""), c.env.SESSION_SECRET, EMAIL_PROOF_PURPOSE);
-    if (!proof || (proof as any).e !== emailKey(checked.value.email)) return c.json({ error: "email_unverified" }, 400);
-  }
-  // Cloudflare Turnstile (2026-10-07), when it's set up.
-  if (turnstileOn(c.env)) {
-    // Tokens from a localhost page only count when this API is running locally too.
-    const apiHost = new URL(c.req.url).hostname;
-    const local = apiHost === "localhost" || apiHost === "127.0.0.1";
-    const verdict = await checkTurnstile((body as any)?.turnstileToken, c.env.TURNSTILE_SECRET!, c.req.header("CF-Connecting-IP") ?? null, fetch, local);
-    if (verdict === "failed") return c.json({ error: "captcha_failed" }, 400);
-    if (verdict === "unavailable") return c.json({ error: "captcha_unavailable" }, 503);
-  }
-  const store = schoolsStoreFor(c.env, c.req.url);
-  if (!store) return c.json({ error: "unavailable" }, 503);
-  try {
-    const { app: saved, duplicate } = await store.add(checked.value);
-    const notifyTo = cleanEmail(c.env.SCHOOLS_NOTIFY_TO);
-    if (c.env.SCHOOLS_MAIL && notifyTo) {
-      const mail = applicationEmail(saved, duplicate);
-      const raw = buildMime({ from: SCHOOLS_ADDRESS, fromName: "Averages.io schools", to: notifyTo, replyTo: saved.email, ...mail });
-      // After the answer: a slow or failed email never costs the school its "sent".
-      // Failed: tried again from the retry queue (2026-10-16), rebuilt from the saved application.
-      c.executionCtx.waitUntil(
-        c.env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, notifyTo, raw)).catch(async (error: unknown) => {
-          console.error("schools_notify_failed", error);
-          await enqueueRetry(c.env, { k: "school_email", id: saved.id, dup: duplicate, at: Date.now() });
-        })
-      );
-    }
-    return c.json({ ok: true });
-  } catch (error) {
-    console.error("schools_apply_failed", error);
-    return c.json({ error: "unavailable" }, 503);
-  }
-});
-
-/**
- * Martin's list of applications: `Authorization: Bearer <SCHOOLS_ADMIN_KEY>`.
- * Off (404) until that secret is set, and refused for a key under 24
- * characters. Compared in constant time.
- */
-app.get("/schools/applications", async (c) => {
-  c.header("Cache-Control", "no-store");
-  const key = c.env.SCHOOLS_ADMIN_KEY ?? "";
-  if (key.length < 24) return c.json({ error: "not_found" }, 404);
-  const given = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (!sameString(given, key)) return c.json({ error: "forbidden" }, 403);
-  const store = schoolsStoreFor(c.env, c.req.url);
-  if (!store) return c.json({ error: "unavailable" }, 503);
-  return c.json({ applications: await store.list() });
-});
-
-/**
- * Email to schools@averages.io (Email Routing sends it to this Worker).
- * Martin gets a copy of every email; a school's first email also gets the
- * automatic reply with the application link (once per sender per 30 days,
- * never to robots: see autoReplyAllowed in mail.ts). Never throws: a failure
- * is logged.
- *
- * The copy (2026-10-06, Martin: "I am only getting the ... form ... emails
- * but not the emails they send after"): with SCHOOLS_MAIL bound, Martin's
- * copy is a new email from schools@averages.io (the sender's text inside,
- * the original attached, Reply-To the sender), sent the same way as the
- * application emails that do arrive. A plain forward keeps the sender's own
- * From and Message-ID, which Gmail can drop (his own test emails look like
- * copies of mail he sent) or file as spam. Without the binding, or if the
- * copy fails, it falls back to forwarding.
- */
-/** The biggest original attached to Martin's copy; bigger ones send the text only. */
-const COPY_ATTACH_MAX = 10 * 1024 * 1024;
-
-export async function handleSchoolsEmail(message: ForwardableEmailMessage, env: Bindings, _ctx?: ExecutionContext): Promise<void> {
-  const to = cleanEmail(message.to);
-  const from = cleanEmail(message.from);
-  // The same clean address the application emails go to (a stray space or
-  // capital in the secret mustn't stop one and not the other).
-  const notifyTo = cleanEmail(env.SCHOOLS_NOTIFY_TO);
-  if (notifyTo) {
-    let copied = false;
-    if (env.SCHOOLS_MAIL) {
-      try {
-        const size = Number(message.rawSize) || 0;
-        const tooBig = size > COPY_ATTACH_MAX;
-        const bytes = !tooBig && message.raw ? new Uint8Array(await new Response(message.raw).arrayBuffer()) : null;
-        const fromHeader = String(message.headers.get("From") ?? "");
-        const fromName = (/^\s*"?([^"<]{1,80}?)"?\s*</.exec(fromHeader)?.[1] ?? "").trim();
-        const mail = inboundCopyEmail({
-          from: from || String(message.from ?? "").slice(0, 254) || "unknown sender",
-          fromName,
-          to: to || SCHOOLS_ADDRESS,
-          subject: String(message.headers.get("Subject") ?? ""),
-          text: bytes ? readEmailText(bytes) : "",
-          receivedAt: Date.now(),
-          attached: !!bytes,
-          tooBig,
-        });
-        const raw = buildMime({
-          from: SCHOOLS_ADDRESS,
-          fromName: "Averages.io schools",
-          to: notifyTo,
-          replyTo: from || undefined,
-          ...mail,
-          attachments: bytes ? [{ filename: "original-email.eml", contentType: "application/octet-stream", data: bytes }] : [],
-        });
-        await env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, notifyTo, raw));
-        copied = true;
-      } catch (error) {
-        console.error("schools_copy_failed", String(error));
-      }
-    }
-    if (!copied) {
-      try {
-        await message.forward(notifyTo);
-      } catch (error) {
-        console.error("schools_forward_failed", String(error));
-      }
-    }
-  }
-  if (to !== SCHOOLS_ADDRESS || !from) return;
-  if (!autoReplyAllowed(message.from, message.headers).ok) return;
-  try {
-    const store = schoolsStoreFor(env, null);
-    if (!store || !(await store.claimReply(from))) return;
-    const mail = autoReplyEmail(message.headers.get("Subject"));
-    const raw = buildMime({
-      from: SCHOOLS_ADDRESS,
-      fromName: "Averages.io",
-      to: from,
-      ...mail,
-      inReplyTo: message.headers.get("Message-ID") ?? undefined,
-      autoReply: true,
-    });
-    await message.reply(new EmailMessage(SCHOOLS_ADDRESS, from, raw));
-  } catch (error) {
-    console.error("schools_reply_failed", error);
-  }
-}
-
-/**
- * The Worker: HTTP through Hono, email through handleSchoolsEmail. Tests call
- * `app.fetch` on this object exactly as they did on the Hono app.
+ * The Worker: HTTP through Hono. Tests call `app.fetch` on this object
+ * exactly as they did on the Hono app.
  */
 /**
  * The retry queue's tries (2026-10-16, src/retryQueue.ts). Each says "done",
  * "retry" (a passing failure: the queue tries again later) or "drop" (it
- * can't work: the application or the browser is gone).
+ * can't work: the browser is gone).
  */
 export function retryHandlers(env: Bindings): RetryHandlers {
   return {
-    async schoolEmail(id, duplicate) {
-      const notifyTo = cleanEmail(env.SCHOOLS_NOTIFY_TO);
-      const store = schoolsStoreFor(env, null);
-      if (!env.SCHOOLS_MAIL || !notifyTo || !store) return "drop";
-      const saved = await store.get(id);
-      if (!saved) return "drop";
-      const mail = applicationEmail(saved, duplicate);
-      const raw = buildMime({ from: SCHOOLS_ADDRESS, fromName: "Averages.io schools", to: notifyTo, replyTo: saved.email, ...mail });
-      try {
-        await env.SCHOOLS_MAIL.send(new EmailMessage(SCHOOLS_ADDRESS, notifyTo, raw));
-        return "done";
-      } catch (error) {
-        console.error("schools_notify_failed", error);
-        return "retry";
-      }
-    },
     async push(obj, ep, note, at) {
       if (!env.PUSH) return "drop";
       const stub = env.PUSH.get(env.PUSH.idFromString(obj));
@@ -2716,7 +2335,6 @@ export function retryHandlers(env: Bindings): RetryHandlers {
 export default {
   // Flagship switches (src/flags.ts) are read once per request, before the app sees env.
   fetch: async (request: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(request, await withFlags(env), ctx),
-  email: handleSchoolsEmail,
   // The retry queue (2026-10-16): see src/retryQueue.ts.
   queue: async (batch: MessageBatch<unknown>, env: Bindings) => handleRetryBatch(batch, retryHandlers(env)),
 };

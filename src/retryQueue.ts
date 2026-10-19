@@ -4,10 +4,6 @@
  * later, instead of being lost.
  *
  * Two kinds today:
- *   - "school_email": the email telling Martin about a new school application
- *     (POST /schools/apply). The application is already saved; only the email
- *     failed. The message carries the application's id, and the email is
- *     built again from the saved copy.
  *   - "push": a browser notification the push service refused for now (429,
  *     5xx, or no answer). The message carries the student's PushStore id (an
  *     opaque id, not their Schoology id), a short hash of the browser's
@@ -42,7 +38,6 @@ export interface RetryNote {
   tag: string;
 }
 export type RetryMessage =
-  | { k: "school_email"; id: string; dup: boolean; at: number }
   | { k: "push"; obj: string; ep: string; note: RetryNote; at: number }
   | { k: "canva_save"; obj: string; job: string; i: number; at: number };
 
@@ -62,15 +57,12 @@ export const RETRY_DELAYS = [60, 300, 900, 1800, 3600] as const;
 export const MAX_ATTEMPTS = RETRY_DELAYS.length;
 /** A notification older than this isn't news any more (the push itself lives 12 hours). */
 export const PUSH_RETRY_MAX_AGE_MS = 3 * 60 * 60 * 1000;
-/** An application email is still worth sending for a day (the queue keeps messages 24 hours on Workers Free). */
-export const EMAIL_RETRY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** A Canva save job's sign-in lasts two hours (SAVE_CRED_TTL_S in canvaSave.ts); after that its files can't be fetched. */
 export const SAVE_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 /** Files in one save job (SAVE_MAX_FILES in canvaSave.ts). */
 const SAVE_MAX_INDEX = 49;
 const JOB_RE = /^[A-Za-z0-9_-]{8,40}$/;
 
-const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const OBJ_RE = /^[0-9a-f]{64}$/;
 const EP_RE = /^[0-9a-f]{32}$/;
 
@@ -79,7 +71,6 @@ export function isRetryMessage(body: unknown): body is RetryMessage {
   if (!body || typeof body !== "object") return false;
   const m = body as Record<string, unknown>;
   if (typeof m.at !== "number" || !Number.isFinite(m.at)) return false;
-  if (m.k === "school_email") return typeof m.id === "string" && ID_RE.test(m.id) && typeof m.dup === "boolean";
   if (m.k === "push") {
     const n = m.note as Record<string, unknown> | null;
     return (
@@ -157,7 +148,6 @@ export async function enqueueMany(env: RetryEnv, items: { message: RetryMessage;
 
 /** One try for each kind; real ones in index.ts, fakes in the tests. Each returns an outcome and doesn't throw on purpose (a throw counts as "retry"). */
 export interface RetryHandlers {
-  schoolEmail(id: string, duplicate: boolean): Promise<RetryOutcome>;
   push(obj: string, ep: string, note: RetryNote, at: number): Promise<RetryOutcome>;
   canvaSave(obj: string, job: string, i: number): Promise<RetryOutcome>;
   /** The last try failed too, or the message is too old: a chance to record that (a save job's file is marked failed). */
@@ -176,7 +166,7 @@ export async function handleRetryBatch(batch: MessageBatch<unknown>, handlers: R
       msg.ack();
       continue;
     }
-    const maxAge = body.k === "push" ? PUSH_RETRY_MAX_AGE_MS : body.k === "canva_save" ? SAVE_MAX_AGE_MS : EMAIL_RETRY_MAX_AGE_MS;
+    const maxAge = body.k === "push" ? PUSH_RETRY_MAX_AGE_MS : SAVE_MAX_AGE_MS;
     if (now - body.at > maxAge) {
       console.log("retry_too_old", body.k);
       await giveUp(handlers, body);
@@ -186,8 +176,7 @@ export async function handleRetryBatch(batch: MessageBatch<unknown>, handlers: R
     let outcome: RetryOutcome;
     try {
       outcome =
-        body.k === "school_email" ? await handlers.schoolEmail(body.id, body.dup)
-        : body.k === "push" ? await handlers.push(body.obj, body.ep, body.note, body.at)
+        body.k === "push" ? await handlers.push(body.obj, body.ep, body.note, body.at)
         : await handlers.canvaSave(body.obj, body.job, body.i);
     } catch (error) {
       console.error("retry_try_failed", body.k, error instanceof Error ? error.message : String(error));
