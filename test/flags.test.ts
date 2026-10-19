@@ -14,7 +14,7 @@ function check(name: string, actual: unknown, expected: unknown) {
   else { failed++; console.log(`  FAIL  ${name}\n        expected: ${e}\n        actual:   ${a}`); }
 }
 
-check("13 switches, in Martin's order", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "gclassroom-signin", "canvas-signin", "test-signin", "maintenance-banner", "schoolsform-page", "coursematerialpreview-feature", "turnin-feature", "messaging-features", "notifications-features"]);
+check("10 switches, in Martin's order", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "coursematerialpreview-feature", "turnin-feature", "messaging-features", "notifications-features"]);
 check("defaults: everything on except the banner and previews", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "coursematerialpreview-feature"]);
 check("no Flagship: the defaults", await readFeatures({}), DEFAULTS);
 const vars = fallbackFeatures({ FEATURES_OFF: " Messaging-Features, turnin-feature,nonsense", FEATURES_ON: "maintenance-banner,turnin-feature" });
@@ -22,9 +22,9 @@ check("FEATURES_OFF / FEATURES_ON (off wins, any case, unknown ignored)", [vars[
 
 const asked: [string, boolean][] = [];
 const flags = (answers: Record<string, any>) => ({ getBooleanValue: async (k: string, d: boolean) => { asked.push([k, d]); if (answers[k] instanceof Error) throw answers[k]; return k in answers ? answers[k] : d; } });
-let f = await readFeatures({ FEATURES_OFF: "canvas-signin", FLAGS: flags({ "drive-integration": false, "maintenance-banner": true }) });
+let f = await readFeatures({ FEATURES_OFF: "test-signin", FLAGS: flags({ "drive-integration": false, "maintenance-banner": true }) });
 check("Flagship answers win", [f["drive-integration"], f["maintenance-banner"], f["canva-integration"]], [false, true, true]);
-check("the default Flagship gets is the fallback", asked.find(([k]) => k === "canvas-signin"), ["canvas-signin", false]);
+check("the default Flagship gets is the fallback", asked.find(([k]) => k === "test-signin"), ["test-signin", false]);
 f = await readFeatures({ FLAGS: flags({ "turnin-feature": new Error("down") }) });
 check("an error: the fallback", f["turnin-feature"], true);
 f = await readFeatures({ FLAGS: { getBooleanValue: () => new Promise<boolean>(() => {}) } }, 30);
@@ -39,12 +39,12 @@ check("routes → switches", [
   featureForRoute("POST", "/cloud/gdrive/token"), featureForRoute("GET", "/cloud/onedrive/connect"), featureForRoute("GET", "/cloud/status"),
   featureForRoute("POST", "/submit/file"), featureForRoute("GET", "/submit/history"),
   featureForRoute("POST", "/messages/reply"), featureForRoute("POST", "/push/subscribe"), featureForRoute("DELETE", "/push/subscribe"), featureForRoute("GET", "/push/config"),
-  featureForRoute("POST", "/schools/apply/code"), featureForRoute("GET", "/auth/google/start"), featureForRoute("GET", "/data/bundle"),
-], [["canva-integration"], ["canva-integration", "turnin-feature"], ["canva-integration", "turnin-feature"], ["drive-integration"], ["onedrive-integration"], [], ["turnin-feature"], [], ["messaging-features"], ["notifications-features"], [], [], ["schoolsform-page"], ["gclassroom-signin"], []]);
+  featureForRoute("GET", "/data/bundle"),
+], [["canva-integration"], ["canva-integration", "turnin-feature"], ["canva-integration", "turnin-feature"], ["drive-integration"], ["onedrive-integration"], [], ["turnin-feature"], [], ["messaging-features"], ["notifications-features"], [], [], []]);
 
 // Through the Worker.
 const CTX: any = { waitUntil() {}, passThroughOnException() {} };
-const ENV: any = { SESSION_SECRET: "s".repeat(32), SCHOOLS: {}, SCHOOLS_MAIL: { send: async () => ({}) }, GOOGLE_CLIENT_ID: "362414855541-abc.apps.googleusercontent.com", MS_CLIENT_ID: "c006202b-180f-4d4c-b03c-c0f43048c8e9", REVIEW_KEY: "k".repeat(20), REVIEW_SECRET: "r".repeat(20) };
+const ENV: any = { SESSION_SECRET: "s".repeat(32), GOOGLE_CLIENT_ID: "362414855541-abc.apps.googleusercontent.com", MS_CLIENT_ID: "c006202b-180f-4d4c-b03c-c0f43048c8e9", REVIEW_KEY: "k".repeat(20), REVIEW_SECRET: "r".repeat(20) };
 const call = (path: string, env: any, init?: RequestInit) => worker.fetch(new Request("https://api.averages.io" + path, init), env, CTX);
 const json = async (r: Response) => [r.status, await r.json()];
 
@@ -70,9 +70,6 @@ check("turn in off → /data/submissions still answers (401 without a session)",
 check("on: the route runs as before (401 without a session)", (await call("/messages", ENV)).status, 401);
 r = await call("/canva/connect", OFF("canva-integration"));
 check("Canva off: Connect goes back to Settings", [r.status, r.headers.get("location")], [302, "https://app.averages.io/settings?feature_off=canva-integration"]);
-r = await call("/auth/google/start", OFF("gclassroom-signin"));
-check("Classroom sign-in off: back to the sign-in page", [r.status, r.headers.get("location")], [302, "https://app.averages.io/?google=unavailable"]);
-check("school form off: apply refused, config says closed", [(await call("/schools/apply", OFF("schoolsform-page"), { method: "POST" })).status, ((await (await call("/config/apply", OFF("schoolsform-page"))).json()) as any).open], [503, false]);
 
 const signIn = (env: any, key: string, secret: string) => call("/auth/session", env, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://app.averages.io" }, body: JSON.stringify({ key, secret }) });
 check("reviewer sign-in off → 503 test-signin", await json(await signIn(OFF("test-signin"), "k".repeat(20), "r".repeat(20))), [503, { error: "feature_off", feature: "test-signin" }]);

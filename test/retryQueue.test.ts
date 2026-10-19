@@ -1,8 +1,8 @@
 /**
  * The retry queue (src/retryQueue.ts, 2026-10-16): what goes on it, and how
- * the consumer settles each message. The two kinds of retry are tested where
- * their senders are: push.test.ts (notifications) and schoolsApply.test.ts
- * (application emails).
+ * the consumer settles each message. The two kinds are tested where their
+ * senders are: push.test.ts (notifications) and canvaSave.test.ts (Canva
+ * save-folder files).
  *
  * Run: node --experimental-strip-types test/retryQueue.test.ts
  */
@@ -40,13 +40,13 @@ async function quiet<T>(fn: () => Promise<T>): Promise<T> {
 const NOW = Date.parse("2026-10-16T18:00:00Z");
 const NOTE = { title: "Averages", body: "A new grade was posted.", url: "/grades", tag: "averages-grades" };
 const PUSH: RetryMessage = { k: "push", obj: "ab".repeat(32), ep: "0123456789abcdef0123456789abcdef", note: NOTE, at: NOW - 60_000 };
-const EMAIL: RetryMessage = { k: "school_email", id: "app_7Xq2", dup: false, at: NOW - 60_000 };
+const SAVE: RetryMessage = { k: "canva_save", obj: "cd".repeat(32), job: "job_abcd1234", i: 0, at: NOW - 60_000 };
 
 console.log("messages");
-check("both kinds are understood", [isRetryMessage(PUSH), isRetryMessage(EMAIL)], [true, true]);
+check("both kinds are understood", [isRetryMessage(PUSH), isRetryMessage(SAVE)], [true, true]);
 check("anything else isn't", [
-  isRetryMessage(null), isRetryMessage("x"), isRetryMessage({ ...EMAIL, k: "other" }),
-  isRetryMessage({ ...EMAIL, id: "../x" }), isRetryMessage({ ...EMAIL, at: "now" }),
+  isRetryMessage(null), isRetryMessage("x"), isRetryMessage({ ...SAVE, k: "other" }),
+  isRetryMessage({ ...SAVE, job: "x" }), isRetryMessage({ ...SAVE, at: "now" }),
   isRetryMessage({ ...PUSH, obj: "1001" }), isRetryMessage({ ...PUSH, ep: "https://fcm.googleapis.com/x" }),
   isRetryMessage({ ...PUSH, note: { ...NOTE, body: "x".repeat(201) } }), isRetryMessage({ ...PUSH, note: null }),
 ], [false, false, false, false, false, false, false, false, false]);
@@ -58,12 +58,12 @@ console.log("\nputting a retry on the queue");
 {
   const sent: { body: unknown; opts: unknown }[] = [];
   const RETRY: any = { send: async (body: unknown, opts: unknown) => void sent.push({ body, opts }) };
-  check("no queue bound: false, nothing thrown", await enqueueRetry({}, EMAIL), false);
-  check("queued, a minute out by default", [await quiet(() => enqueueRetry({ RETRY }, EMAIL)), sent[0]?.opts], [true, { delaySeconds: 60 }]);
+  check("no queue bound: false, nothing thrown", await enqueueRetry({}, SAVE), false);
+  check("queued, a minute out by default", [await quiet(() => enqueueRetry({ RETRY }, SAVE)), sent[0]?.opts], [true, { delaySeconds: 60 }]);
   check("a delay can be given", [await quiet(() => enqueueRetry({ RETRY }, PUSH, 300)), sent[1]?.opts], [true, { delaySeconds: 300 }]);
-  check("a malformed message is refused before the queue", [await quiet(() => enqueueRetry({ RETRY }, { ...EMAIL, id: "" } as RetryMessage)), sent.length], [false, 2]);
+  check("a malformed message is refused before the queue", [await quiet(() => enqueueRetry({ RETRY }, { ...SAVE, job: "" } as RetryMessage)), sent.length], [false, 2]);
   const broken: any = { send: async () => { throw new Error("queue unavailable"); } };
-  check("the queue refusing: false, never thrown", await quiet(() => enqueueRetry({ RETRY: broken }, EMAIL)), false);
+  check("the queue refusing: false, never thrown", await quiet(() => enqueueRetry({ RETRY: broken }, SAVE)), false);
 }
 
 console.log("\nthe consumer");
@@ -83,23 +83,23 @@ function handlers(outcome: RetryOutcome | "throw", seen: string[] = []): RetryHa
     if (outcome === "throw") throw new Error("boom");
     return outcome;
   };
-  return { schoolEmail: (id) => run("email " + id), push: (obj, ep) => run("push " + ep.slice(0, 4)) };
+  return { push: (obj, ep) => run("push " + ep.slice(0, 4)), canvaSave: (obj, job) => run("save " + job) };
 }
 {
   const seen: string[] = [];
-  const { b, settled } = batch([{ body: EMAIL }, { body: PUSH }]);
+  const { b, settled } = batch([{ body: SAVE }, { body: PUSH }]);
   await quiet(() => handleRetryBatch(b, handlers("done", seen), NOW));
-  check("done: each tried once and acknowledged", [seen, settled.map((s) => [s.ack, s.retry.length])], [["email app_7Xq2", "push 0123"], [[1, 0], [1, 0]]]);
+  check("done: each tried once and acknowledged", [seen, settled.map((s) => [s.ack, s.retry.length])], [["save job_abcd1234", "push 0123"], [[1, 0], [1, 0]]]);
 }
 {
-  const { b, settled } = batch([{ body: EMAIL, attempts: 1 }, { body: PUSH, attempts: 3 }]);
+  const { b, settled } = batch([{ body: SAVE, attempts: 1 }, { body: PUSH, attempts: 3 }]);
   await quiet(() => handleRetryBatch(b, handlers("retry"), NOW));
   check("retry: asked again later, the wait growing", settled.map((s) => [s.ack, s.retry]), [[0, [{ delaySeconds: 300 }]], [0, [{ delaySeconds: 1800 }]]]);
 }
 {
-  const { b, settled } = batch([{ body: EMAIL, attempts: MAX_ATTEMPTS }]);
+  const { b, settled } = batch([{ body: SAVE, attempts: MAX_ATTEMPTS }]);
   await quiet(() => handleRetryBatch(b, handlers("retry"), NOW));
-  check("the last try failed too: given up (acknowledged, logged)", [settled[0].ack, settled[0].retry.length, quietLogs.some((l) => l.startsWith("retry_gave_up school_email"))], [1, 0, true]);
+  check("the last try failed too: given up (acknowledged, logged)", [settled[0].ack, settled[0].retry.length, quietLogs.some((l) => l.startsWith("retry_gave_up canva_save"))], [1, 0, true]);
 }
 {
   const { b, settled } = batch([{ body: PUSH }]);
@@ -107,7 +107,7 @@ function handlers(outcome: RetryOutcome | "throw", seen: string[] = []): RetryHa
   check("drop: acknowledged, not retried", [settled[0].ack, settled[0].retry.length], [1, 0]);
 }
 {
-  const { b, settled } = batch([{ body: EMAIL }, { body: PUSH }]);
+  const { b, settled } = batch([{ body: SAVE }, { body: PUSH }]);
   await quiet(() => handleRetryBatch(b, handlers("throw"), NOW));
   check("a try that throws: retried, and the other message still settled", settled.map((s) => [s.ack, s.retry.length]), [[0, 1], [0, 1]]);
 }
@@ -116,13 +116,13 @@ function handlers(outcome: RetryOutcome | "throw", seen: string[] = []): RetryHa
   const { b, settled } = batch([
     { body: { k: "nope" } },
     { body: { ...PUSH, at: NOW - PUSH_RETRY_MAX_AGE_MS - 1 } },
-    { body: { ...EMAIL, at: NOW - 25 * 3600e3 } },
-    { body: EMAIL },
+    { body: { ...SAVE, at: NOW - 3 * 3600e3 } },
+    { body: SAVE },
   ]);
   await quiet(() => handleRetryBatch(b, handlers("done", seen), NOW));
-  check("bad or too-old messages: acknowledged without a try; the good one tried", [settled.map((s) => s.ack), seen], [[1, 1, 1, 1], ["email app_7Xq2"]]);
+  check("bad or too-old messages: acknowledged without a try; the good one tried", [settled.map((s) => s.ack), seen], [[1, 1, 1, 1], ["save job_abcd1234"]]);
 }
-check("logs never carry message contents", quietLogs.some((l) => /grade|fcm|app_7Xq2|abab/.test(l)), false);
+check("logs never carry message contents", quietLogs.some((l) => /grade|fcm|job_abcd1234|cdcd|abab/.test(l)), false);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

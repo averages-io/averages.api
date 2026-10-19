@@ -17,9 +17,9 @@ const call = (path: string) =>
   app.fetch(new Request("https://api.averages.io" + path, { headers: { Origin: "https://app.averages.io" } }), { SESSION_SECRET: "test" } as any, { waitUntil() {}, passThroughOnException() {} } as any);
 
 check("schoology list", schoolsFor("schoology"), SCHOOLS.schoology);
-check("canvas list", schoolsFor("canvas"), SCHOOLS.canvas);
+check("canvas no longer served: null", schoolsFor("canvas"), null);
 check("anything else: null", [schoolsFor("google"), schoolsFor(undefined), schoolsFor("constructor")], [null, null, null]);
-for (const lms of ["schoology", "canvas"]) {
+for (const lms of ["schoology"]) {
   const r = await call(`/config/schools?lms=${lms}`);
   check(`${lms}: 200 with a list`, [r.status, Array.isArray(((await r.json()) as any).schools)], [200, true]);
   check(`${lms}: cached an hour, public`, r.headers.get("Cache-Control"), "public, max-age=3600");

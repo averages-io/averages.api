@@ -142,7 +142,7 @@ console.log("\nthe queue message");
   const settled: any[] = [];
   const gaveUp: any[] = [];
   const batch = (attempts: number) => ({ queue: "q", messages: [{ id: "1", timestamp: new Date(), body: m, attempts, ack: () => settled.push("ack"), retry: (o: any) => settled.push(o) }], ackAll() {}, retryAll() {} }) as any;
-  const handlers = { schoolEmail: async () => "done" as const, push: async () => "done" as const, canvaSave: async () => ({ retryIn: 60 }), gaveUp: async (b: any) => void gaveUp.push(b.i) };
+  const handlers = { push: async () => "done" as const, canvaSave: async () => ({ retryIn: 60 }), gaveUp: async (b: any) => void gaveUp.push(b.i) };
   await quiet(() => handleRetryBatch(batch(1), handlers));
   await quiet(() => handleRetryBatch(batch(5), handlers));
   check("slow down: retried after Canva's minute; the last try gives up and marks it", [settled, gaveUp], [[{ delaySeconds: 60 }, "ack"], [3]]);
