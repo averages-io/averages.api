@@ -149,6 +149,8 @@ import { rateLimit } from "./rateLimit.ts";
 import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
 import type { CloudStore } from "./cloudStore.ts";
+import type { BillingStore } from "./billingStore.ts";
+import { billingRoutes, stripeWebhookRoutes, type BillingRouteEnv, type BillingStoreApi } from "./billingRoutes.ts";
 import type { PushStore } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
 import { submitRoutes } from "./submitRoutes.ts";
@@ -173,6 +175,7 @@ import { cleanFolderName, newJobId, parseSaveFiles, SAVE_CRED_TTL_S, SAVE_JOB_RE
 export { SyncStore } from "./syncStore.ts";
 export { CanvaStore } from "./canvaStore.ts";
 export { CloudStore } from "./cloudStore.ts";
+export { BillingStore } from "./billingStore.ts";
 export { PushStore } from "./pushStore.ts";
 export { Converter } from "./convert.ts";
 
@@ -259,6 +262,17 @@ type Bindings = {
    * cloudStore below), holding their refresh tokens. See src/cloudConnect.ts.
    */
   CLOUD: DurableObjectNamespace<CloudStore>;
+  /**
+   * Averages Plus (2026-10-21, src/billing.ts): one BillingStore Durable
+   * Object per student who has subscribed, in the "us" jurisdiction, holding
+   * their Stripe customer / subscription ids and status. STRIPE_SECRET_KEY and
+   * STRIPE_WEBHOOK_SECRET are dashboard secrets (sandbox keys while
+   * testing); STRIPE_PRICE_LOOKUP_KEY is optional (default plus_monthly).
+   */
+  BILLING?: DurableObjectNamespace<BillingStore>;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  STRIPE_PRICE_LOOKUP_KEY?: string;
   /**
    * OneDrive's client secret (dashboard secret, 2026-10-08), from a Web
    * platform on the Entra app. With MS_CLIENT_ID it lets the Worker sign
@@ -355,6 +369,13 @@ function syncKV(env: Bindings, uid: string, requestUrl: string): KVLike {
 function canvaStore(env: Bindings, uid: string, requestUrl: string) {
   const ns = isLocalRequest(requestUrl) ? env.CANVA : env.CANVA.jurisdiction("us" as DurableObjectJurisdiction);
   return ns.get(ns.idFromName(uid));
+}
+
+/** This student's BillingStore (Averages Plus, 2026-10-21), in the US (same local-dev exception). */
+function billingStore(env: BillingRouteEnv, uid: string, requestUrl: string): BillingStoreApi {
+  const billing = env.BILLING!;
+  const ns = isLocalRequest(requestUrl) ? billing : billing.jurisdiction("us" as DurableObjectJurisdiction);
+  return ns.get(ns.idFromName(uid)) as unknown as BillingStoreApi;
 }
 
 /** This student's CloudStore (Google Drive and OneDrive, 2026-10-08), in the US (same local-dev exception). */
@@ -2245,6 +2266,13 @@ app.route("/messages", messagesRoutes(extrasDeps));
 
 /** Browser notifications (src/push.ts). */
 app.route("/push", pushRoutes({ requireSession, fromOurApp: notFromOurApp }));
+
+/**
+ * Averages Plus (2026-10-21): checkout, status and the customer page
+ * (src/billingRoutes.ts), and Stripe's signed webhook at /stripe/webhook.
+ */
+app.route("/billing", billingRoutes({ requireSession, fromOurApp: notFromOurApp, appOrigin, storeFor: billingStore }) as any);
+app.route("/stripe", stripeWebhookRoutes({ storeFor: billingStore }) as any);
 
 /** Profile photo and background for Sync Across Devices, in R2 (src/media.ts). */
 app.route("/media", mediaRoutes({ requireSession, fromOurApp: notFromOurApp }) as any);

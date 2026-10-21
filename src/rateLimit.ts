@@ -42,7 +42,7 @@
  * bindings, one per rule, declared in wrangler.jsonc under "ratelimits"
  * (Wrangler 4 since 2026-10-08; "unsafe" before): RATE_LIMIT_SIGNIN,
  * _DATA, _SEND, _SUBMIT, _PUSH, _CANVA, _CANVA_POLL, _CANVA_BROWSE, _APPLY,
- * _APPLY_CODE, _APPLY_VERIFY, _CLOUD,
+ * _APPLY_CODE, _APPLY_VERIFY, _CLOUD, _MEDIA, _BILLING,
  * then a shared RATE_LIMITER if one is ever added. Each is asked after the
  * in-memory count and a request over either limit is refused. A binding has
  * one fixed limit and a 10 or 60 second period, counted per Cloudflare
@@ -54,7 +54,7 @@ import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
 
 export interface RateRule {
-  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "apply" | "applyCode" | "applyVerify";
+  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "billing" | "apply" | "applyCode" | "applyVerify";
   limit: number;
   windowMs: number;
   by: "ip" | "student";
@@ -86,6 +86,9 @@ export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   // Profile photo and background for Sync (2026-10-13): a picture changes a
   // few times at most; this stops a loop from filling the bucket.
   media: { name: "media", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_MEDIA" },
+  // Averages Plus (2026-10-21): Settings' status, a checkout or two, the customer page.
+  // Stripe's webhook isn't limited here: it's signed, and Stripe sends bursts.
+  billing: { name: "billing", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_BILLING" },
   // School applications (2026-10-06): a few per school network per 10 minutes is plenty.
   apply: { name: "apply", limit: 5, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY" },
   // "Verify your email" (2026-10-07): each code is an email we send, so few;
@@ -120,6 +123,7 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (under(path, "/canva")) return RATE_RULES.canva;
   if (under(path, "/cloud")) return RATE_RULES.cloud;
   if (under(path, "/media")) return RATE_RULES.media;
+  if (under(path, "/billing")) return RATE_RULES.billing;
   return null;
 }
 

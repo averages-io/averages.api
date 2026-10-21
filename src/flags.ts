@@ -13,6 +13,8 @@
  *   turnin-feature                 turning in work (history stays readable)
  *   messaging-features             Messages
  *   notifications-features         browser notifications (and the checks that send them)
+ *   billing                        Averages Plus checkout and "Manage plan" (off until launch; 2026-10-21).
+ *                                  Plus status and Stripe's webhook stay open while it's off.
  *
  * Turning one off: the API answers that feature's routes with 503
  * { error: "feature_off", feature } (gate() in index.ts), and the app hides
@@ -39,6 +41,7 @@ export const DEFAULTS = {
   "turnin-feature": true,
   "messaging-features": true,
   "notifications-features": true,
+  billing: false,
 } as const;
 
 export type FeatureKey = keyof typeof DEFAULTS;
@@ -123,5 +126,6 @@ export function featureForRoute(method: string, path: string): FeatureKey[] {
   if (path.startsWith("/submit/") && !(m === "GET" && path === "/submit/history")) need.push("turnin-feature");
   if (path === "/messages" || path.startsWith("/messages/")) need.push("messaging-features");
   if (path.startsWith("/push/") && m !== "DELETE" && path !== "/push/config") need.push("notifications-features");
+  if (path === "/billing/checkout" || path === "/billing/portal") need.push("billing");
   return need;
 }
