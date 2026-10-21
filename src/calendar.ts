@@ -35,7 +35,7 @@ import { getAssignments, getSections, SchoologyError } from "./schoology.ts";
 import { schoologyLocalMs, timeLabel } from "./adapt.ts";
 import { CALL_BUDGET, CallBudget, dueMs as classroomDueMs, fetchClassroomBundle, safeTimeZone } from "./classroom.ts";
 import { googleConfig, refreshAccessToken, type GoogleEnv } from "./google.ts";
-import { hasPlusNow, type PlusEnv, type PlusStoreFor } from "./plus.ts";
+import { hasPlusNow, plusRequired, type PlusEnv, type PlusStoreFor } from "./plus.ts";
 import { featureOn } from "./flags.ts";
 
 export const CALENDAR_PURPOSE = "calendar-credential";
@@ -345,7 +345,13 @@ export function calendarRoutes(deps: CalendarDeps) {
   const app = new Hono<{ Bindings: CalendarEnv; Variables: { session: SessionData } }>();
   const noStore = (c: any) => c.header("Cache-Control", "private, no-store");
 
+  /**
+   * Whether this student may use calendar sync: Plus, or anyone while billing
+   * is off (2026-10-21, Martin: with the billing switch off, "let the user use
+   * every single feature"). Null when the BillingStore couldn't be reached.
+   */
   const plusOf = async (c: any, uid: string): Promise<boolean | null> => {
+    if (!plusRequired(c.env)) return true;
     try {
       return await hasPlusNow(c.env, uid, c.req.url, deps.plusStoreFor);
     } catch (err) {
@@ -361,7 +367,8 @@ export function calendarRoutes(deps: CalendarDeps) {
     const enabled = featureOn(c.env, "calendar-sync");
     const configured = calendarConfigured(c.env) && !!(deps.storeFor || c.env.CALENDAR);
     const eligible = !isDemoSession(session) && !isIncognitoSession(session);
-    const off = { enabled, configured, eligible, plus: false, on: false, url: null, createdAt: null };
+    // plusRequired: false while billing is off, so the app shows no Plus tag or Get Plus.
+    const off = { enabled, configured, eligible, plusRequired: plusRequired(c.env), plus: false, on: false, url: null, createdAt: null };
     if (!eligible || !configured) return c.json(off);
     const plus = (await plusOf(c, session.uid)) === true;
     try {

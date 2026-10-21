@@ -151,7 +151,7 @@ import type { CanvaStore } from "./canvaStore.ts";
 import type { CloudStore } from "./cloudStore.ts";
 import type { BillingStore } from "./billingStore.ts";
 import { calendarRoutes, forgetCalendar } from "./calendar.ts";
-import { hasPlusNow } from "./plus.ts";
+import { hasPlusNow, plusRequired } from "./plus.ts";
 import { billingRoutes, stripeWebhookRoutes, type BillingRouteEnv, type BillingStoreApi } from "./billingRoutes.ts";
 import type { PushStore } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
@@ -517,8 +517,9 @@ app.use("*", async (c, next) => {
   let off = offs[0];
   if (off && offs.every((k) => earlyKey(c.env, k))) {
     const session = await openedSession(c);
-    let plus = false;
-    if (session && !isDemo(session)) {
+    // Billing off (2026-10-21): every Plus perk is free, early features included.
+    let plus = !plusRequired(c.env as any);
+    if (!plus && session && !isDemo(session)) {
       try { plus = await hasPlusNow(c.env as any, session.uid, c.req.url); } catch { plus = false; }
     }
     if (plus) off = undefined as unknown as FeatureKey;
@@ -1664,6 +1665,9 @@ app.get("/config/cloud", (c) => {
  */
 app.get("/config/features", (c) => {
   const features = Object.fromEntries(FEATURE_KEYS.map((k) => [k, featureOn(c.env, k)])) as Features;
+  // Billing off (2026-10-21): early-access features are on for everyone, not just Plus members.
+  const everyone = !plusRequired(c.env as any);
+  if (everyone) for (const k of FEATURE_KEYS) if (!features[k] && earlyKey(c.env, k)) features[k] = true;
   const msg = typeof c.env.MAINTENANCE_MESSAGE === "string" ? c.env.MAINTENANCE_MESSAGE.trim().slice(0, 300) : "";
   c.header("Cache-Control", "public, max-age=30");
   return c.json({
@@ -2363,7 +2367,9 @@ app.route("/stripe", stripeWebhookRoutes({
   storeFor: billingStore,
   // Plus ended: notifications and the calendar link are deleted (src/plus.ts).
   onPlusEnded: async (env, uid, requestUrl) => {
-    if (featureOn(env, "billing")) await forgetPush(env, uid, requestUrl);
+    // Only while billing is on: with it off, both are free for everyone (2026-10-21).
+    if (!plusRequired(env)) return;
+    await forgetPush(env, uid, requestUrl);
     await forgetCalendar(env, uid, requestUrl);
   },
 }) as any);
