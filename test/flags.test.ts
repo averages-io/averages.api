@@ -3,7 +3,7 @@
  * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/flags.test.ts
  */
 import worker from "../src/index.ts";
-import { withFlags, readFeatures, fallbackFeatures, featureForRoute, DEFAULTS, FEATURE_KEYS } from "../src/flags.ts";
+import { withFlags, readFeatures, readEarly, earlyKey, fallbackFeatures, featureForRoute, DEFAULTS, FEATURE_KEYS } from "../src/flags.ts";
 
 let passed = 0;
 let failed = 0;
@@ -14,7 +14,18 @@ function check(name: string, actual: unknown, expected: unknown) {
   else { failed++; console.log(`  FAIL  ${name}\n        expected: ${e}\n        actual:   ${a}`); }
 }
 
-check("11 switches, in Martin's order (billing added 2026-10-21)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "coursematerialpreview-feature", "turnin-feature", "messaging-features", "notifications-features", "billing"]);
+check("12 switches, in Martin's order (billing and calendar-sync added 2026-10-21)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "coursematerialpreview-feature", "turnin-feature", "messaging-features", "notifications-features", "billing", "calendar-sync"]);
+check("calendar routes need calendar-sync, except turning it off", [featureForRoute("GET", "/calendar/status"), featureForRoute("POST", "/calendar"), featureForRoute("GET", "/calendar/abc.ics"), featureForRoute("DELETE", "/calendar")], [["calendar-sync"], ["calendar-sync"], ["calendar-sync"], []]);
+{
+  const early = await readEarly({ FEATURES_EARLY: "coursematerialpreview-feature, nonsense" });
+  check("early access from FEATURES_EARLY (unknown keys ignored)", early, ["coursematerialpreview-feature"]);
+  const fromFlagship = await readEarly({ FLAGS: { getBooleanValue: async (_k: string, d: boolean) => d, getStringValue: async (k: string) => (k === "early-access" ? "messaging-features" : "") } });
+  check("early access from Flagship's early-access string flag", fromFlagship, ["messaging-features"]);
+  const slow = await readEarly({ FLAGS: { getBooleanValue: async (_k: string, d: boolean) => d, getStringValue: () => new Promise<string>(() => {}) } }, 20);
+  check("Flagship too slow: no early keys", slow, []);
+  const env = await withFlags({ FEATURES_EARLY: "coursematerialpreview-feature" });
+  check("withFlags carries EARLY; earlyKey reads it", [earlyKey(env, "coursematerialpreview-feature"), earlyKey(env, "billing")], [true, false]);
+}
 check("defaults: everything on except the banner, previews and billing", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "coursematerialpreview-feature", "billing"]);
 check("billing routes: checkout and portal need the switch; status and the webhook never do", [featureForRoute("POST", "/billing/checkout"), featureForRoute("POST", "/billing/portal"), featureForRoute("GET", "/billing/status"), featureForRoute("POST", "/stripe/webhook")], [["billing"], ["billing"], [], []]);
 check("no Flagship: the defaults", await readFeatures({}), DEFAULTS);
