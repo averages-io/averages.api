@@ -97,6 +97,12 @@ signs them out.
 
 - **Grades and schoolwork are never stored.** They pass through the Worker to the
   browser on each request.
+- **Averages Plus** (2026-10-21) stores one small record per subscriber, keyed by
+  student ID, in the `BillingStore` Durable Object (US jurisdiction): their Stripe
+  customer and subscription IDs, the subscription's status, when it renews, and the
+  IDs of the last 30 Stripe events. No card details: Stripe holds those. Signing out,
+  turning off Sync or switching to Incognito doesn't delete it, because the
+  subscription is still running; cancelling in Manage plan is how it ends.
 - **Sync Across Devices** (off by default) stores one record per student, keyed by
   their Schoology user ID: their Averages.io settings (name, photo, background,
   colors, course nicknames). Turning sync off deletes the record. (Until 2026-10-06
@@ -233,6 +239,34 @@ left (`partial: true` when something was cut). Work whose submission didn't arri
 never called missing. A teacher who hides the overall grade in Classroom hides it here
 too; weighted categories are averaged the way Classroom does it.
 
+### Averages Plus (Stripe, 2026-10-21)
+
+| Route | What it does |
+|---|---|
+| `GET /billing/status` | `{ enabled, configured, eligible, plus, status, renewsAt, cancelAtPeriodEnd, manageable }` for the signed-in student. `enabled` is the `billing` switch; `eligible` is false for the demo and Incognito |
+| `POST /billing/checkout` | `{}` → `{ url }`: a Stripe Checkout Session for the Plus price, with **Managed Payments** on (Stripe is the merchant of record and handles sales tax/VAT). 403 for the demo and Incognito (every under-13 session is Incognito), 409 if they already have Plus |
+| `POST /billing/portal` | `{}` → `{ url }`: Stripe's customer portal (cancel, change card, invoices). Allowed in Incognito too, so nobody is stuck paying. 404 `billing_no_account` if they never subscribed |
+| `POST /stripe/webhook` | Stripe's events, checked against `STRIPE_WEBHOOK_SECRET` (HMAC-SHA256, 5-minute tolerance) before anything is read. Uses `checkout.session.completed` and `customer.subscription.created/updated/deleted/paused/resumed`; answers 200 for anything else |
+
+How it works (src/billing.ts):
+
+- **Checkout** is `POST /v1/checkout/sessions` with `mode=subscription`, one line item
+  (the price whose lookup key is `STRIPE_PRICE_LOOKUP_KEY`, default `plus_monthly`,
+  looked up and cached for 10 minutes), `managed_payments[enabled]=true` and the
+  header `Stripe-Version: 2026-02-25.preview`, which Managed Payments needs while it's
+  in preview. Every other call uses the account's default API version. The student ID
+  goes in the session's and the subscription's `metadata[uid]`, which is how the
+  webhook knows whose it is. Back to `/settings?section=account&billing=success` (or
+  `=cancelled`).
+- **Who has Plus:** status `active`, `trialing` or `past_due` (Stripe is still
+  retrying the card). Events can arrive out of order or twice: an older event never
+  overwrites a newer one, a repeated event ID is ignored, and an old subscription
+  ending never takes Plus away from a newer one.
+- **Prices** live in Stripe, not here: change the amount or add currencies on the
+  price in the dashboard and keep its lookup key.
+- Stripe's error messages are never passed to the browser or logged (only its error
+  type, code and parameter name).
+
 **There is no general Schoology passthrough.** An earlier `GET /schoology/*` route
 could relay any read from a student's account and was removed on 2026-09-15. Each new
 feature gets its own route with its own fixed Schoology calls.
@@ -300,6 +334,8 @@ feature gets its own route with its own fixed Schoology calls.
 | `SCHOOLS_ADMIN_KEY` | Schools: unlocks `GET /schools/applications`. A long random value (24+ characters) |
 | `MS_CLIENT_SECRET` | OneDrive staying connected (2026-10-08): a client secret of the Entra app (`MS_CLIENT_ID`), from its **Web** platform. Without it OneDrive reports `configured: false`. Entra secrets expire (24 months at most): put a reminder in the calendar |
 | `GOOGLE_DRIVE_CLIENT_SECRET` | Optional. The secret of `GOOGLE_DRIVE_CLIENT_ID`'s OAuth client. With both set, Google Drive connects with that client (and Disconnect revokes its grant); otherwise with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` |
+| `STRIPE_SECRET_KEY` | Averages Plus: a Stripe secret key (`sk_test_…` in the sandbox, `sk_live_…` live) or a restricted key (`rk_…`) with write access to Checkout Sessions and Customer portal and read access to Prices. Without it checkout answers 503 `billing_not_configured` |
+| `STRIPE_WEBHOOK_SECRET` | Averages Plus: the signing secret (`whsec_…`) of the webhook endpoint `https://api.averages.io/stripe/webhook` in the Stripe dashboard. Sandbox and live endpoints have different secrets. Without it the webhook answers 503 |
 
 Make a `SESSION_SECRET` with:
 `node -e "console.log(crypto.randomUUID()+crypto.randomUUID())"`
@@ -323,9 +359,10 @@ Make a `SESSION_SECRET` with:
 | `SCHOOLS_EMAIL_ALLOW` | Dashboard **secret** (not in this public repo): exact email addresses that may apply whatever their ending, comma-separated. Never shown by `GET /config/apply` |
 | `REVIEW_KEY`, `REVIEW_SECRET` | Dashboard **secrets**, 16+ characters each (e.g. `openssl rand -hex 16`). Typed into the hidden API-key sign-in (`app.averages.io/?keys`), they open the reviewer account: six sample classes served by `src/reviewSandbox.ts` (a pretend Schoology inside the Worker, nothing sent to Schoology) in the app's normal live mode, so Canva, Google Drive, OneDrive, notifications and Sync all work. For app reviewers and testing. Unset = off |
 | `CANVA_FOLDERS_ENABLED` | `"1"` once `folder:read` and `folder:write` are enabled (and approved) for the Canva integration: Connect asks for them and the Files page shows Canva folders. Leave `"0"` until then, for the same reason. Students connected before then see Reconnect |
-| `FLAGS` (Flagship binding, optional) | Feature switches read on every request (src/flags.ts): `canva-integration`, `onedrive-integration`, `drive-integration`, `schoology-signin`, `gclassroom-signin`, `canvas-signin`, `test-signin`, `maintenance-banner`, `schoolsform-page`, `coursematerialpreview-feature`, `turnin-feature`, `messaging-features`, `notifications-features`. Off: that feature's routes answer 503 `feature_off` (navigations go back to the app with `?feature_off=`), and `GET /config/features` tells the app to hide it. All default on except `maintenance-banner` and `coursematerialpreview-feature`. If Flagship is slow (400 ms) or errors, the fallback decides. See the commented `"flagship"` block in wrangler.jsonc |
+| `FLAGS` (Flagship binding, optional) | Feature switches read on every request (src/flags.ts): `canva-integration`, `onedrive-integration`, `drive-integration`, `schoology-signin`, `gclassroom-signin`, `canvas-signin`, `test-signin`, `maintenance-banner`, `schoolsform-page`, `coursematerialpreview-feature`, `turnin-feature`, `messaging-features`, `notifications-features`, `billing`. Off: that feature's routes answer 503 `feature_off` (navigations go back to the app with `?feature_off=`), and `GET /config/features` tells the app to hide it. All default on except `maintenance-banner`, `coursematerialpreview-feature` and `billing` (Averages Plus: Upgrade and Manage plan; status and the webhook always work). If Flagship is slow (400 ms) or errors, the fallback decides. See the commented `"flagship"` block in wrangler.jsonc |
 | `FEATURES_OFF` / `FEATURES_ON` (optional vars) | Comma-separated switch keys to turn off / on without Flagship (Flagship still wins when it answers) |
 | `MAINTENANCE_MESSAGE` (optional var) | The banner text while `maintenance-banner` is on (300 characters at most) |
+| `STRIPE_PRICE_LOOKUP_KEY` (optional var) | Averages Plus: the lookup key of the price checkout sells. Default `plus_monthly` |
 | `CANVA_PERMISSION_PROBE` | In `wrangler.jsonc`: `"1"` only while running the Canva permission probe (below), otherwise `"0"`. Developer only |
 
 ### Canva permission probe (temporary)
@@ -423,6 +460,27 @@ runtime ones. If sign-in returns 500, open `/` on the Worker: it says whether
 Cloudflare's local runtime can't pin Durable Objects to the US, so on
 `localhost` (and only there) sync storage is opened without the `us` setting.
 
+### Averages Plus (Stripe, 2026-10-21)
+
+Sandbox first, then live with the same steps and live keys.
+
+1. In Stripe: the product **Averages Plus** (tax code `txcd_10103000`, SaaS for
+   personal use) with a recurring monthly price whose **lookup key is
+   `plus_monthly`**, and Managed Payments turned on for the account.
+2. **Webhooks → Add destination**: `https://api.averages.io/stripe/webhook`, events
+   `checkout.session.completed`, `customer.subscription.created`,
+   `customer.subscription.updated`, `customer.subscription.deleted`. Copy its signing
+   secret.
+3. **Settings → Billing → Customer portal**: turn on cancelling and updating the
+   payment method, and set the return link to `https://app.averages.io/settings`.
+4. Secrets on the Worker: `npx wrangler secret put STRIPE_SECRET_KEY`, then
+   `STRIPE_WEBHOOK_SECRET`.
+5. Turn it on: `FEATURES_ON=billing` (or the `billing` flag in Flagship). Until then
+   nobody sees Upgrade.
+6. Test in the sandbox with card `4242 4242 4242 4242`, any future date and CVC. The
+   subscription Checkout makes should show Managed Payments as enabled; ones made by
+   hand in the dashboard don't (they use Stripe Tax), so always test through the app.
+
 ## Development
 
 ```bash
@@ -517,6 +575,13 @@ TypeScript support.
   key, the email builder (no header injection, encoded subjects, both parts decode),
   and the schools@ handler: forwarded, answered once per sender, never to robots or
   mailing lists, and never throwing.
+
+- **Averages Plus** (`billing.test.ts`): the form encoding Stripe expects, webhook
+  signatures (good, wrong secret, edited body, too old, several `v1`s), each event
+  type, out-of-order and repeated events, and the routes through the real Worker
+  against a pretend Stripe: Managed Payments and the preview `Stripe-Version` on
+  checkout, the price by lookup key, who can and can't subscribe, the portal, and
+  that Stripe's error text never reaches the browser.
 
 The keys and secrets in the test files are the public example values from the
 OAuth spec and made-up strings, not real credentials.
