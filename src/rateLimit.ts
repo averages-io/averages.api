@@ -124,6 +124,11 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (under(path, "/cloud")) return RATE_RULES.cloud;
   if (under(path, "/media")) return RATE_RULES.media;
   if (under(path, "/billing")) return RATE_RULES.billing;
+  // Calendar sync (2026-10-21) counts with the other Plus calls. The .ics itself
+  // isn't limited: calendar apps fetch it from shared servers (Google's, Apple's),
+  // and each link's calendar is kept for 30 minutes, so the school platform is
+  // asked at most twice an hour per link however often it's fetched.
+  if (under(path, "/calendar")) return method === "GET" && path.endsWith(".ics") ? null : RATE_RULES.billing;
   return null;
 }
 

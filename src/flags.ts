@@ -15,6 +15,15 @@
  *   notifications-features         browser notifications (and the checks that send them)
  *   billing                        Averages Plus checkout and "Manage plan" (off until launch; 2026-10-21).
  *                                  Plus status and Stripe's webhook stay open while it's off.
+ *   calendar-sync                  the Plus calendar link (src/calendar.ts; 2026-10-21)
+ *
+ * Early access (2026-10-21, an Averages Plus perk): a switch that's off for
+ * everyone can be on for Plus members first. The keys are listed in the
+ * FEATURES_EARLY var or the Flagship string flag "early-access" (both
+ * comma-separated; either counts). For a Plus member those routes are open
+ * (index.ts asks their BillingStore), and GET /config/features sends the list
+ * as `early` so the app can show them with a Preview tag. The plan: about two
+ * weeks early, then the switch goes on for everyone.
  *
  * Turning one off: the API answers that feature's routes with 503
  * { error: "feature_off", feature } (gate() in index.ts), and the app hides
@@ -42,6 +51,7 @@ export const DEFAULTS = {
   "messaging-features": true,
   "notifications-features": true,
   billing: false,
+  "calendar-sync": true,
 } as const;
 
 export type FeatureKey = keyof typeof DEFAULTS;
@@ -53,6 +63,7 @@ export const FLAG_WAIT_MS = 400;
 
 interface FlagshipLike {
   getBooleanValue(key: string, defaultValue: boolean, context?: Record<string, unknown>): Promise<boolean>;
+  getStringValue?(key: string, defaultValue: string, context?: Record<string, unknown>): Promise<string>;
 }
 
 function answer(p: Promise<boolean>, fallback: boolean, ms: number): Promise<boolean> {
@@ -97,9 +108,40 @@ export async function readFeatures(env: object, ms = FLAG_WAIT_MS): Promise<Feat
   return Object.fromEntries(pairs) as Features;
 }
 
-/** env plus FEATURES (the answers for this request). */
-export async function withFlags<E extends object>(env: E, ms = FLAG_WAIT_MS): Promise<E & { FEATURES: Features }> {
-  return { ...env, FEATURES: await readFeatures(env, ms) };
+/**
+ * The early-access keys: FEATURES_EARLY plus Flagship's "early-access" string
+ * flag. Only real switch keys count. Never throws.
+ */
+export async function readEarly(env: object, ms = FLAG_WAIT_MS): Promise<FeatureKey[]> {
+  const keys = listed((env as any).FEATURES_EARLY);
+  const flags = (env as any).FLAGS as FlagshipLike | undefined;
+  if (flags && typeof flags.getStringValue === "function") {
+    try {
+      const text = await new Promise<string>((resolve) => {
+        const timer = setTimeout(() => resolve(""), ms);
+        flags.getStringValue!("early-access", "").then(
+          (v) => { clearTimeout(timer); resolve(typeof v === "string" ? v : ""); },
+          () => { clearTimeout(timer); resolve(""); }
+        );
+      });
+      for (const k of listed(text)) keys.add(k);
+    } catch {
+      /* Flagship unavailable: the var alone */
+    }
+  }
+  return FEATURE_KEYS.filter((k) => keys.has(k));
+}
+
+/** env plus FEATURES (the answers for this request) and EARLY (the early-access keys). */
+export async function withFlags<E extends object>(env: E, ms = FLAG_WAIT_MS): Promise<E & { FEATURES: Features; EARLY: FeatureKey[] }> {
+  const [FEATURES, EARLY] = await Promise.all([readFeatures(env, ms), readEarly(env, ms)]);
+  return { ...env, FEATURES, EARLY };
+}
+
+/** Whether a switch that's off is in early access for Plus members (this request's list). */
+export function earlyKey(env: object, key: FeatureKey): boolean {
+  const e = (env as any).EARLY;
+  return Array.isArray(e) && e.includes(key);
 }
 
 /** One switch, from env.FEATURES when this request has it, else the fallbacks. */
@@ -127,5 +169,7 @@ export function featureForRoute(method: string, path: string): FeatureKey[] {
   if (path === "/messages" || path.startsWith("/messages/")) need.push("messaging-features");
   if (path.startsWith("/push/") && m !== "DELETE" && path !== "/push/config") need.push("notifications-features");
   if (path === "/billing/checkout" || path === "/billing/portal") need.push("billing");
+  // Turning the calendar link off stays open, like notifications.
+  if ((path === "/calendar" || path.startsWith("/calendar/")) && m !== "DELETE") need.push("calendar-sync");
   return need;
 }

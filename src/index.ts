@@ -99,7 +99,7 @@ import { cloudConfig } from "./cloud.ts";
 import { CLOUD_APPS, cloudConfigured, isCloudApp, statusForCloudCode, type CloudApp } from "./cloudConnect.ts";
 import { schoolsFor } from "./schools.ts";
 import { enqueueMany, enqueueRetry, handleRetryBatch, type RetryHandlers, type RetryMessage } from "./retryQueue.ts";
-import { withFlags, featureOn, featureForRoute, FEATURE_KEYS, type FeatureKey, type Features } from "./flags.ts";
+import { withFlags, featureOn, featureForRoute, earlyKey, FEATURE_KEYS, type FeatureKey, type Features } from "./flags.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
 import {
   accessCookie,
@@ -150,6 +150,8 @@ import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
 import type { CloudStore } from "./cloudStore.ts";
 import type { BillingStore } from "./billingStore.ts";
+import { calendarRoutes, forgetCalendar } from "./calendar.ts";
+import { hasPlusNow } from "./plus.ts";
 import { billingRoutes, stripeWebhookRoutes, type BillingRouteEnv, type BillingStoreApi } from "./billingRoutes.ts";
 import type { PushStore } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
@@ -177,6 +179,7 @@ export { CanvaStore } from "./canvaStore.ts";
 export { CloudStore } from "./cloudStore.ts";
 export { BillingStore } from "./billingStore.ts";
 export { PushStore } from "./pushStore.ts";
+export { CalendarStore } from "./calendar.ts";
 export { Converter } from "./convert.ts";
 
 type Bindings = {
@@ -306,6 +309,11 @@ type Bindings = {
   FEATURES?: Features;
   FEATURES_OFF?: string;
   FEATURES_ON?: string;
+  /** Early access (2026-10-21): switch keys on for Plus members first (comma-separated); EARLY is this request's list. */
+  FEATURES_EARLY?: string;
+  EARLY?: FeatureKey[];
+  /** Calendar sync (2026-10-21, src/calendar.ts): one CalendarStore per student link and per feed, in the US. */
+  CALENDAR?: DurableObjectNamespace;
   MAINTENANCE_MESSAGE?: string;
   /**
    * The reviewer account (2026-10-07, dashboard SECRETS, 16+ characters
@@ -502,7 +510,19 @@ const NAVIGATED = /^\/(canva\/(connect|callback|return)|cloud\/[^/]+\/(connect|c
 app.use("*", async (c, next) => {
   if (c.req.method === "OPTIONS") return next();
   const path = new URL(c.req.url).pathname;
-  const off = featureForRoute(c.req.method, path).find((k) => !featureOn(c.env, k));
+  const offs = featureForRoute(c.req.method, path).filter((k) => !featureOn(c.env, k));
+  // Early access (2026-10-21): a switch that's off but in the early list is
+  // open to Plus members. Only asked when it matters, so other requests never
+  // wait on a BillingStore.
+  let off = offs[0];
+  if (off && offs.every((k) => earlyKey(c.env, k))) {
+    const session = await openedSession(c);
+    let plus = false;
+    if (session && !isDemo(session)) {
+      try { plus = await hasPlusNow(c.env as any, session.uid, c.req.url); } catch { plus = false; }
+    }
+    if (plus) off = undefined as unknown as FeatureKey;
+  }
   if (!off) return next();
   c.header("Cache-Control", "no-store");
   if (c.req.method === "GET" && NAVIGATED.test(path)) {
@@ -721,6 +741,8 @@ app.delete("/auth/session", async (c) => {
     if (foreign) return foreign;
   }
   if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetPush(c.env, session.uid, c.req.url));
+  // The calendar link keeps a sign-in too (2026-10-21): signing out deletes it, like notifications.
+  if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetCalendar(c.env as any, session.uid, c.req.url));
   if (forget && session && !isDemo(session)) c.executionCtx.waitUntil(forgetConnections(c.env, session.uid, c.req.url));
   c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
   // A Google sign-in's refreshed access token, if any (see googleAccess).
@@ -1583,6 +1605,8 @@ app.get("/config/features", (c) => {
   c.header("Cache-Control", "public, max-age=30");
   return c.json({
     features,
+    // Early access (2026-10-21): switches that are off for everyone but on for Plus members.
+    early: FEATURE_KEYS.filter((k) => !features[k] && earlyKey(c.env, k)),
     maintenance: featureOn(c.env, "maintenance-banner") ? { message: msg || "Averages.io is having some trouble right now. Some things may not work." } : null,
   });
 });
@@ -2272,7 +2296,17 @@ app.route("/push", pushRoutes({ requireSession, fromOurApp: notFromOurApp }));
  * (src/billingRoutes.ts), and Stripe's signed webhook at /stripe/webhook.
  */
 app.route("/billing", billingRoutes({ requireSession, fromOurApp: notFromOurApp, appOrigin, storeFor: billingStore }) as any);
-app.route("/stripe", stripeWebhookRoutes({ storeFor: billingStore }) as any);
+app.route("/stripe", stripeWebhookRoutes({
+  storeFor: billingStore,
+  // Plus ended: notifications and the calendar link are deleted (src/plus.ts).
+  onPlusEnded: async (env, uid, requestUrl) => {
+    if (featureOn(env, "billing")) await forgetPush(env, uid, requestUrl);
+    await forgetCalendar(env, uid, requestUrl);
+  },
+}) as any);
+
+/** Calendar sync, an Averages Plus perk (src/calendar.ts). */
+app.route("/calendar", calendarRoutes({ requireSession, fromOurApp: notFromOurApp }) as any);
 
 /** Profile photo and background for Sync Across Devices, in R2 (src/media.ts). */
 app.route("/media", mediaRoutes({ requireSession, fromOurApp: notFromOurApp }) as any);

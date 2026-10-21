@@ -13,6 +13,12 @@
  *   POST   /push/touch       keep the stored sign-in in step with this session
  *   POST   /push/status      { endpoint }: on? on in this browser? which types?
  *
+ * Averages Plus (2026-10-21): while billing is on and set up, notifications
+ * are a Plus perk (src/plus.ts). Turning on, testing and changing types need
+ * Plus (403 plus_required); a student without it who still has them on is
+ * turned off (their stored sign-in deleted) by /status, /touch and the
+ * background check, and /status says why (turnedOff: "plus_required").
+ *
  * Only for opted-in students: the demo has no account behind it and Incognito
  * stores nothing on our servers, so both are refused (deleting stays allowed
  * in Incognito: deleting is always fine). State-changing calls must come from
@@ -34,6 +40,7 @@ import {
 } from "./pushStore.ts";
 import type { PushSubscriptionLike } from "./webpush.ts";
 import { safeTimeZone } from "./classroom.ts";
+import { notificationsPlus, type PlusStoreFor } from "./plus.ts";
 
 /** The PushStore methods the routes use (a Durable Object stub in the Worker, the object itself in tests). */
 export interface PushStoreApi {
@@ -55,6 +62,8 @@ export interface PushDeps {
   fromOurApp: (c: any) => Response | null;
   /** This student's PushStore; defaults to pushStoreFor (the "us" jurisdiction). */
   storeFor?: StoreFor;
+  /** This student's BillingStore, for the Plus check; defaults to plus.ts's billingStoreFor. */
+  plusStoreFor?: PlusStoreFor;
 }
 
 const defaultStoreFor: StoreFor = (env, uid, requestUrl) => pushStoreFor(env, uid, requestUrl) as unknown as PushStoreApi;
@@ -97,6 +106,21 @@ async function sealCredential(session: SessionData, secret: string): Promise<{ s
 export function pushRoutes(deps: PushDeps) {
   const storeFor = deps.storeFor ?? defaultStoreFor;
   const app = new Hono<{ Bindings: PushEnv; Variables: { session: SessionData } }>();
+  /** Plus for notifications (src/plus.ts), or null when the BillingStore couldn't be reached. */
+  const plusFor = async (c: any) => {
+    try {
+      return await notificationsPlus(c.env, c.get("session").uid, c.req.url, { storeFor: deps.plusStoreFor });
+    } catch (err) {
+      console.error("push_plus_check_failed", err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  };
+  /** 403 plus_required, 503 billing_unavailable, or null when this student may use notifications. */
+  const needPlus = async (c: any) => {
+    const p = await plusFor(c);
+    if (!p) return c.json({ error: "billing_unavailable" }, 503);
+    return p.allowed ? null : c.json({ error: "plus_required" }, 403);
+  };
   const noStore = (c: any) => c.header("Cache-Control", "private, no-store");
 
   /** A store call that failed (the Durable Object unreachable, say): 502, logged. */
@@ -126,6 +150,8 @@ export function pushRoutes(deps: PushDeps) {
     const blocked = gate(c, { needsConfig: true });
     if (blocked) return blocked;
     noStore(c);
+    const noPlus = await needPlus(c);
+    if (noPlus) return noPlus;
     const body = await jsonBody(c);
     if (!body) return c.json({ error: "invalid_body" }, 400);
     const subscription = cleanSubscription(body.subscription);
@@ -175,6 +201,8 @@ export function pushRoutes(deps: PushDeps) {
     const blocked = gate(c);
     if (blocked) return blocked;
     noStore(c);
+    const noPlus = await needPlus(c);
+    if (noPlus) return noPlus;
     // Only the five known switches; the ones not sent stay as they are.
     const types = parseTypeChanges((await jsonBody(c))?.types);
     if (!types) return c.json({ error: "bad_types" }, 400);
@@ -191,6 +219,8 @@ export function pushRoutes(deps: PushDeps) {
     const blocked = gate(c, { needsConfig: true });
     if (blocked) return blocked;
     noStore(c);
+    const noPlus = await needPlus(c);
+    if (noPlus) return noPlus;
     const endpoint = endpointFrom(await jsonBody(c));
     if (!endpoint) return c.json({ error: "bad_request" }, 400);
     try {
@@ -215,6 +245,16 @@ export function pushRoutes(deps: PushDeps) {
     noStore(c);
     const credential = await sealCredential(c.get("session"), c.env.PUSH_SECRET!);
     if (!credential) return c.json({ error: "session_expired" }, 401);
+    // Plus ended (or billing just went on): turned off, stored sign-in deleted.
+    const p = await plusFor(c);
+    if (p && !p.allowed) {
+      try {
+        await storeFor(c.env, c.get("session").uid, c.req.url).deleteAll();
+      } catch (err) {
+        return unavailable(c, err);
+      }
+      return c.json({ ok: true, on: false, reason: "plus_required" });
+    }
     try {
       const body = (await jsonBody(c)) ?? {};
       const tz = safeTimeZone(body.tz, (c.req.raw as any)?.cf?.timezone);
@@ -238,9 +278,17 @@ export function pushRoutes(deps: PushDeps) {
     if (isDemoSession(session) || isIncognitoSession(session)) return c.json({ ...off, configured: pushConfigured(c.env) });
     if (!pushConfigured(c.env)) return c.json({ ...off, configured: false });
     const endpoint = endpointFrom(await jsonBody(c));
+    // Plus (2026-10-21): plusRequired tells Settings to offer Plus instead of the switch.
+    const p = await plusFor(c);
+    const plusInfo = { plusRequired: !!p && p.required && !p.plus, plus: !!p && p.plus };
     try {
-      const status = await storeFor(c.env, session.uid, c.req.url).status(endpoint || undefined);
-      return c.json({ ...status, configured: true });
+      const store = storeFor(c.env, session.uid, c.req.url);
+      const status = await store.status(endpoint || undefined);
+      if (status.on && p && !p.allowed) {
+        await store.deleteAll();
+        return c.json({ ...off, configured: true, ...plusInfo, turnedOff: "plus_required" });
+      }
+      return c.json({ ...status, configured: true, ...plusInfo });
     } catch (err) {
       return unavailable(c, err);
     }

@@ -29,6 +29,7 @@
  * adds one per browser (at most 5).
  */
 
+import { notificationsPlus } from "./plus.ts";
 import { DurableObject } from "cloudflare:workers";
 import { isGoogleSession, openValue, type SessionData } from "./session.ts";
 import { getAssignments, getGrades, getMessages, getSections, listOf, SchoologyError, schoologyGet } from "./schoology.ts";
@@ -57,6 +58,8 @@ import {
 
 /** sealValue purpose for the stored sign-in. */
 export const PUSH_PURPOSE = "push-credential";
+/** Background checks have no request; stores are opened as the deployed API would (the "us" jurisdiction). */
+const API_ORIGIN = "https://api.averages.io";
 export const MAX_SUBSCRIPTIONS = 5;
 /** How often a student's classes are checked, plus up to JITTER_MS so checks don't bunch up. */
 export const CHECK_EVERY_MS = 20 * 60 * 1000;
@@ -469,12 +472,30 @@ export class PushStore extends DurableObject<PushEnv> {
       if (!secret || !vapid) return;
       // notifications-features switched off (src/flags.ts): send nothing, keep
       // everyone's settings, and look again next time.
-      if (!(await readFeatures(this.env))["notifications-features"]) return;
+      const features = await readFeatures(this.env);
+      if (!features["notifications-features"]) return;
 
       const opened = await openValue(cred.sealed, secret, PUSH_PURPOSE);
       const session = typeof opened === "string" ? this.parseSession(opened) : null;
       // Expired, tampered, or sealed under a PUSH_SECRET that has since changed.
       if (!session) {
+        await this.deleteAll();
+        return;
+      }
+
+      // Averages Plus (2026-10-21): while billing is on, notifications are a
+      // Plus perk. Without Plus they're turned off (everything deleted, as
+      // turning them off does). The BillingStore not answering just waits for
+      // the next check: an outage never turns anyone's notifications off.
+      let plusOk = true;
+      try {
+        plusOk = (await notificationsPlus(this.env as any, session.uid, API_ORIGIN, { billingSwitch: features.billing })).allowed;
+      } catch (err) {
+        console.error("push_plus_check_failed", describe(err));
+        return;
+      }
+      if (!plusOk) {
+        console.log("push_stopped", "plus_required");
         await this.deleteAll();
         return;
       }

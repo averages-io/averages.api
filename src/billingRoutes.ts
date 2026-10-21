@@ -129,7 +129,14 @@ export function billingRoutes(deps: BillingDeps) {
  * else is read. Answers 200 for events we don't use (Stripe stops resending
  * them) and 500 when storing fails (Stripe tries again later).
  */
-export function stripeWebhookRoutes(deps: Pick<BillingDeps, "storeFor">) {
+export function stripeWebhookRoutes(deps: Pick<BillingDeps, "storeFor"> & {
+  /**
+   * Plus just ended for this student (2026-10-21): their Plus perks that keep
+   * something on our servers (notifications, the calendar link) are deleted.
+   * Run after the response; must not throw.
+   */
+  onPlusEnded?: (env: any, uid: string, requestUrl: string) => Promise<void>;
+}) {
   const app = new Hono<{ Bindings: BillingRouteEnv }>();
   app.post("/webhook", async (c) => {
     c.header("Cache-Control", "no-store");
@@ -142,7 +149,16 @@ export function stripeWebhookRoutes(deps: Pick<BillingDeps, "storeFor">) {
     const update = updateFromEvent(event);
     if (!update) return c.json({ received: true, used: false });
     try {
-      await deps.storeFor(c.env, update.uid, c.req.url).apply(update);
+      const store = deps.storeFor(c.env, update.uid, c.req.url);
+      const before = await store.status();
+      const changed = await store.apply(update);
+      if (changed && deps.onPlusEnded && hasPlus(before.status)) {
+        const after = await store.status();
+        if (!hasPlus(after.status)) {
+          const ended = deps.onPlusEnded(c.env, update.uid, c.req.url).catch(() => {});
+          try { c.executionCtx.waitUntil(ended); } catch { await ended; }
+        }
+      }
       return c.json({ received: true, used: true });
     } catch (error) {
       console.error("billing: storing a webhook failed", event.type, error instanceof Error ? error.message : "");
