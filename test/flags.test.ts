@@ -14,8 +14,9 @@ function check(name: string, actual: unknown, expected: unknown) {
   else { failed++; console.log(`  FAIL  ${name}\n        expected: ${e}\n        actual:   ${a}`); }
 }
 
-check("10 switches, in Martin's order", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "coursematerialpreview-feature", "turnin-feature", "messaging-features", "notifications-features"]);
-check("defaults: everything on except the banner and previews", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "coursematerialpreview-feature"]);
+check("11 switches, in Martin's order (billing added 2026-10-21)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "coursematerialpreview-feature", "turnin-feature", "messaging-features", "notifications-features", "billing"]);
+check("defaults: everything on except the banner, previews and billing", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "coursematerialpreview-feature", "billing"]);
+check("billing routes: checkout and portal need the switch; status and the webhook never do", [featureForRoute("POST", "/billing/checkout"), featureForRoute("POST", "/billing/portal"), featureForRoute("GET", "/billing/status"), featureForRoute("POST", "/stripe/webhook")], [["billing"], ["billing"], [], []]);
 check("no Flagship: the defaults", await readFeatures({}), DEFAULTS);
 const vars = fallbackFeatures({ FEATURES_OFF: " Messaging-Features, turnin-feature,nonsense", FEATURES_ON: "maintenance-banner,turnin-feature" });
 check("FEATURES_OFF / FEATURES_ON (off wins, any case, unknown ignored)", [vars["messaging-features"], vars["turnin-feature"], vars["maintenance-banner"], vars["canva-integration"]], [false, false, true, true]);
