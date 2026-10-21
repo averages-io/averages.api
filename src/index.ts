@@ -1371,6 +1371,12 @@ app.get("/data/attachment", async (c) => {
     const file = findAttachment(parent, fileId);
     if (!file || !file.downloadPath) return c.json({ error: "file_not_found" }, 404);
     const upstream = await openAttachment(file.downloadPath, session);
+    // ?view=1 (2026-10-21): open it in the browser's own viewer (PDF, picture,
+    // text, audio, video) instead of downloading. Anything else still downloads.
+    if (c.req.query("view") === "1") {
+      const viewed = viewResponse(upstream, file.name);
+      if (viewed) return viewed;
+    }
     return downloadResponse(upstream, file.name);
   } catch (error) {
     if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
@@ -1379,12 +1385,58 @@ app.get("/data/attachment", async (c) => {
 });
 
 /**
- * A file from Schoology streamed on to the browser as a download named
- * `name` (moved out of GET /data/attachment on 2026-10-09 so
- * GET /data/submission-file sends exactly the same headers).
+ * File types a browser shows by itself, by file extension (Schoology often
+ * says application/octet-stream). Deliberately no HTML, SVG, XML or anything
+ * else that can run script: those would run on api.averages.io, next to the
+ * session cookie, so they always download.
  */
-function downloadResponse(upstream: Response, name: string): Response {
-  // RFC 5987 filename*, plus a plain ASCII fallback, so any name downloads under its real title.
+export const VIEWABLE_TYPES: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  txt: "text/plain; charset=utf-8",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  wav: "audio/wav",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+};
+
+/** The type to show a file inline as, or null when it should download. */
+export function viewableType(name: string): string | null {
+  const ext = /\.([A-Za-z0-9]{1,5})$/.exec(String(name || ""))?.[1]?.toLowerCase() ?? "";
+  return Object.prototype.hasOwnProperty.call(VIEWABLE_TYPES, ext) ? VIEWABLE_TYPES[ext] : null;
+}
+
+/**
+ * A file from Schoology shown in the browser (Course Materials double-click,
+ * 2026-10-21), or null when its type isn't one the browser shows safely. The
+ * type comes from our list, never from upstream; nothing on the page can run
+ * (CSP), it can't be framed, and nosniff stops it being read as anything else.
+ */
+function viewResponse(upstream: Response, name: string): Response | null {
+  const type = viewableType(name);
+  if (!type) return null;
+  const { ascii, utf8Name } = dispositionNames(name);
+  const headers = new Headers({
+    "Content-Type": type,
+    "Content-Disposition": `inline; filename="${ascii}"; filename*=UTF-8''${utf8Name}`,
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; object-src 'self'; frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+  });
+  const length = upstream.headers.get("Content-Length");
+  if (length) headers.set("Content-Length", length);
+  return new Response(upstream.body, { status: 200, headers });
+}
+
+/** The two forms of a file name for Content-Disposition: plain ASCII, and RFC 5987 UTF-8. */
+function dispositionNames(name: string): { ascii: string; utf8Name: string } {
   const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
   let utf8Name: string;
   try {
@@ -1392,6 +1444,17 @@ function downloadResponse(upstream: Response, name: string): Response {
   } catch {
     utf8Name = encodeURIComponent(ascii); // a lone surrogate can't be encoded; the ASCII name still works
   }
+  return { ascii, utf8Name };
+}
+
+/**
+ * A file from Schoology streamed on to the browser as a download named
+ * `name` (moved out of GET /data/attachment on 2026-10-09 so
+ * GET /data/submission-file sends exactly the same headers).
+ */
+function downloadResponse(upstream: Response, name: string): Response {
+  // RFC 5987 filename*, plus a plain ASCII fallback, so any name downloads under its real title.
+  const { ascii, utf8Name } = dispositionNames(name);
   const headers = new Headers({
     "Content-Type": upstream.headers.get("Content-Type") || "application/octet-stream",
     "Content-Disposition": `attachment; filename="${ascii}"; filename*=UTF-8''${utf8Name}`,
