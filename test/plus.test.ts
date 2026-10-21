@@ -261,7 +261,19 @@ const CAL_ENV = { ...BILLING_ON, FEATURES_ON: "billing" };
   check("status before: off, no Plus", [st0.data.enabled, st0.data.configured, st0.data.plus, st0.data.on, st0.data.url], [true, true, false, false, null]);
   const noPlus = await call(calApp, "POST", "/calendar", { cookie: ana, body: { tz: "America/Los_Angeles" }, env: CAL_ENV });
   check("make a link without Plus: 403 plus_required", [noPlus.status, noPlus.data?.error], [403, "plus_required"]);
-  check("…even with billing off (calendar is always Plus)", (await call(calApp, "POST", "/calendar", { cookie: ana, body: {}, env: BILLING_OFF })).data?.error, "plus_required");
+  {
+    // Billing off (2026-10-21, Martin): every Plus perk is free, calendar sync included.
+    const readsBefore = calendarReads;
+    const free = await call(calApp, "POST", "/calendar", { cookie: await cookieFor("9050"), body: {}, env: BILLING_OFF });
+    check("billing off: anyone in Classic gets a calendar link", [free.status, typeof free.data?.url], [200, "string"]);
+    const stFree = await call(calApp, "GET", "/calendar/status", { cookie: await cookieFor("9050"), env: BILLING_OFF });
+    check("…status says Plus isn't needed", [stFree.data.plusRequired, stFree.data.plus, stFree.data.on], [false, true, true]);
+    const feedFree = await (await call(calApp, "GET", new URL(free.data.url).pathname, { env: BILLING_OFF })).res.text();
+    check("…and the calendar has due dates, not a Plus notice", [feedFree.includes("Essay"), feedFree.includes("Averages Plus has ended")], [true, false]);
+    const stOn = await call(calApp, "GET", "/calendar/status", { cookie: await cookieFor("9051"), env: CAL_ENV });
+    check("billing on: status says Plus is needed", stOn.data.plusRequired, true);
+    calendarReads = readsBefore;
+  }
   const kid = await call(calApp, "POST", "/calendar", { cookie: await cookieFor("9002", { inc: true }), body: {}, env: CAL_ENV });
   check("Incognito: refused", [kid.status, kid.data?.error], [403, "incognito_mode"]);
   check("not set up (no PUSH_SECRET): 503", (await call(calApp, "POST", "/calendar", { cookie: ana, body: {}, env: { ...CAL_ENV, PUSH_SECRET: "" } })).status, 503);
@@ -356,6 +368,20 @@ section("Worker: early access and Plus ending");
   await NS.get("9101").apply({ uid: "9101", eventId: "e1", created: 1, customerId: "cus_1", subscriptionId: "sub_1", status: "active" });
   const early = await go("/messages", { cookie: zoe });
   check("early feature with Plus: let through (no longer feature_off)", early.status !== 503, true);
+  {
+    // Billing off: early features are on for everyone (2026-10-21).
+    const offEnv = { ...env, FEATURES_ON: "" };
+    const goOff = (path: string, cookie?: string) => {
+      resetRateLimits();
+      const headers = new Headers({ Origin: "https://app.averages.io" });
+      if (cookie) headers.set("Cookie", cookie);
+      return worker.fetch(new Request("https://api.averages.io" + path, { headers }), offEnv as any, ctx);
+    };
+    const cfgOff = await (await goOff("/config/features")).json();
+    check("billing off: early feature on for everyone, no early list", [cfgOff.features.billing, cfgOff.features["messaging-features"], cfgOff.early], [false, true, []]);
+    const anyone = await goOff("/messages", await cookieFor("9199"));
+    check("…and its routes open without Plus", anyone.status !== 503, true);
+  }
 
   // Plus ends through Stripe's webhook: notifications and the calendar link go.
   calendarRecs.set("u:9101", { sealedToken: "x", hash: "abc", createdAt: 1 });
