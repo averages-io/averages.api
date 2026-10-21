@@ -11,7 +11,7 @@
  *
  * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/reviewSandbox.test.ts
  */
-import worker from "../src/index.ts";
+import worker, { viewableType } from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET, resetSandbox, sandboxFetch } from "../src/reviewSandbox.ts";
 import { SANDBOX_ZONE } from "../src/reviewSandboxData.ts";
@@ -208,6 +208,18 @@ console.log("\nassignment, attachments, files");
   check("a Materials document's file", [doc.res.status, doc.res.headers.get("Content-Type"), new TextDecoder().decode(await doc.res.arrayBuffer()).includes("AP Chemistry Syllabus 2026-2027")], [200, "application/pdf", true]);
   const wrongParent = await call(`/data/attachment?section=${ALG}&assignment=${LAB4}&file=7400000001`, { cookie });
   check("a file asked for under the wrong class: refused", wrongParent.res.status, 502);
+}
+{
+  // ?view=1 (2026-10-21): Course Materials' double-click opens the file in the browser's own viewer.
+  const pdf = await call(`/data/attachment?section=${CHEM}&assignment=${LAB4}&file=7400000001&view=1`, { cookie });
+  const head = new TextDecoder().decode((await pdf.res.arrayBuffer()).slice(0, 8));
+  check("view a PDF: inline, application/pdf, the real bytes", [pdf.res.status, pdf.res.headers.get("Content-Type"), pdf.res.headers.get("Content-Disposition")?.startsWith('inline; filename="Lab Report #4 Instructions.pdf"'), head.startsWith("%PDF")], [200, "application/pdf", true, true]);
+  check("view: nothing on the page can run, can't be framed, never sniffed", [pdf.res.headers.get("Content-Security-Policy")?.includes("default-src 'none'"), pdf.res.headers.get("Content-Security-Policy")?.includes("frame-ancestors 'none'"), pdf.res.headers.get("X-Content-Type-Options"), pdf.res.headers.get("Cache-Control")], [true, true, "nosniff", "private, no-store"]);
+  const png = await call(`/data/attachment?section=${CHEM}&assignment=${LAB4}&file=7400000002&view=1`, { cookie });
+  check("view a picture: inline image/png", [png.res.status, png.res.headers.get("Content-Type"), png.res.headers.get("Content-Disposition")?.startsWith("inline;")], [200, "image/png", true]);
+  const plain = await call(`/data/attachment?section=${CHEM}&assignment=${LAB4}&file=7400000001`, { cookie });
+  check("without view: still a download", plain.res.headers.get("Content-Disposition")?.startsWith("attachment;"), true);
+  check("only types a browser shows safely; HTML, SVG and the rest download", ["a.PDF", "b.jpeg", "c.txt", "d.mp4", "e.html", "f.svg", "g.docx", "h.xml", "noext", "x.pdf.html"].map((n) => viewableType(n)), ["application/pdf", "image/jpeg", "text/plain; charset=utf-8", "video/mp4", null, null, null, null, null, null]);
 }
 {
   const { res, data } = await call("/data/files", { cookie });
