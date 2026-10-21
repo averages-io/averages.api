@@ -29,7 +29,9 @@
       { "name": "CLOUD", "class_name": "CloudStore" },
       { "name": "CONVERTER", "class_name": "Converter" },
       // Averages Plus (src/billing.ts): Stripe customer / subscription per student, US jurisdiction.
-      { "name": "BILLING", "class_name": "BillingStore" }
+      { "name": "BILLING", "class_name": "BillingStore" },
+      // Calendar sync, an Averages Plus perk (src/calendar.ts, 2026-10-21): one per student link and one per feed, US jurisdiction.
+      { "name": "CALENDAR", "class_name": "CalendarStore" }
     ]
   },
   "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
@@ -74,6 +76,7 @@
     { "tag": "v5", "new_sqlite_classes": ["CloudStore"] },
     { "tag": "v6", "new_sqlite_classes": ["Converter"] },
     { "tag": "v7", "deleted_classes": ["SchoolsStore"] },
-    { "tag": "v8", "new_sqlite_classes": ["BillingStore"] }
+    { "tag": "v8", "new_sqlite_classes": ["BillingStore"] },
+    { "tag": "v9", "new_sqlite_classes": ["CalendarStore"] }
   ]
 }

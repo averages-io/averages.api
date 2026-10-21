@@ -267,6 +267,38 @@ How it works (src/billing.ts):
 - Stripe's error messages are never passed to the browser or logged (only its error
   type, code and parameter name).
 
+### Plus perks (2026-10-21, src/plus.ts)
+
+- **Browser notifications** need Plus while billing is on and set up (the `billing`
+  switch, a Stripe key and the `BILLING` store). Turning on, testing and changing types
+  answer 403 `plus_required` without it. A student without Plus who still has them on
+  is turned off (everything deleted) by `POST /push/status` (which then says
+  `turnedOff: "plus_required"`), `/push/touch` and the 20-minute check. With billing
+  off, notifications are free as before. A BillingStore that can't be reached refuses
+  turning on (503 `billing_unavailable`) but never turns anyone off.
+- **Calendar sync** (src/calendar.ts) always needs Plus, and the `calendar-sync` switch:
+
+  | Route | What it does |
+  |---|---|
+  | `GET /calendar/status` | `{ enabled, configured, eligible, plus, on, url, createdAt }` |
+  | `POST /calendar` | `{ tz }` → `{ url, createdAt }`: a new private link (the old one stops working). 403 `plus_required` / `incognito_mode` |
+  | `POST /calendar/touch` | keeps the stored sign-in in step with this session (the app, once a day) |
+  | `DELETE /calendar` | the link and its stored sign-in, gone |
+  | `GET /calendar/<token>.ics` | the calendar (no cookie): due dates 14 days back to 90 ahead, one all-day event each |
+
+  The link's token is random (32 bytes); only its SHA-256 names the feed, and the token
+  itself is kept sealed with `PUSH_SECRET` so Settings can show it again. The sign-in is
+  sealed with `PUSH_SECRET` like notifications'. The calendar is never stored: a link is
+  read from the school platform at most once every 10 minutes (429 with `Retry-After`
+  otherwise). Plus ended or a sign-in that ran out give a calendar with one event saying
+  what to do. Deleted by turning it off, signing out, switching to Incognito (the app
+  calls `DELETE /calendar`) or Plus ending.
+- **Early access**: switch keys in `FEATURES_EARLY` (a var) or Flagship's string flag
+  `early-access` (comma-separated) are on for Plus members while off for everyone.
+  `GET /config/features` lists them as `early`; for a Plus member their routes are open.
+- **Plus ending** (Stripe's webhook going from Plus to not): notifications (while
+  billing is on) and the calendar link are deleted right away.
+
 **There is no general Schoology passthrough.** An earlier `GET /schoology/*` route
 could relay any read from a student's account and was removed on 2026-09-15. Each new
 feature gets its own route with its own fixed Schoology calls.
@@ -359,10 +391,11 @@ Make a `SESSION_SECRET` with:
 | `SCHOOLS_EMAIL_ALLOW` | Dashboard **secret** (not in this public repo): exact email addresses that may apply whatever their ending, comma-separated. Never shown by `GET /config/apply` |
 | `REVIEW_KEY`, `REVIEW_SECRET` | Dashboard **secrets**, 16+ characters each (e.g. `openssl rand -hex 16`). Typed into the hidden API-key sign-in (`app.averages.io/?keys`), they open the reviewer account: six sample classes served by `src/reviewSandbox.ts` (a pretend Schoology inside the Worker, nothing sent to Schoology) in the app's normal live mode, so Canva, Google Drive, OneDrive, notifications and Sync all work. For app reviewers and testing. Unset = off |
 | `CANVA_FOLDERS_ENABLED` | `"1"` once `folder:read` and `folder:write` are enabled (and approved) for the Canva integration: Connect asks for them and the Files page shows Canva folders. Leave `"0"` until then, for the same reason. Students connected before then see Reconnect |
-| `FLAGS` (Flagship binding, optional) | Feature switches read on every request (src/flags.ts): `canva-integration`, `onedrive-integration`, `drive-integration`, `schoology-signin`, `gclassroom-signin`, `canvas-signin`, `test-signin`, `maintenance-banner`, `schoolsform-page`, `coursematerialpreview-feature`, `turnin-feature`, `messaging-features`, `notifications-features`, `billing`. Off: that feature's routes answer 503 `feature_off` (navigations go back to the app with `?feature_off=`), and `GET /config/features` tells the app to hide it. All default on except `maintenance-banner`, `coursematerialpreview-feature` and `billing` (Averages Plus: Upgrade and Manage plan; status and the webhook always work). If Flagship is slow (400 ms) or errors, the fallback decides. See the commented `"flagship"` block in wrangler.jsonc |
+| `FLAGS` (Flagship binding, optional) | Feature switches read on every request (src/flags.ts): `canva-integration`, `onedrive-integration`, `drive-integration`, `schoology-signin`, `gclassroom-signin`, `canvas-signin`, `test-signin`, `maintenance-banner`, `schoolsform-page`, `coursematerialpreview-feature`, `turnin-feature`, `messaging-features`, `notifications-features`, `billing`, `calendar-sync`. Off: that feature's routes answer 503 `feature_off` (navigations go back to the app with `?feature_off=`), and `GET /config/features` tells the app to hide it. All default on except `maintenance-banner`, `coursematerialpreview-feature` and `billing` (Averages Plus: Upgrade and Manage plan; status and the webhook always work). Flag names must be exactly these keys, all lowercase (a flag named "Billing" is never read). If Flagship is slow (400 ms) or errors, the fallback decides. See the commented `"flagship"` block in wrangler.jsonc |
 | `FEATURES_OFF` / `FEATURES_ON` (optional vars) | Comma-separated switch keys to turn off / on without Flagship (Flagship still wins when it answers) |
 | `MAINTENANCE_MESSAGE` (optional var) | The banner text while `maintenance-banner` is on (300 characters at most) |
 | `STRIPE_PRICE_LOOKUP_KEY` (optional var) | Averages Plus: the lookup key of the price checkout sells. Default `plus_monthly` |
+| `FEATURES_EARLY` (optional var) | Early access: comma-separated switch keys that are on for Averages Plus members while off for everyone (Flagship's `early-access` string flag works too) |
 | `CANVA_PERMISSION_PROBE` | In `wrangler.jsonc`: `"1"` only while running the Canva permission probe (below), otherwise `"0"`. Developer only |
 
 ### Canva permission probe (temporary)
@@ -576,6 +609,12 @@ TypeScript support.
   and the schools@ handler: forwarded, answered once per sender, never to robots or
   mailing lists, and never throwing.
 
+- **Plus perks** (`plus.test.ts`): notifications refused, turned off and kept as the
+  billing switch and Plus say (and never over a BillingStore outage), the 20-minute check
+  stopping, the calendar link (made, shown again, replaced, the .ics and its escaping and
+  folding, the 10-minute limit, nothing of the calendar stored, Plus ended, a sign-in that
+  ran out, turning it off), the reviewer sandbox's due dates, early access through the
+  real Worker, and Plus ending through the webhook.
 - **Averages Plus** (`billing.test.ts`): the form encoding Stripe expects, webhook
   signatures (good, wrong secret, edited body, too old, several `v1`s), each event
   type, out-of-order and repeated events, and the routes through the real Worker
