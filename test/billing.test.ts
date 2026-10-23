@@ -257,6 +257,19 @@ console.log("\nwebhook");
   const s2 = (await call("/billing/status", { cookie: sam })).data;
   check("set to cancel: still Plus until the period ends, with the date", [s2.plus, s2.cancelAtPeriodEnd, s2.renewsAt], [true, true, 1800000000 * 1000]);
 
+  // Newer API versions (the account's 2026-09-30.endive): the Customer Portal sets cancel_at, a date,
+  // and leaves cancel_at_period_end false (found in the sandbox test, 2026-10-23).
+  await webhook("customer.subscription.updated", subscription("4001", "active", { cancel_at_period_end: false, cancel_at: 1800000000 }));
+  const s3 = (await call("/billing/status", { cookie: sam })).data;
+  check("cancelled with cancel_at (newer API versions): won't renew, Plus until that date", [s3.plus, s3.cancelAtPeriodEnd, s3.renewsAt], [true, true, 1800000000 * 1000]);
+  await webhook("customer.subscription.updated", subscription("4001", "active", { cancel_at: 1790000000 }));
+  const s4 = (await call("/billing/status", { cookie: sam })).data;
+  check("…a cancel date before the period's end is the end date", [s4.cancelAtPeriodEnd, s4.renewsAt], [true, 1790000000 * 1000]);
+  await webhook("customer.subscription.updated", subscription("4001", "active", { cancel_at: null }));
+  const s5 = (await call("/billing/status", { cookie: sam })).data;
+  check("…and un-cancelling clears it: renews again on the period's end", [s5.plus, s5.cancelAtPeriodEnd, s5.renewsAt], [true, false, 1800000000 * 1000]);
+  await webhook("customer.subscription.updated", subscription("4001", "active", { cancel_at_period_end: true }));
+
   calls.length = 0;
   const portal = await call("/billing/portal", { method: "POST", cookie: sam, json: {} });
   check("Manage plan: Stripe's customer page for this customer", [portal.res.status, portal.data.url], [200, "https://billing.stripe.com/p/session/test_1"]);
