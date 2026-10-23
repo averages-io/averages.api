@@ -88,12 +88,20 @@ const state = {
   read: new Set<string>(),
   /** Files announced with POST /upload, by Schoology file id (with their bytes once sent, within the caps above). */
   uploads: new Map<string, { filename: string; filesize: number; md5: string; uploaded: boolean; at: number; bytes?: Uint8Array }>(),
+  /** Comments the reviewer added to their own turn-ins (a file turn-in's description), oldest first. */
+  comments: [] as { section: string; assignment: string; id: number; comment: string; created: number }[],
   /** Turned-in revisions, oldest first. */
   revisions: [] as { section: string; assignment: string; raw: Raw }[],
   nextThread: 7800000100,
   nextFile: 7900000100,
   nextRevision: 7950000100,
+  nextComment: 7960000100,
 };
+
+/** The comments added to the reviewer's turn-ins (tests). */
+export function sandboxComments(): readonly { section: string; assignment: string; comment: string }[] {
+  return state.comments;
+}
 
 /** Back to a fresh account (tests). */
 export function resetSandbox(): void {
@@ -101,6 +109,7 @@ export function resetSandbox(): void {
   state.read.clear();
   state.uploads.clear();
   state.revisions = [];
+  state.comments = [];
 }
 
 function keep<T>(list: T[], item: T): void {
@@ -698,6 +707,17 @@ function post(path: string[], body: unknown, now: number): Response {
     const a = s ? assignmentIn(s, path[3]) : null;
     if (!s || !a) return notFound();
     return submit(s, a, path[4], parsed, now);
+  }
+  // A description on a file turn-in (2026-10-23): a comment on the reviewer's own submission.
+  if (path[0] === "sections" && path[2] === "submissions" && path.length === 6 && path[5] === "comments") {
+    const s = sectionById(path[1]);
+    const a = s ? assignmentIn(s, path[3]) : null;
+    if (!s || !a || path[4] !== REVIEW_UID) return notFound();
+    const text = parsed && typeof parsed.comment === "string" ? parsed.comment.trim() : "";
+    if (!text || text.length > 4000) return json(400, { error: "Comment required" });
+    const row = { section: String(path[1]), assignment: String(path[3]), id: state.nextComment++, comment: text, created: Math.floor(now / 1000) };
+    keep(state.comments, row);
+    return json(201, { id: String(row.id), uid: REVIEW_UID, comment: row.comment, created: unix(now) });
   }
   return notFound();
 }

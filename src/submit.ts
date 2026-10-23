@@ -17,6 +17,11 @@
  *
  * Text answers are one call (…/create), after the HTML has been cut down to a
  * short allow-list (sanitizeSubmissionHtml).
+ *
+ * A description on a file turn-in (2026-10-23, Martin): Schoology's file
+ * turn-in takes only the file ids, so the description goes on as a comment on
+ * the student's own submission right after (commentOnSubmission), the way
+ * students add a note to a turn-in in Schoology itself.
  */
 
 import { buildAuthHeader, type Credentials } from "./oauth.ts";
@@ -283,6 +288,32 @@ export function fixedLength(body: ReadableStream<Uint8Array>, length: number): R
   // Native stream to native stream: the runtime pumps it, no per-chunk JavaScript.
   body.pipeTo(writable).catch(() => {});
   return readable;
+}
+
+/** Longest description on a file turn-in, in characters. */
+export const MAX_DESCRIPTION_CHARS = 1000;
+
+/**
+ * A file turn-in's description as plain text: control characters out (line
+ * breaks kept), spaces trimmed. "" when there's none; null when it isn't
+ * text or is too long.
+ */
+export function cleanDescription(value: unknown): string | null {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") return null;
+  const text = value.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return Array.from(text).length > MAX_DESCRIPTION_CHARS ? null : text;
+}
+
+/**
+ * The description, as a comment on this student's submission. Schoology
+ * documents reading and deleting these comments at this address; adding one
+ * is a POST to the same list, like comments everywhere else in its API, but
+ * isn't in its docs. So the route treats a failure here as "the files are
+ * in, the description isn't", never as a failed turn-in.
+ */
+export async function commentOnSubmission(creds: Credentials, section: string, assignment: string, uid: string, text: string): Promise<void> {
+  await schoologyPostJson(`/sections/${section}/submissions/${assignment}/${uid}/comments`, creds, { comment: text });
 }
 
 /** Step 3: hand the uploaded files in. */

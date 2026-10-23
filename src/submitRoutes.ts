@@ -26,6 +26,8 @@ import {
   adaptHistory,
   attachFiles,
   byteLength,
+  cleanDescription,
+  commentOnSubmission,
   getHistory,
   ID_RE,
   MAX_FILES,
@@ -186,7 +188,11 @@ export function submitRoutes(deps: SubmitDeps) {
     }
   });
 
-  /** Step 3: turn in the uploaded files, all in one revision. */
+  /**
+   * Step 3: turn in the uploaded files, all in one revision. An optional
+   * `description` (2026-10-23) then goes on as a comment on the submission;
+   * the answer says `description: "added"` or `"failed"` (files still in).
+   */
   app.post("/file", deps.requireSession, async (c) => {
     const blocked = begin(c) ?? deps.fromOurApp(c);
     if (blocked) return blocked;
@@ -200,11 +206,23 @@ export function submitRoutes(deps: SubmitDeps) {
     }
     const fileIds = [...new Set(raw.map((id) => (typeof id === "string" || typeof id === "number" ? String(id) : "")))];
     if (!fileIds.every((id) => ID_RE.test(id))) return c.json({ error: "bad_request" }, 400);
+    const description = cleanDescription(body.description);
+    if (description === null) return c.json({ error: typeof body.description === "string" ? "description_too_long" : "bad_request" }, 400);
+    const session = c.get("session");
+    let answer: any;
     try {
-      const answer = await attachFiles(c.get("session"), section, assignment, fileIds);
-      return c.json({ ok: true, revision: revisionFromAnswer(answer, studentTimeZone(c)) });
+      answer = await attachFiles(session, section, assignment, fileIds);
     } catch (error) {
       return schoologyFailure(c, error);
+    }
+    const revision = revisionFromAnswer(answer, studentTimeZone(c));
+    if (!description) return c.json({ ok: true, revision });
+    try {
+      await commentOnSubmission(session, section, assignment, session.uid, description);
+      return c.json({ ok: true, revision, description: "added" });
+    } catch (error) {
+      console.error("submit_description_failed", error instanceof SchoologyError ? error.status : String(error));
+      return c.json({ ok: true, revision, description: "failed" });
     }
   });
 
