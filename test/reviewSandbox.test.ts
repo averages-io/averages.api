@@ -13,7 +13,7 @@
  */
 import worker, { viewableType } from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
-import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET, resetSandbox, sandboxFetch } from "../src/reviewSandbox.ts";
+import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET, resetSandbox, sandboxComments, sandboxFetch } from "../src/reviewSandbox.ts";
 import { SANDBOX_ZONE } from "../src/reviewSandboxData.ts";
 import { SESSION_COOKIE } from "../src/session.ts";
 
@@ -427,6 +427,18 @@ console.log("\nthe sandbox itself");
   check("locate: unknown id = 404", [none.res.status, none.data.error], [404, "not_found"]);
   const bad = await call(`/data/assignment/locate?id=abc`, { cookie });
   check("locate: not an id = 400", bad.res.status, 400);
+}
+
+console.log("\na description on a file turn-in (2026-10-23)");
+{
+  const file = new TextEncoder().encode("%PDF-1.4\nfinal\n%%EOF\n");
+  const start = await call("/submit/upload", { cookie, json: { section: CHEM, assignment: LAB4, filename: "Final.pdf", filesize: file.byteLength, md5: "0123456789abcdef0123456789abcdef" } });
+  await call(`/submit/upload/${start.data.upload}`, { method: "PUT", cookie, body: file, headers: { "Content-Type": "application/pdf", "Content-Length": String(file.byteLength) } });
+  const before = sandboxComments().length;
+  const described = await call(`/submit/file?tz=${TZ}`, { cookie, json: { section: CHEM, assignment: LAB4, fileIds: [start.data.fileId], description: "Final version, with the graphs." } });
+  check("turn it in with a description", [described.res.status, described.data.ok, described.data.description], [200, true, "added"]);
+  check("the sandbox kept it as a comment on that turn-in", sandboxComments().slice(before).map((x) => [x.section, x.assignment, x.comment]), [[CHEM, LAB4, "Final version, with the graphs."]]);
+  check("someone else's submission: no comment", (await sandboxFetch("POST", `https://api.schoology.com/v1/sections/${CHEM}/submissions/${LAB4}/4242/comments`, JSON.stringify({ comment: "x" }))).status, 404);
 }
 
 {

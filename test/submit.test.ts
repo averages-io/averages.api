@@ -367,6 +367,7 @@ let putAnswer: (call: Call) => Response | Promise<Response> = async (c) => {
 };
 const AT = Date.UTC(2026, 9, 6, 21, 5) / 1000;
 let attachStatus = 201;
+let commentStatus = 201;
 function schoology(c: Call): Response | Promise<Response> {
   const p = c.url.pathname;
   if (c.url.hostname === "api.schoology.com" && p === "/v1/upload" && c.method === "POST") {
@@ -375,6 +376,9 @@ function schoology(c: Call): Response | Promise<Response> {
   if (c.method === "PUT") return putAnswer(c);
   if (p === "/v1/sections/111/submissions/601/file" && c.method === "POST") {
     return attachStatus === 201 ? json({ revision_id: 7, uid: 4242, created: AT, num_items: 2, late: 0, draft: 0 }, 201) : json({}, attachStatus);
+  }
+  if (p === "/v1/sections/111/submissions/601/4242/comments" && c.method === "POST") {
+    return commentStatus === 201 ? json({ id: 990, uid: 4242, comment: "x", created: AT }, 201) : json({}, commentStatus);
   }
   if (p === "/v1/sections/111/submissions/601/create" && c.method === "POST") return json({ revision_id: 8, uid: 4242, created: AT, num_items: 1, late: 0, draft: 0 }, 201);
   if (p === "/v1/sections/111/submissions/601/4242" && c.method === "GET") {
@@ -536,6 +540,41 @@ console.log("\nPOST /submit/file");
   check("none of those reached Schoology", calls.length, 0);
   attachStatus = 403;
   check("Schoology refusing (dropbox closed): 502 with its status", (await call("/submit/file", { method: "POST", cookie: student, json: { section: "111", assignment: "601", fileIds: ["1"] } })).data, { error: "schoology_error", status: 403 });
+  attachStatus = 201;
+}
+
+console.log("\nPOST /submit/file with a description (2026-10-23)");
+{
+  const file = (extra: Record<string, unknown>) => call("/submit/file", { method: "POST", cookie: student, json: { section: "111", assignment: "601", fileIds: ["88433"], ...extra } });
+  calls = [];
+  const { res, data } = await file({ description: "  My essay\r\n\r\n\r\n\r\nfinal draft\u0007 " });
+  check("200, files in, description added", [res.status, data.ok, data.description, data.revision?.id], [200, true, "added", "7"]);
+  check("two calls: the files, then a comment on this student's submission", calls.map((x) => `${x.method} ${x.url.href}`), [
+    "POST https://api.schoology.com/v1/sections/111/submissions/601/file",
+    "POST https://api.schoology.com/v1/sections/111/submissions/601/4242/comments",
+  ]);
+  check("the comment is the cleaned text (control characters out, at most one blank line)", JSON.parse(String(calls[1].body)), { comment: "My essay\n\nfinal draft" });
+  check("the comment call is signed", await signatureOk("POST", calls[1].url.href, calls[1].headers.get("Authorization") ?? ""), true);
+
+  calls = [];
+  check("an empty description: just the files, no comment", [(await file({ description: "   \n " })).data.description, calls.length], [undefined, 1]);
+
+  commentStatus = 500;
+  calls = [];
+  const failed = await file({ description: "Final draft" });
+  check("the comment failing: still turned in, description \"failed\"", [failed.res.status, failed.data.ok, failed.data.description, failed.data.revision?.id], [200, true, "failed", "7"]);
+  commentStatus = 201;
+
+  calls = [];
+  check("over 1000 characters: 400, nothing sent", [await errorOf(file({ description: "é".repeat(1001) })), calls.length], [[400, "description_too_long"], 0]);
+  check("exactly 1000 is fine", (await file({ description: "é".repeat(1000) })).data.description, "added");
+  calls = [];
+  check("not text: 400, nothing sent", [await errorOf(file({ description: 5 })), calls.length], [[400, "bad_request"], 0]);
+
+  attachStatus = 403;
+  calls = [];
+  const refused = await file({ description: "Final draft" });
+  check("files refused: the usual error, and no comment is tried", [refused.data, calls.length], [{ error: "schoology_error", status: 403 }, 1]);
   attachStatus = 201;
 }
 
