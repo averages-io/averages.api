@@ -291,6 +291,26 @@ function periodEndOf(sub: any): number | null {
   return ends.length ? Math.max(...ends) : null;
 }
 
+/**
+ * A subscription set to end (2026-10-23, found in the sandbox test): newer API
+ * versions (the account's 2026-09-30.endive among them) no longer set
+ * cancel_at_period_end when someone cancels in the Customer Portal; they set
+ * cancel_at, a date, to the end of the period instead. Either one means it
+ * won't renew. Undoing the cancellation clears both.
+ */
+function cancelAtOf(sub: any): number | null {
+  return typeof sub.cancel_at === "number" && sub.cancel_at > 0 ? sub.cancel_at : null;
+}
+function endingOf(sub: any): boolean {
+  return sub.cancel_at_period_end === true || cancelAtOf(sub) !== null;
+}
+/** When Plus ends or renews: the cancel date when it's set and comes first, else the period's end. */
+function endOf(sub: any): number | null {
+  const end = periodEndOf(sub);
+  const cancelAt = cancelAtOf(sub);
+  return cancelAt !== null && (end === null || cancelAt < end) ? cancelAt : end;
+}
+
 const SUBSCRIPTION_EVENTS = new Set(["customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "customer.subscription.paused", "customer.subscription.resumed"]);
 export const HANDLED_EVENTS = ["checkout.session.completed", ...SUBSCRIPTION_EVENTS];
 
@@ -327,8 +347,8 @@ export function updateFromEvent(event: any): BillingUpdate | null {
       customerId: idOf(obj.customer, "cus_"),
       subscriptionId: idOf(obj.id, "sub_"),
       status: event.type === "customer.subscription.deleted" ? "canceled" : typeof obj.status === "string" ? obj.status : undefined,
-      periodEnd: periodEndOf(obj),
-      cancelAtPeriodEnd: obj.cancel_at_period_end === true,
+      periodEnd: endOf(obj),
+      cancelAtPeriodEnd: endingOf(obj),
     };
   }
   return null;
