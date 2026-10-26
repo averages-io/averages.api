@@ -55,8 +55,11 @@ jobs:
       - name: Build and push the image
         run: |
           VERSION="$(head -n 1 container/VERSION)"
-          npx wrangler containers build container --tag "averages-converter:$VERSION" --push
+          # The full registry name, not just "averages-converter:1": Wrangler reads a bare
+          # "name:1" as a server called "name" on port 1, so Docker pushed it to Docker Hub
+          # ("access token has insufficient scopes", 2026-10-26).
           IMAGE="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/averages-converter:$VERSION"
+          npx wrangler containers build container --tag "$IMAGE" --push
           {
             echo "### Converter image pushed"
             echo ""
