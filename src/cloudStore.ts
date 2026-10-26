@@ -48,7 +48,7 @@ export class CloudStore extends DurableObject<CloudConnectEnv> {
   accessToken(uid: string, app: CloudApp, opts: TokenOptions = {}): Promise<CloudToken> {
     return this.account.accessToken(uid, app, opts);
   }
-  disconnect(uid: string, app: CloudApp): Promise<void> {
-    return this.account.disconnect(uid, app);
+  disconnect(uid: string, app: CloudApp, opts: { revokeShared?: boolean } = {}): Promise<void> {
+    return this.account.disconnect(uid, app, opts);
   }
 }

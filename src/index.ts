@@ -594,7 +594,8 @@ app.get("/", (c) => {
 async function forgetConnections(env: Bindings, uid: string, requestUrl: string): Promise<void> {
   const jobs: Promise<unknown>[] = [];
   if (env.CANVA) jobs.push(Promise.resolve().then(() => canvaStore(env, uid, requestUrl).disconnect()));
-  if (env.CLOUD) for (const app of CLOUD_APPS) jobs.push(Promise.resolve().then(() => cloudStore(env, uid, requestUrl).disconnect(uid, app)));
+  // Signing out: Google's grant is always revoked (2026-10-26); a Google sign-in is ending anyway.
+  if (env.CLOUD) for (const app of CLOUD_APPS) jobs.push(Promise.resolve().then(() => cloudStore(env, uid, requestUrl).disconnect(uid, app, { revokeShared: true })));
   const results = await Promise.allSettled(jobs);
   for (const r of results) if (r.status === "rejected") console.error("signout_forget_failed", r.reason);
 }
@@ -731,8 +732,8 @@ app.delete("/auth/session", async (c) => {
   // never in the way: forgetPush never throws, and does nothing without the
   // PUSH binding.
   const session = await sessionFrom(c);
-  // ?forget=1 (2026-10-13): the app sends it when Sync Across Devices is off,
-  // where signing out means "leave nothing behind". Besides this device's
+  // ?forget=1 (2026-10-13): the app sends it on every sign-out since
+  // 2026-10-26 (before, only with Sync Across Devices off). Besides this device's
   // data (which the app deletes itself), that's the connected apps kept here
   // for this student: Canva (and its Edit in Canva drafts), Google Drive and
   // OneDrive. Our own app only: a page on another site can't ask for it.
@@ -2315,7 +2316,9 @@ app.delete("/cloud/:app/connection", requireSession, async (c) => {
   const foreign = notFromOurApp(c);
   if (foreign) return foreign;
   try {
-    await cloudStore(c.env, session.uid, c.req.url).disconnect(session.uid, cloudApp);
+    // Google's grant is revoked too, unless this student signed in with Google
+    // (the same client holds their sign-in; see CloudAccount.disconnect).
+    await cloudStore(c.env, session.uid, c.req.url).disconnect(session.uid, cloudApp, { revokeShared: !isGoogle(session) });
     return c.json({ ok: true });
   } catch (error) {
     return cloudFailure(c, error, "cloud_disconnect_failed");

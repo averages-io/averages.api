@@ -773,18 +773,29 @@ export class CloudAccount {
   /* ── disconnect ── */
 
   /**
-   * Forgets the connection. Google's refresh token is revoked first when it
-   * belongs to a Drive-only client (best effort: a failure still forgets).
-   * With the sign-in client it isn't, since revoking would also end the
-   * student's Sign in with Google; and Microsoft has no way to revoke one
-   * refresh token, so it's just forgotten (the student can remove the app
-   * at account.live.com/consent or myapps.microsoft.com).
+   * Forgets the connection. Google's refresh token is revoked first (best
+   * effort: a failure still forgets), which takes Averages.io off the
+   * student's Google account, unless that could end a Sign in with Google:
+   *
+   * - A Drive-only client (GOOGLE_DRIVE_CLIENT_ID): always revoked.
+   * - The sign-in client (one Google client for both, Martin's choice
+   *   2026-10-05): revoking ends everything that client was granted, Drive and
+   *   Sign in with Google alike. Revoked when `revokeShared` says that's safe
+   *   (2026-10-26, Martin: "force disconnect from drive"): the student didn't
+   *   sign in with Google (Schoology), or is signing out anyway. A Google
+   *   (Classroom) sign-in disconnecting Drive while staying signed in keeps
+   *   the grant.
+   *
+   * Microsoft has no way to revoke one refresh token, so it's just forgotten
+   * (the student can remove the app at account.live.com/consent or
+   * myapps.microsoft.com).
    */
-  async disconnect(uid: string, app: CloudApp): Promise<void> {
+  async disconnect(uid: string, app: CloudApp, opts: { revokeShared?: boolean } = {}): Promise<void> {
     this.generation[app]++;
     this.refreshing[app] = null;
     const conn = await this.load(uid, app);
-    if (conn && app === "gdrive" && conn.client !== pick(this.env.GOOGLE_CLIENT_ID, GOOGLE_CLIENT_ID_RE)) {
+    const shared = !!conn && conn.client === pick(this.env.GOOGLE_CLIENT_ID, GOOGLE_CLIENT_ID_RE);
+    if (conn && app === "gdrive" && (!shared || opts.revokeShared === true)) {
       try {
         await revokeGoogle(conn.refresh);
       } catch {
