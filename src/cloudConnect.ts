@@ -400,12 +400,13 @@ function expiresIn(raw: unknown): number {
  * Google's revoke. The token goes in the form body rather than the URL
  * (Google accepts either), so it can't end up in a logged URL.
  */
-async function revokeGoogle(token: string): Promise<void> {
-  await cloudFetch(GOOGLE_REVOKE_URL, {
+async function revokeGoogle(token: string): Promise<boolean> {
+  const res = await cloudFetch(GOOGLE_REVOKE_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ token }).toString(),
   });
+  return res.ok;
 }
 
 /* ── per-student storage ───────────────────────────────────────────── */
@@ -797,7 +798,12 @@ export class CloudAccount {
     const shared = !!conn && conn.client === pick(this.env.GOOGLE_CLIENT_ID, GOOGLE_CLIENT_ID_RE);
     if (conn && app === "gdrive" && (!shared || opts.revokeShared === true)) {
       try {
-        await revokeGoogle(conn.refresh);
+        // Revoking either token ends the whole grant. Google refuses a refresh token it no
+        // longer honours (an app in Testing loses them after 7 days), so the current access
+        // token is tried too while it's still good (2026-10-26, Martin: "the drive disconnect
+        // ... doesn't work").
+        const ok = await revokeGoogle(conn.refresh);
+        if (!ok && conn.access && conn.accessExp > nowS()) await revokeGoogle(conn.access);
       } catch {
         /* forgotten either way */
       }
