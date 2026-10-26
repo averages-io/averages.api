@@ -52,9 +52,13 @@
     { "name": "RATE_LIMIT_BILLING", "namespace_id": "1014", "simple": { "limit": 20, "period": 60 } }
   ],
   // The file converter (src/convert.ts, container/): PDF to Word for the type pill.
-  // wrangler deploy builds container/Dockerfile (Docker on the machine, or Workers Builds).
+  // A prebuilt image in Cloudflare's registry (2026-10-26), built and pushed by
+  // .github/workflows/converter-image.yml on GitHub's machines. Cloudflare's Git
+  // deploys can't start Docker here, so pointing at container/Dockerfile made every
+  // deploy fail; with an image they need no Docker. The tag is container/VERSION:
+  // bump both together, push the image first (the workflow), then this line.
   "containers": [
-    { "class_name": "Converter", "image": "./container/Dockerfile", "max_instances": 3, "instance_type": "basic" }
+    { "class_name": "Converter", "image": "registry.cloudflare.com/4f3d06d8286fb5396ca9f48ef1f25cac/averages-converter:1", "max_instances": 3, "instance_type": "basic" }
   ],
   // Queues are parked for launch (scope-and-priorities.md, 2026-10-16): no real
   // users yet, so nothing to retry and nobody saving folders to Canva. The code
