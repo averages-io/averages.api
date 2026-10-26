@@ -1,0 +1,71 @@
+# Builds the file converter's image (container/) on GitHub's machines, which have
+# Docker, and pushes it to Cloudflare's registry (2026-10-26). Cloudflare's own
+# Git deploys (Workers Builds) can't start Docker on this account, so they failed
+# every time wrangler.jsonc pointed at container/Dockerfile. wrangler.jsonc now
+# points at the pushed image instead, so a plain `npx wrangler deploy` needs no
+# Docker and rolls the converter out whenever that image line changes.
+#
+# Runs when container/ changes on main, or by hand (Actions > Converter image >
+# Run workflow). Needs, in this repo's Settings > Secrets and variables > Actions:
+#   secret   CLOUDFLARE_API_TOKEN   an API token with Account > Containers > Edit
+#   variable CLOUDFLARE_ACCOUNT_ID  the Cloudflare account ID (not a secret)
+#
+# Changing the converter: edit container/, bump container/VERSION, push. When this
+# finishes, set "image" in wrangler.jsonc to the line it prints and push that.
+name: Converter image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "container/**"
+      - ".github/workflows/converter-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: converter-image
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check the setup
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::error::Add the CLOUDFLARE_API_TOKEN secret (Settings > Secrets and variables > Actions)."; exit 1; fi
+          if ! printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | grep -Eq '^[0-9a-f]{32}$'; then echo "::error::Add the CLOUDFLARE_ACCOUNT_ID variable (32 characters, from the Cloudflare dashboard)."; exit 1; fi
+          if ! grep -Eq '^[0-9A-Za-z._-]{1,64}$' container/VERSION; then echo "::error::container/VERSION must be one short version like 2."; exit 1; fi
+
+      - run: npm ci
+
+      - name: Build and push the image
+        run: |
+          VERSION="$(head -n 1 container/VERSION)"
+          npx wrangler containers build container --tag "averages-converter:$VERSION" --push
+          IMAGE="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/averages-converter:$VERSION"
+          {
+            echo "### Converter image pushed"
+            echo ""
+            echo "\`$IMAGE\`"
+            echo ""
+            if grep -Fq "\"image\": \"$IMAGE\"" wrangler.jsonc; then
+              echo "wrangler.jsonc already uses it. The next deploy rolls it out."
+            else
+              echo "Set \`\"image\"\` in wrangler.jsonc to the line above and push, so the next deploy rolls it out."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Image: $IMAGE"
