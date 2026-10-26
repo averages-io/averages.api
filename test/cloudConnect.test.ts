@@ -505,6 +505,15 @@ console.log("\ndisconnect");
   check("Drive client: revoked at Google (token in the body, not the URL), then forgotten", [gone.data, revoke.length, revoke[0]?.method, revoke[0]?.form.token, revoke[0]?.url, await stored(D, "gdrive")], [{ ok: true }, 1, "POST", "g-rt-1", GOOGLE_REVOKE_URL, null]);
   check("nothing left in the object once both are gone", objects.get(D)!.storage.data.size, 0);
 
+  // Google refuses the refresh token (e.g. 7-day Testing tokens): the access token is revoked instead.
+  await connect("gdrive", c, "", DRIVE_ENV);
+  calls.length = 0;
+  answer.revoke = (form: any) => new Response(JSON.stringify({ error: "invalid_token" }), { status: form.token === "g-rt-1" ? 400 : 200 });
+  await call("/cloud/gdrive/connection", { method: "DELETE", cookie: c, env: DRIVE_ENV });
+  const tries = tokenCalls(GOOGLE_REVOKE_URL).map((x: any) => x.form.token);
+  check("refresh token refused: the access token is revoked too", [tries.length, tries[0], tries[1] && tries[1] !== "g-rt-1", await stored(D, "gdrive")], [2, "g-rt-1", true, null]);
+  defaultAnswers();
+
   await connect("gdrive", c, "", DRIVE_ENV);
   answer.revoke = () => { throw new Error("Google down"); };
   const still = await call("/cloud/gdrive/connection", { method: "DELETE", cookie: c, env: DRIVE_ENV });
