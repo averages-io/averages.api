@@ -9,9 +9,15 @@ Turns a PDF into a Word document (.docx) for the type pill's **Word** choice on 
 
 ## Deploying
 
-`npx wrangler deploy` builds this Dockerfile and pushes the image, which needs Docker running on the machine. Cloudflare's Git deploys (Workers Builds) can build it too. Containers need the Workers Paid plan.
+The image is built and pushed by GitHub, not by the deploy (2026-10-26). Cloudflare's Git deploys (Workers Builds) can't start Docker on this account, so a deploy that had to build `container/Dockerfile` failed every time.
 
-To turn Word off without a redeploy of the code, set `CONVERT_ENABLED` to `"0"` in wrangler.jsonc and deploy. The app then stops offering Word.
+- `.github/workflows/converter-image.yml` builds this folder on GitHub's machines and pushes it to Cloudflare's registry as `averages-converter:<VERSION>` (`container/VERSION`). It runs when this folder changes on `main`, or by hand from the Actions tab.
+- `wrangler.jsonc` points at that image (`registry.cloudflare.com/<account ID>/averages-converter:<VERSION>`), so `npx wrangler deploy` needs no Docker and rolls the converter out when that line changes.
+- The workflow needs, in the repo's Settings > Secrets and variables > Actions: the secret `CLOUDFLARE_API_TOKEN` (a Cloudflare API token with Account > Containers > Edit) and the variable `CLOUDFLARE_ACCOUNT_ID`.
+
+To change the converter: edit this folder, bump `VERSION`, push, wait for the workflow to finish, then set the tag in `wrangler.jsonc` to the new version and push that. (Pushing `wrangler.jsonc` first would point the deploy at an image that doesn't exist yet.)
+
+Containers need the Workers Paid plan. To turn Word off without changing code, set `CONVERT_ENABLED` to `"0"` in wrangler.jsonc and deploy. The app then stops offering Word.
 
 ## Trying it by hand
 
