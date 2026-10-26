@@ -479,8 +479,17 @@ console.log("\ndisconnect");
 {
   calls.length = 0;
   const del = await call("/cloud/gdrive/connection", { method: "DELETE", cookie: sam });
-  check("Google, sign-in client: forgotten, not revoked (that would end Sign in with Google)", [del.res.status, del.data, tokenCalls(GOOGLE_REVOKE_URL).length, (await status(sam)).data.gdrive.connected], [200, { ok: true }, 0, false]);
+  check("sign-in client, Schoology student: revoked at Google too, then forgotten (2026-10-26)", [del.res.status, del.data, tokenCalls(GOOGLE_REVOKE_URL).length, (await status(sam)).data.gdrive.connected], [200, { ok: true }, 1, false]);
   check("OneDrive untouched", (await status(sam)).data.onedrive.connected, true);
+
+  // Signed in with Google: the sign-in client also holds their sign-in, so Disconnect leaves Google's grant alone.
+  const GUID = "g:1098765";
+  const gc = await cookieFor(GUID, { key: "", secret: "", g: { at: "g-at", rt: "g-signin-rt", ax: Date.now() + 3600_000, sc: "openid email profile", name: "Gina", email: "gina@example.com", pic: "" } });
+  await connect("gdrive", gc);
+  check("a Google sign-in can connect Drive (sign-in client)", (await stored(GUID, "gdrive"))?.refresh ? "stored" : "missing", "stored");
+  calls.length = 0;
+  const gdel = await call("/cloud/gdrive/connection", { method: "DELETE", cookie: gc });
+  check("sign-in client, Google sign-in: forgotten, not revoked (that would end Sign in with Google)", [gdel.data, tokenCalls(GOOGLE_REVOKE_URL).length, await stored(GUID, "gdrive")], [{ ok: true }, 0, null]);
 
   const D = "6200";
   const c = await cookieFor(D);

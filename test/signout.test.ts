@@ -30,9 +30,9 @@ function ns(kind: "canva" | "cloud") {
     jurisdiction: () => n,
     idFromName: (name: string) => name,
     get: (id: string) => ({
-      async disconnect(uid?: string, app?: string) {
+      async disconnect(uid?: string, app?: string, opts?: { revokeShared?: boolean }) {
         if (kind === "canva" && canvaBroken) throw new Error("Canva store down");
-        calls.push(kind === "canva" ? `canva ${id}` : `${app} ${id} (uid ${uid})`);
+        calls.push(kind === "canva" ? `canva ${id}` : `${app} ${id} (uid ${uid})${opts?.revokeShared ? " revoke" : ""}`);
       },
     }),
   };
@@ -65,13 +65,13 @@ console.log("sign-out with Sync off (?forget=1)");
 {
   const r = await signOut("?forget=1", martin);
   check("200 and the session cookie cleared", [r.status, r.clearsSession], [200, true]);
-  check("Canva, Google Drive and OneDrive all disconnected, for this student", r.calls, ["canva 4242", "gdrive 4242 (uid 4242)", "onedrive 4242 (uid 4242)"]);
+  check("Canva, Google Drive and OneDrive all disconnected, for this student, Google's grant revoked too", r.calls, ["canva 4242", "gdrive 4242 (uid 4242) revoke", "onedrive 4242 (uid 4242) revoke"]);
 }
 {
   canvaBroken = true;
   const r = await signOut("?forget=1", martin);
   canvaBroken = false;
-  check("Canva failing doesn't stop Drive and OneDrive, or the sign-out", [r.status, r.clearsSession, r.calls], [200, true, ["gdrive 4242 (uid 4242)", "onedrive 4242 (uid 4242)"]]);
+  check("Canva failing doesn't stop Drive and OneDrive, or the sign-out", [r.status, r.clearsSession, r.calls], [200, true, ["gdrive 4242 (uid 4242) revoke", "onedrive 4242 (uid 4242) revoke"]]);
 }
 {
   const r = await signOut("?forget=1", martin, APP, { SESSION_SECRET: SECRET });
