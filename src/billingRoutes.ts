@@ -2,7 +2,7 @@
  * Averages Plus routes (2026-10-21), mounted by index.ts. The Stripe calls
  * and the per-student record are in billing.ts; see there for the blueprint.
  *
- *   GET  /billing/status    { enabled, configured, eligible, plus, status, renewsAt, cancelAtPeriodEnd, manageable }
+ *   GET  /billing/status    { enabled, configured, eligible, plus, status, renewsAt, cancelAtPeriodEnd, manageable, price }
  *   POST /billing/checkout  {} -> { url }: Stripe's hosted checkout (Managed Payments)
  *   POST /billing/portal    {} -> { url }: Stripe's page to cancel or change the card
  *   POST /stripe/webhook    Stripe's events, signed with STRIPE_WEBHOOK_SECRET
@@ -72,7 +72,7 @@ export function billingRoutes(deps: BillingDeps) {
     const enabled = featureOn(c.env, "billing");
     const configured = billingConfigured(c.env) && !!c.env.BILLING;
     const base = { enabled, configured, eligible: !isDemoSession(session) && !isIncognitoSession(session) };
-    const none: BillingStatus = { plus: false, status: "none", renewsAt: null, cancelAtPeriodEnd: false, manageable: false };
+    const none: BillingStatus = { plus: false, status: "none", renewsAt: null, cancelAtPeriodEnd: false, manageable: false, price: null };
     if (isDemoSession(session) || !c.env.BILLING) return c.json({ ...base, ...none });
     try {
       return c.json({ ...base, ...(await deps.storeFor(c.env, session.uid, c.req.url).status()) });

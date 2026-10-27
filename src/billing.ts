@@ -271,6 +271,30 @@ export interface BillingUpdate {
   status?: string;
   periodEnd?: number | null;
   cancelAtPeriodEnd?: boolean;
+  /** What they pay, from the subscription's price (2026-10-27, for Settings > Plus). */
+  price?: PlanPrice | null;
+}
+
+/** A subscription's price: amount in the currency's smallest unit (cents), e.g. 299 "usd" "month". */
+export interface PlanPrice {
+  amount: number;
+  currency: string;
+  interval: "day" | "week" | "month" | "year";
+  intervalCount: number;
+}
+
+/** The first item's price on a subscription, or null when it doesn't look like one. */
+export function priceOf(sub: any): PlanPrice | null {
+  const price = sub && sub.items && Array.isArray(sub.items.data) && sub.items.data[0] && sub.items.data[0].price;
+  if (!price || typeof price !== "object") return null;
+  const amount = price.unit_amount;
+  const currency = typeof price.currency === "string" ? price.currency.toLowerCase() : "";
+  const interval = price.recurring && price.recurring.interval;
+  const count = price.recurring && price.recurring.interval_count;
+  if (!Number.isInteger(amount) || amount < 0 || amount > 100000000) return null;
+  if (!/^[a-z]{3}$/.test(currency)) return null;
+  if (!["day", "week", "month", "year"].includes(interval)) return null;
+  return { amount, currency, interval, intervalCount: Number.isInteger(count) && count > 0 && count < 1000 ? count : 1 };
 }
 
 const idOf = (v: unknown, prefix: string): string | undefined => {
@@ -349,6 +373,7 @@ export function updateFromEvent(event: any): BillingUpdate | null {
       status: event.type === "customer.subscription.deleted" ? "canceled" : typeof obj.status === "string" ? obj.status : undefined,
       periodEnd: endOf(obj),
       cancelAtPeriodEnd: endingOf(obj),
+      price: priceOf(obj),
     };
   }
   return null;
@@ -362,6 +387,8 @@ export interface BillingRecord {
   status: string;
   periodEnd: number | null;
   cancelAtPeriodEnd: boolean;
+  /** What they pay (2026-10-27). Missing on records from before then until the next subscription event. */
+  price?: PlanPrice | null;
   /** The newest event applied (Unix seconds). */
   updatedAt: number;
   seen: string[];
@@ -380,16 +407,19 @@ export interface BillingStatus {
   cancelAtPeriodEnd: boolean;
   /** There's a Stripe customer, so "Manage plan" can open their page. */
   manageable: boolean;
+  /** What they pay, when known (Settings > Plus shows it). Never card details: those stay on Stripe's page. */
+  price: PlanPrice | null;
 }
 
 export function publicStatus(record: BillingRecord | null): BillingStatus {
-  if (!record) return { plus: false, status: "none", renewsAt: null, cancelAtPeriodEnd: false, manageable: false };
+  if (!record) return { plus: false, status: "none", renewsAt: null, cancelAtPeriodEnd: false, manageable: false, price: null };
   return {
     plus: hasPlus(record.status),
     status: record.status || "none",
     renewsAt: record.periodEnd ? record.periodEnd * 1000 : null,
     cancelAtPeriodEnd: record.cancelAtPeriodEnd,
     manageable: !!record.customerId,
+    price: record.price ?? null,
   };
 }
 
@@ -445,6 +475,7 @@ export class BillingAccount {
       if (update.status) next.status = update.status;
       if (update.periodEnd !== undefined) next.periodEnd = update.periodEnd;
       if (update.cancelAtPeriodEnd !== undefined) next.cancelAtPeriodEnd = update.cancelAtPeriodEnd;
+      if (update.price) next.price = update.price;
       next.updatedAt = Math.max(next.updatedAt, update.created);
     }
     await this.storage.put(RECORD_KEY, next);
