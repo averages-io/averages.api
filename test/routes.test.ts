@@ -279,6 +279,32 @@ freshCalls();
   check("demo bundle unchanged (not caught by the extras' demo refusal)", [demo.status, (await json(demo)).demo], [200, true]);
 }
 
+console.log("\n/data/grades (live grades, 2026-10-27)");
+resetWorld();
+resetRateLimits();
+freshCalls();
+{
+  const res = await call("/data/grades", { cookie: schoologySession });
+  const g = await json(res);
+  check("200, no-store", [res.status, res.headers.get("Cache-Control")], [200, "private, no-store"]);
+  check("only the grade fields, only classes with a grades entry", g.COURSES.map((c: any) => Object.keys(c).join(",")), ["id,grade,pct,predicted,predictedPct,trend,updated"]);
+  const bundle = await json(await call("/data/bundle", { cookie: schoologySession }));
+  const fromBundle = bundle.COURSES.find((c: any) => c.id === "101");
+  check("same numbers as the bundle", [g.COURSES[0].pct, g.COURSES[0].grade, g.COURSES[0].predicted, g.COURSES[0].predictedPct, g.COURSES[0].trend], [fromBundle.pct, fromBundle.grade, fromBundle.predicted, fromBundle.predictedPct, fromBundle.trend]);
+  freshCalls();
+  await call("/data/grades", { cookie: schoologySession });
+  check("exactly one Schoology call", schoologyCalls().map((x) => x.path), [`/users/${ME}/grades`]);
+  check("billing off: every Plus perk is free, so the 2-minute check", g.next, 120);
+  world.grades[0].final_grade = [{ grade: 93 }];
+  const moved = await json(await call("/data/grades", { cookie: schoologySession }));
+  check("a new grade shows on the next check", [moved.COURSES[0].pct, moved.COURSES[0].grade], [93, "A"]);
+  const demo = await json(await call("/data/grades", { cookie: demoSession }));
+  check("demo: COURSES null (the app stops checking)", [demo.COURSES, demo.next], [null, 0]);
+  const google = await json(await call("/data/grades", { cookie: googleBasic }));
+  check("Classroom: COURSES null (not offered yet)", [google.COURSES, google.next], [null, 0]);
+  check("signed out: 401", (await call("/data/grades")).status, 401);
+}
+
 console.log("\n/data/bundle (Classroom)");
 {
   const b = await json(await call("/data/bundle?tz=UTC", { cookie: googleBasic }));
