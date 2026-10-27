@@ -45,8 +45,8 @@ export class CanvaStore extends DurableObject<CanvaConfig> {
   status(uid: string): Promise<{ connected: boolean; name: string }> {
     return this.account.status(uid);
   }
-  disconnect(): Promise<void> {
-    return this.account.disconnect();
+  disconnect(uid?: string): Promise<void> {
+    return this.account.disconnect(uid);
   }
   accessToken(uid: string): Promise<string> {
     return this.account.accessToken(uid);

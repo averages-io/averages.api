@@ -456,14 +456,29 @@ export class CanvaAccount {
   }
 
   /**
-   * Forget everything: tokens, drafts, pending contexts. Deliberately does not
-   * call Canva's /oauth/revoke, which would also withdraw the student's consent
-   * for the whole integration; removing Averages.io in Canva's own settings is
-   * where a full revoke belongs (Settings says so).
+   * Forget everything: tokens, drafts, pending contexts. With the student's uid
+   * (always, from the routes), the refresh token is revoked at Canva first
+   * (2026-10-26, Martin: force Canva to disconnect on its side, like Google
+   * Drive). Canva's /oauth/revoke on a refresh token ends its whole lineage and
+   * the student's consent, so Averages.io is gone from their Canva account too
+   * and connecting again shows Canva's permission screen. Best effort: a
+   * refusal or an outage still forgets everything here.
    */
-  async disconnect(): Promise<void> {
+  async disconnect(uid?: string): Promise<void> {
     this.generation++;
     this.refreshing = null;
+    if (uid && canvaConfigured(this.env)) {
+      try {
+        const tokens = await this.loadTokens(uid);
+        if (tokens) {
+          const ok = await revokeToken(this.env, tokens.refresh_token);
+          // A refresh token Canva no longer honours: the access token still ends the session.
+          if (!ok && tokens.expires_at > nowS()) await revokeToken(this.env, tokens.access_token);
+        }
+      } catch {
+        /* forgotten either way */
+      }
+    }
     await this.storage.deleteAll();
   }
 
@@ -624,6 +639,23 @@ export class CanvaAccount {
 }
 
 /* ── calls to Canva ────────────────────────────────────────────────── */
+
+/**
+ * Canva's token revocation (POST /v1/oauth/revoke, Basic auth). A refresh
+ * token takes its lineage and the student's consent with it. True on 200.
+ */
+export async function revokeToken(env: CanvaConfig, token: string): Promise<boolean> {
+  if (!token) return false;
+  const res = await canvaFetch(`${CANVA_API}/oauth/revoke`, {
+    method: "POST",
+    headers: {
+      Authorization: "Basic " + btoa(`${env.CANVA_CLIENT_ID}:${env.CANVA_CLIENT_SECRET}`),
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ token }).toString(),
+  });
+  return res.ok;
+}
 
 /** Code exchange and refresh. Server only: Canva blocks this from browsers, and it needs the client secret. */
 export async function tokenRequest(env: CanvaConfig, body: Record<string, string>): Promise<CanvaTokens> {

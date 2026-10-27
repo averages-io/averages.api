@@ -593,7 +593,7 @@ app.get("/", (c) => {
  */
 async function forgetConnections(env: Bindings, uid: string, requestUrl: string): Promise<void> {
   const jobs: Promise<unknown>[] = [];
-  if (env.CANVA) jobs.push(Promise.resolve().then(() => canvaStore(env, uid, requestUrl).disconnect()));
+  if (env.CANVA) jobs.push(Promise.resolve().then(() => canvaStore(env, uid, requestUrl).disconnect(uid)));
   // Signing out: Google's grant is always revoked (2026-10-26); a Google sign-in is ending anyway.
   if (env.CLOUD) for (const app of CLOUD_APPS) jobs.push(Promise.resolve().then(() => cloudStore(env, uid, requestUrl).disconnect(uid, app, { revokeShared: true })));
   const results = await Promise.allSettled(jobs);
@@ -1758,7 +1758,8 @@ app.delete("/canva/connection", requireSession, async (c) => {
   const foreign = notFromOurApp(c);
   if (foreign) return foreign;
   try {
-    await canvaStore(c.env, c.get("session").uid, c.req.url).disconnect();
+    // Revoked at Canva too (2026-10-26): Averages.io leaves the student's Canva account.
+    await canvaStore(c.env, c.get("session").uid, c.req.url).disconnect(c.get("session").uid);
     return c.json({ ok: true });
   } catch (error) {
     return canvaFailure(c, error, "canva_disconnect_failed");
