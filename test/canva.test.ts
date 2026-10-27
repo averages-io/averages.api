@@ -267,6 +267,36 @@ console.log("returns and drafts");
   check("disconnect forgets everything", store.data.size, 0);
 }
 
+/* ── Disconnect revokes at Canva (2026-10-26) ── */
+console.log("disconnect revokes at Canva");
+{
+  const store = new MemoryStorage();
+  const acct = new CanvaAccount(store, ENV);
+  await acct.saveTokens(UID, { access_token: "AT", refresh_token: "RT", expires_at: Math.floor(Date.now() / 1000) + 3600 });
+  calls.length = 0;
+  handler = (u) => (u.endsWith("/oauth/revoke") ? json({}) : json({}, 404));
+  await acct.disconnect(UID);
+  const revokes = calls.filter((c) => c.url.endsWith("/oauth/revoke"));
+  const auth = new Headers(revokes[0]?.init.headers).get("Authorization");
+  check("revokes the refresh token once, in the body, with Basic client auth", [revokes.length, String(revokes[0]?.init.body), auth], [1, "token=RT", "Basic " + btoa("OC-test:shh")]);
+  check("...then forgets everything", store.data.size, 0);
+
+  await acct.saveTokens(UID, { access_token: "AT2", refresh_token: "DEAD", expires_at: Math.floor(Date.now() / 1000) + 3600 });
+  calls.length = 0;
+  handler = (u, init) => (u.endsWith("/oauth/revoke") ? json({ code: "invalid_grant" }, String(init.body) === "token=DEAD" ? 400 : 200) : json({}, 404));
+  await acct.disconnect(UID);
+  check("refresh token refused: the access token is revoked too", calls.filter((c) => c.url.endsWith("/oauth/revoke")).map((c) => String(c.init.body)), ["token=DEAD", "token=AT2"]);
+
+  await acct.saveTokens(UID, { access_token: "AT3", refresh_token: "RT3", expires_at: 0 });
+  handler = () => { throw new Error("Canva down"); };
+  await acct.disconnect(UID);
+  check("Canva down: still forgets everything", store.data.size, 0);
+
+  calls.length = 0;
+  await acct.disconnect(UID);
+  check("nothing connected: no call to Canva", calls.length, 0);
+}
+
 /* ── importing a file ── */
 console.log("import");
 {
