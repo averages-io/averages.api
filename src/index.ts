@@ -152,6 +152,7 @@ import type { CloudStore } from "./cloudStore.ts";
 import type { BillingStore } from "./billingStore.ts";
 import { calendarRoutes, forgetCalendar } from "./calendar.ts";
 import { hasPlusNow, plusRequired } from "./plus.ts";
+import { liveCourses, liveEvery } from "./liveGrades.ts";
 import { billingRoutes, stripeWebhookRoutes, type BillingRouteEnv, type BillingStoreApi } from "./billingRoutes.ts";
 import type { PushStore } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
@@ -1132,6 +1133,32 @@ app.get("/data/bundle", requireSession, async (c) => {
       return c.json({ error: "schoology_error", status: error.status }, 502);
     }
     return c.json({ error: "unexpected_error" }, 500);
+  }
+});
+
+/**
+ * Live grades (2026-10-27, src/liveGrades.ts): each class's grade from one
+ * Schoology call, for the app's open pages to roll changed numbers. `next` is
+ * how many seconds to wait before asking again (Plus: sooner). Demo and
+ * Google Classroom sign-ins get `COURSES: null`, which tells the app to stop.
+ */
+app.get("/data/grades", requireSession, async (c) => {
+  const session = c.get("session");
+  c.header("Cache-Control", "private, no-store");
+  if (isDemo(session) || isGoogle(session)) return c.json({ COURSES: null, next: 0 });
+  // Billing off: every Plus perk is free, this one included.
+  let plus = !plusRequired(c.env as any);
+  if (!plus) {
+    try { plus = await hasPlusNow(c.env as any, session.uid, c.req.url); } catch { plus = false; }
+  }
+  try {
+    const grades = await getGrades(session.uid, session);
+    return c.json({ generatedAt: new Date().toISOString(), next: liveEvery(plus), COURSES: liveCourses(grades) });
+  } catch (error) {
+    if (error instanceof SchoologyError) {
+      return c.json({ error: "schoology_error", status: error.status, next: liveEvery(plus) }, 502);
+    }
+    return c.json({ error: "unexpected_error", next: liveEvery(plus) }, 500);
   }
 });
 

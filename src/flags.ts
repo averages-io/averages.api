@@ -16,6 +16,8 @@
  *   billing                        Averages Plus checkout and "Manage plan" (off until launch; 2026-10-21).
  *                                  Plus status and Stripe's webhook stay open while it's off.
  *   calendar-sync                  the Plus calendar link (src/calendar.ts; 2026-10-21)
+ *   live-grades                    open pages re-check grades every few minutes and roll
+ *                                  changed numbers (src/liveGrades.ts; 2026-10-27)
  *
  * Early access (2026-10-21, an Averages Plus perk): a switch that's off for
  * everyone can be on for Plus members first. The keys are listed in the
@@ -52,6 +54,7 @@ export const DEFAULTS = {
   "notifications-features": true,
   billing: false,
   "calendar-sync": true,
+  "live-grades": true,
 } as const;
 
 export type FeatureKey = keyof typeof DEFAULTS;
@@ -171,5 +174,6 @@ export function featureForRoute(method: string, path: string): FeatureKey[] {
   if (path === "/billing/checkout" || path === "/billing/portal") need.push("billing");
   // Turning the calendar link off stays open, like notifications.
   if ((path === "/calendar" || path.startsWith("/calendar/")) && m !== "DELETE") need.push("calendar-sync");
+  if (path === "/data/grades") need.push("live-grades");
   return need;
 }
