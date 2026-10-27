@@ -18,6 +18,7 @@ import {
   MANAGED_PAYMENTS_VERSION,
   clearPriceCache,
   hasPlus,
+  priceOf,
   publicStatus,
   stripeForm,
   updateFromEvent,
@@ -138,7 +139,7 @@ check("Stripe form encoding: nested and arrays",
   stripeForm({ mode: "subscription", line_items: [{ price: "price_1", quantity: 1 }], managed_payments: { enabled: "true" }, skip: undefined }),
   "mode=subscription&line_items%5B0%5D%5Bprice%5D=price_1&line_items%5B0%5D%5Bquantity%5D=1&managed_payments%5Benabled%5D=true");
 check("Plus statuses", ["active", "trialing", "past_due", "canceled", "incomplete", "unpaid", ""].map(hasPlus), [true, true, true, false, false, false, false]);
-check("no record: no Plus", publicStatus(null), { plus: false, status: "none", renewsAt: null, cancelAtPeriodEnd: false, manageable: false });
+check("no record: no Plus", publicStatus(null), { plus: false, status: "none", renewsAt: null, cancelAtPeriodEnd: false, manageable: false, price: null });
 
 {
   const payload = JSON.stringify({ id: "evt_x", type: "ping", data: { object: {} } });
@@ -161,6 +162,11 @@ check("event: subscription without our uid ignored", updateFromEvent({ id: "e", 
 check("event: subscription deleted -> canceled", updateFromEvent({ id: "e", type: "customer.subscription.deleted", created: 5, data: { object: subscription("123", "active") } })?.status, "canceled");
 check("event: period end from the items (newer API versions)", updateFromEvent({ id: "e", type: "customer.subscription.updated", data: { object: subscription("123", "active") } })?.periodEnd, 1800000000);
 check("event: period end on the subscription (older versions)", updateFromEvent({ id: "e", type: "customer.subscription.updated", data: { object: subscription("123", "active", { current_period_end: 1700000000, items: { data: [] } }) } })?.periodEnd, 1700000000);
+// Plan price for Settings > Plus (2026-10-27).
+const PRICED = { items: { data: [{ id: "si_1", current_period_end: 1800000000, price: { unit_amount: 299, currency: "USD", recurring: { interval: "month", interval_count: 1 } } }] } };
+check("price: amount, currency (lowercased), interval", priceOf(PRICED), { amount: 299, currency: "usd", interval: "month", intervalCount: 1 });
+check("price: missing or odd prices are null", [priceOf({}), priceOf({ items: { data: [{ price: { unit_amount: "299", currency: "usd", recurring: { interval: "month" } } }] } }), priceOf({ items: { data: [{ price: { unit_amount: 299, currency: "dollars", recurring: { interval: "month" } } }] } }), priceOf({ items: { data: [{ price: { unit_amount: 299, currency: "usd" } }] } })], [null, null, null, null]);
+check("event: the subscription's price rides along", updateFromEvent({ id: "e", type: "customer.subscription.updated", data: { object: subscription("123", "active", PRICED) } })?.price, { amount: 299, currency: "usd", interval: "month", intervalCount: 1 });
 check("event: something else ignored", updateFromEvent({ id: "e", type: "invoice.paid", data: { object: { id: "in_1" } } }), null);
 
 {
@@ -171,7 +177,7 @@ check("event: something else ignored", updateFromEvent({ id: "e", type: "invoice
   check("the same event again: nothing changes", await acct.apply({ uid: "u", eventId: "e1", created: 100, status: "canceled" }), false);
   check("…still Plus", (await acct.status()).plus, true);
   await acct.apply({ uid: "u", eventId: "e2", created: 200, subscriptionId: "sub_A", status: "past_due" });
-  check("past due: still Plus while Stripe retries", (await acct.status()), { plus: true, status: "past_due", renewsAt: null, cancelAtPeriodEnd: false, manageable: true });
+  check("past due: still Plus while Stripe retries", (await acct.status()), { plus: true, status: "past_due", renewsAt: null, cancelAtPeriodEnd: false, manageable: true, price: null });
   check("an older event arriving late doesn't undo a newer one", await acct.apply({ uid: "u", eventId: "e3", created: 150, subscriptionId: "sub_A", status: "active" }), false);
   check("…status stays past_due", (await acct.status()).status, "past_due");
   await acct.apply({ uid: "u", eventId: "e4", created: 300, subscriptionId: "sub_A", status: "canceled" });
@@ -187,7 +193,7 @@ console.log("\nroutes");
 const sam = await cookieFor("4001");
 {
   const r = await call("/billing/status", { cookie: sam });
-  check("status: no subscription yet", r.data, { enabled: true, configured: true, eligible: true, plus: false, status: "none", renewsAt: null, cancelAtPeriodEnd: false, manageable: false });
+  check("status: no subscription yet", r.data, { enabled: true, configured: true, eligible: true, plus: false, status: "none", renewsAt: null, cancelAtPeriodEnd: false, manageable: false, price: null });
   check("status: needs a session", (await call("/billing/status")).res.status, 401);
   const off = await call("/billing/status", { cookie: sam, env: { ...BASE_ENV, FEATURES_ON: "" } });
   check("switch off (the default): status still answers, enabled false", [off.res.status, off.data.enabled], [200, false]);
@@ -253,7 +259,11 @@ console.log("\nwebhook");
   const again = await call("/billing/checkout", { method: "POST", cookie: sam, json: {} });
   check("…and can't check out twice", [again.res.status, again.data.error], [409, "billing_already_subscribed"]);
 
+  check("…no price known before a subscription event", s.price, null);
+  await webhook("customer.subscription.updated", subscription("4001", "active", { items: { data: [{ id: "si_1", current_period_end: 1800000000, price: { unit_amount: 299, currency: "usd", recurring: { interval: "month", interval_count: 1 } } }] } }));
+  check("status shows the price after one (never card details)", (await call("/billing/status", { cookie: sam })).data.price, { amount: 299, currency: "usd", interval: "month", intervalCount: 1 });
   await webhook("customer.subscription.updated", subscription("4001", "active", { cancel_at_period_end: true }));
+  check("…and keeps it when a later event has no price", (await call("/billing/status", { cookie: sam })).data.price?.amount, 299);
   const s2 = (await call("/billing/status", { cookie: sam })).data;
   check("set to cancel: still Plus until the period ends, with the date", [s2.plus, s2.cancelAtPeriodEnd, s2.renewsAt], [true, true, 1800000000 * 1000]);
 
