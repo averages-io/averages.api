@@ -919,6 +919,13 @@ app.get("/sync/settings", requireSession, async (c) => {
 
 app.put("/sync/settings", requireSession, async (c) => {
   const session = c.get("session");
+  // Same cross-origin guard every other mutating route carries (2026-10-28
+  // sweep): SameSite=Lax and the CORS preflight already stop a browser CSRF to
+  // this JSON PUT, but the explicit Origin check is the third layer the rest of
+  // the API has, so a misconfig in either of the other two can't open a hole
+  // in the one route that writes the synced settings blob.
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
   if (isDemo(session)) {
     return c.json({ error: "not_available_in_demo" }, 403);
   }
@@ -990,6 +997,11 @@ app.put("/sync/settings", requireSession, async (c) => {
  */
 app.delete("/sync/settings", requireSession, async (c) => {
   const session = c.get("session");
+  // The same Origin guard as the PUT above (2026-10-28 sweep): deleting the
+  // synced settings and the R2 pictures is a state change, so it gets the
+  // explicit cross-origin check too.
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
   if (isDemo(session)) {
     return c.json({ error: "not_available_in_demo" }, 403);
   }
