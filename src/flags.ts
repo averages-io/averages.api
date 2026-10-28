@@ -18,6 +18,8 @@
  *   calendar-sync                  the Plus calendar link (src/calendar.ts; 2026-10-21)
  *   live-grades                    open pages re-check grades every few minutes and roll
  *                                  changed numbers (src/liveGrades.ts; 2026-10-27)
+ *   fullscreen-onboarding          the Fullscreen look in onboarding (app only, no API routes;
+ *                                  off until it's ready; 2026-10-28)
  *
  * Early access (2026-10-21, an Averages Plus perk): a switch that's off for
  * everyone can be on for Plus members first. The keys are listed in the
@@ -55,6 +57,7 @@ export const DEFAULTS = {
   billing: false,
   "calendar-sync": true,
   "live-grades": true,
+  "fullscreen-onboarding": false,
 } as const;
 
 export type FeatureKey = keyof typeof DEFAULTS;
