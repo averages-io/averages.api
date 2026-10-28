@@ -297,6 +297,23 @@ const CAL_ENV = { ...BILLING_ON, FEATURES_ON: "billing" };
   check("after 10 minutes: read again", [(await call(calApp, "GET", url.pathname, { env: CAL_ENV })).status, calendarReads], [200, 2]);
   clock += 11 * 60 * 1000;
 
+  // Settings > Time Zone (2026-10-28): /calendar/touch carries the student's zone to the feed.
+  {
+    const feedName = `f:${await tokenHash(token)}`;
+    const tzOf = () => (recs.get(feedName) as any)?.tz;
+    check("time zone: the link starts in the zone it was made in", tzOf(), "America/Los_Angeles");
+    const t1 = await call(calApp, "POST", "/calendar/touch", { cookie: ana, body: { tz: "America/New_York" }, env: CAL_ENV });
+    check("time zone: a touch with a new zone moves the feed to it", [t1.data?.on, tzOf()], [true, "America/New_York"]);
+    await call(calApp, "POST", "/calendar/touch", { cookie: ana, body: { tz: "Mars/Olympus_Mons" }, env: CAL_ENV });
+    check("time zone: a zone that isn't one changes nothing", tzOf(), "America/New_York");
+    await call(calApp, "POST", "/calendar/touch", { cookie: ana, body: {}, env: CAL_ENV });
+    check("time zone: no zone sent keeps the feed's (never the geo guess)", tzOf(), "America/New_York");
+    const nyc = await (await call(calApp, "GET", url.pathname, { env: CAL_ENV })).res.text();
+    check("time zone: the feed is written in it", nyc.includes("X-WR-TIMEZONE:America/New_York"), true);
+    await call(calApp, "POST", "/calendar/touch", { cookie: ana, body: { tz: "America/Los_Angeles" }, env: CAL_ENV });
+    clock += 11 * 60 * 1000;
+  }
+
   check("a token that isn't one: 404", (await call(calApp, "GET", "/calendar/" + "x".repeat(43) + ".ics", { env: CAL_ENV })).status, 404);
   check("not .ics: 404", (await call(calApp, "GET", "/calendar/" + token, { env: CAL_ENV })).status, 404);
 
