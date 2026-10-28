@@ -428,8 +428,15 @@ export function calendarRoutes(deps: CalendarDeps) {
       const feedStore = open(c.env, `f:${link.hash}`, c.req.url);
       const feed = (await feedStore.read()) as FeedRecord | null;
       if (!feed) return c.json({ ok: true, on: false });
+      // A new time zone (2026-10-28, Settings > Time Zone): the feed's due
+      // times follow it. Only a real zone the student sent; never the guess.
+      let body: any = {};
+      try { body = await c.req.json(); } catch { body = {}; }
+      const asked = typeof body?.tz === "string" && body.tz && safeTimeZone(body.tz) === body.tz ? body.tz : "";
+      const tz = asked && asked !== feed.tz ? asked : feed.tz;
       const cred = await sealCredential(session, c.env.PUSH_SECRET!);
-      if (cred && cred.exp > (feed.cred?.exp ?? 0)) await feedStore.write({ ...feed, cred, lastReadAt: 0 });
+      const freshCred = !!cred && cred.exp > (feed.cred?.exp ?? 0);
+      if (freshCred || tz !== feed.tz) await feedStore.write({ ...feed, ...(freshCred ? { cred: cred! } : {}), tz, lastReadAt: 0 });
       return c.json({ ok: true, on: true });
     } catch (err) {
       console.error("calendar_store_failed", err instanceof Error ? err.message : String(err));
