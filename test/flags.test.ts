@@ -14,7 +14,7 @@ function check(name: string, actual: unknown, expected: unknown) {
   else { failed++; console.log(`  FAIL  ${name}\n        expected: ${e}\n        actual:   ${a}`); }
 }
 
-check("14 switches, in Martin's order (billing and calendar-sync added 2026-10-21, live-grades 2026-10-27, fullscreen 2026-10-28)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "coursematerialpreview-feature", "turnin-feature", "messaging-features", "notifications-features", "billing", "calendar-sync", "live-grades", "fullscreen"]);
+check("15 switches, in Martin's order (billing and calendar-sync added 2026-10-21, live-grades 2026-10-27, fullscreen 2026-10-28, schoology-oauth 2026-10-29)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "coursematerialpreview-feature", "turnin-feature", "messaging-features", "notifications-features", "billing", "calendar-sync", "live-grades", "fullscreen", "schoology-oauth"]);
 check("live grades need live-grades; the bundle never does", [featureForRoute("GET", "/data/grades"), featureForRoute("GET", "/data/bundle")], [["live-grades"], []]);
 check("calendar routes need calendar-sync, except turning it off", [featureForRoute("GET", "/calendar/status"), featureForRoute("POST", "/calendar"), featureForRoute("GET", "/calendar/abc.ics"), featureForRoute("DELETE", "/calendar")], [["calendar-sync"], ["calendar-sync"], ["calendar-sync"], []]);
 {

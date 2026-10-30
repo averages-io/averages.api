@@ -25,6 +25,8 @@ import {
   adaptPeople,
   adaptSchoologyEvents,
   adaptUpdates,
+  classmateRows,
+  classroomClassmateRows,
   classroomTeacherRows,
   localDateTime,
   MAX_RANGE_DAYS,
@@ -32,6 +34,7 @@ import {
   parseRange,
   refused,
   runPool,
+  safePhoto,
   schoologyEvent,
   teacherRows,
 } from "../src/extras.ts";
@@ -398,6 +401,37 @@ console.log("\nfolders");
   );
   check("Classroom topics as top-level folders", topics.folders, [{ id: "t5", title: "Unit 1", parent: "", color: "" }, { id: "t6", title: "Unit 2", parent: "", color: "" }]);
   check("placement for coursework and materials in known topics", topics.placement, { "assignment:900": "t5", "material:950": "t6" });
+}
+
+/* ── Classmates (2026-10-28) ───────────────────────────────────────────── */
+
+console.log("\nclassmates");
+{
+  const rows = classmateRows([
+    { uid: "7002", name_display: "Riley Student", admin: 0, picture_url: "https://asset-cdn.schoology.com/system/files/imagecache/profile_reg/pictures/picture-1.jpg" },
+    { uid: "7001", name_first: "Sam", name_last: "Classmate", admin: "0", status: "1", picture_url: "http://asset-cdn.schoology.com/p.jpg" },
+    { uid: "5001", name_display: "Mr. Cho", admin: "1" },
+    { uid: "7003", name_display: "Gone Student", admin: 0, status: "2" },
+    { uid: "1001", name_display: "Me Myself", admin: 0 },
+    { uid: "7004", name_display: "<b>Tag</b> Kid", admin: 0, picture_url: "https://evil.example.com/a.jpg" },
+    { uid: "../x", name_display: "Bad Id", admin: 0 },
+    { uid: "7005", name_display: "", admin: 0 },
+  ], "1001");
+  check("students only, active, not me, digits only, sorted by name, tags stripped", rows.map((r) => [r.id, r.name]), [["7002", "Riley Student"], ["7001", "Sam Classmate"], ["7004", "Tag Kid"]]);
+  check("pictures: https on schoology.com only", rows.map((r) => r.photo), ["https://asset-cdn.schoology.com/system/files/imagecache/profile_reg/pictures/picture-1.jpg", "", ""]);
+  check("safePhoto refuses defaults, ports, credentials, other hosts", [
+    safePhoto("https://app.schoology.com/sites/all/themes/schoology_theme/images/user-default.gif"),
+    safePhoto("https://x.schoology.com:8443/p.jpg"),
+    safePhoto("https://a:b@x.schoology.com/p.jpg"),
+    safePhoto("https://schoology.com.evil.net/p.jpg"),
+    safePhoto("javascript:alert(1)"),
+    safePhoto(42),
+  ], ["", "", "", "", "", ""]);
+  check("Classroom students: names only, never me, no photos", classroomClassmateRows([
+    { userId: "100000000000000000003", profile: { name: { fullName: "Kai Park" }, photoUrl: "https://lh3.googleusercontent.com/x" } },
+    { userId: "100000000000000000009", profile: { name: { fullName: "Me" } } },
+    { userId: "bad", profile: { name: { fullName: "Nope" } } },
+  ], "100000000000000000009"), [{ id: "100000000000000000003", name: "Kai Park", photo: "" }]);
 }
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */

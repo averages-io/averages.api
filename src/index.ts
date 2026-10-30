@@ -98,6 +98,22 @@ import {
 import { cloudConfig } from "./cloud.ts";
 import { CLOUD_APPS, cloudConfigured, isCloudApp, statusForCloudCode, type CloudApp } from "./cloudConnect.ts";
 import { schoolsFor } from "./schools.ts";
+import {
+  OAUTH_PURPOSE,
+  OAUTH_TTL_SECONDS,
+  OAuthError,
+  accessToken,
+  authorizeUrl,
+  clearPendingCookie,
+  consumerFrom,
+  isSandboxConsumer,
+  pendingCookie,
+  requestToken,
+  sameToken,
+  schoolDomain,
+  validPending,
+  OAUTH_COOKIE,
+} from "./schoologySignin.ts";
 import { enqueueMany, enqueueRetry, handleRetryBatch, type RetryHandlers, type RetryMessage } from "./retryQueue.ts";
 import { withFlags, featureOn, featureForRoute, earlyKey, FEATURE_KEYS, type FeatureKey, type Features } from "./flags.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
@@ -325,6 +341,13 @@ type Bindings = {
   /** Cloudflare Flagship (2026-10-08, optional): see src/flags.ts. */
   FLAGS?: { getBooleanValue(key: string, defaultValue: boolean, context?: Record<string, unknown>): Promise<boolean> };
   REVIEW_SECRET?: string;
+  /**
+   * Sign in with Schoology (2026-10-29, src/schoologySignin.ts): the consumer
+   * key and secret PowerSchool issues for the app. Runtime SECRETS. Unset = the
+   * sign-in page keeps saying it's coming soon.
+   */
+  SCHOOLOGY_CONSUMER_KEY?: string;
+  SCHOOLOGY_CONSUMER_SECRET?: string;
   /**
    * Optional developer secret (16+ characters). The schools admin endpoint it
    * was made for is gone (2026-10-17); it now only also unlocks the temporary
@@ -756,6 +779,103 @@ app.delete("/auth/session", async (c) => {
 });
 
 /* ────────────────────────────────────────────────────────────────────
+ * Sign in with Schoology (2026-10-29): three-legged OAuth, see
+ * src/schoologySignin.ts. The browser navigates to these, so every answer is
+ * a redirect: to the school's Schoology, or back to the sign-in page (with
+ * ?signin_error=<code>#schoology when something went wrong).
+ * ──────────────────────────────────────────────────────────────────── */
+
+/** Is Sign in with Schoology ready? The sign-in page asks before showing it. */
+app.get("/auth/schoology/status", (c) => {
+  const consumer = consumerFrom(c.env);
+  const sandbox = isSandboxConsumer(consumer);
+  const on = !!consumer && featureOn(c.env, "schoology-oauth") && (!sandbox || featureOn(c.env, "test-signin"));
+  c.header("Cache-Control", "no-store");
+  return c.json({ on });
+});
+
+function signinBack(c: any, code: string) {
+  return c.redirect(`${appOrigin(c.req.url)}/?signin_error=${encodeURIComponent(code)}#schoology`, 302);
+}
+
+/** The sandbox's stand-in for Schoology's token calls (testing without real keys). */
+async function sandboxTokens(url: string): Promise<Response> {
+  const rand = () => [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const kind = url.endsWith("/request_token") ? "req" : "acc";
+  return new Response(`oauth_token=sbx-${kind}-${rand()}&oauth_token_secret=sbx-${kind}-secret-${rand()}`, { status: 200, headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+}
+
+app.get("/auth/schoology/start", async (c) => {
+  const consumer = consumerFrom(c.env);
+  if (!consumer) return signinBack(c, "not_configured");
+  const sandbox = isSandboxConsumer(consumer);
+  if (!featureOn(c.env, "schoology-oauth") || (sandbox && !featureOn(c.env, "test-signin"))) return signinBack(c, "feature_off");
+  if (!c.env.SESSION_SECRET) return signinBack(c, "server_misconfigured");
+  const domain = schoolDomain(c.req.query("domain"));
+  if (!domain) return signinBack(c, "unknown_school");
+  try {
+    const req = await requestToken(consumer, sandbox ? (url) => sandboxTokens(url) : undefined);
+    const secure = !isLocalRequest(c.req.url);
+    const sealed = await sealValue({ t: req.token, s: req.secret, d: domain, u13: c.req.query("under13") === "1" }, c.env.SESSION_SECRET, OAUTH_PURPOSE, OAUTH_TTL_SECONDS);
+    c.header("Set-Cookie", pendingCookie(sealed, secure));
+    c.header("Cache-Control", "no-store");
+    const callback = `${new URL(c.req.url).origin}/auth/schoology/callback`;
+    // The sandbox approves on a page of our own (no real Schoology to go to).
+    const to = sandbox ? `${new URL(c.req.url).origin}/auth/schoology/sandbox-authorize?oauth_token=${encodeURIComponent(req.token)}&oauth_callback=${encodeURIComponent(callback)}` : authorizeUrl(domain, req.token, callback);
+    return c.redirect(to, 302);
+  } catch (error) {
+    const code = error instanceof OAuthError ? error.code : "schoology_error";
+    if (!(error instanceof OAuthError)) console.error("schoology_signin_start_failed", error);
+    return signinBack(c, code);
+  }
+});
+
+/** Testing only: "approves" straight away, like a student clicking Approve on Schoology. */
+app.get("/auth/schoology/sandbox-authorize", (c) => {
+  if (!isSandboxConsumer(consumerFrom(c.env)) || !featureOn(c.env, "test-signin")) return c.json({ error: "not_found" }, 404);
+  const token = c.req.query("oauth_token") ?? "";
+  const back = new URL(c.req.url);
+  return c.redirect(`${back.origin}/auth/schoology/callback?oauth_token=${encodeURIComponent(token)}`, 302);
+});
+
+app.get("/auth/schoology/callback", async (c) => {
+  const secure = !isLocalRequest(c.req.url);
+  c.header("Set-Cookie", clearPendingCookie(secure), { append: true });
+  c.header("Cache-Control", "no-store");
+  const consumer = consumerFrom(c.env);
+  if (!consumer) return signinBack(c, "not_configured");
+  if (!c.env.SESSION_SECRET) return signinBack(c, "server_misconfigured");
+  const sandbox = isSandboxConsumer(consumer);
+  if (!featureOn(c.env, "schoology-oauth") || (sandbox && !featureOn(c.env, "test-signin"))) return signinBack(c, "feature_off");
+  const sealed = readCookie(c.req.header("Cookie") ?? null, OAUTH_COOKIE);
+  const pending = sealed ? await openValue(sealed, c.env.SESSION_SECRET, OAUTH_PURPOSE) : null;
+  if (!validPending(pending)) return signinBack(c, "expired");
+  const token = c.req.query("oauth_token") ?? "";
+  // No token back means they said no (or closed it); a different one isn't this browser's sign-in.
+  if (!token) return signinBack(c, "denied");
+  if (!sameToken(token, pending.t)) return signinBack(c, "expired");
+  try {
+    const acc = await accessToken(consumer, { token: pending.t, secret: pending.s }, sandbox ? (url) => sandboxTokens(url) : undefined);
+    const creds = sandbox
+      ? { key: SANDBOX_KEY, secret: SANDBOX_SECRET, token: acc.token, tokenSecret: acc.secret }
+      : { key: consumer.key, secret: consumer.secret, token: acc.token, tokenSecret: acc.secret };
+    const me = await getMe(creds);
+    const uid = sandbox ? REVIEW_UID : String(me.uid ?? me.id ?? "");
+    if (!uid) return signinBack(c, "no_user_id");
+    const p = profileFrom(me);
+    // The access token rides in the sealed session cookie, like a personal key does: never stored on our servers.
+    const session = await sealSession({ ...creds, uid, p, ...(pending.u13 ? { inc: true as const } : {}) }, c.env.SESSION_SECRET);
+    c.header("Set-Cookie", sessionCookie(session, COOKIE_DOMAIN), { append: true });
+    return c.redirect(`${appOrigin(c.req.url)}/?signin=schoology`, 302);
+  } catch (error) {
+    if (error instanceof OAuthError) return signinBack(c, error.code);
+    if (error instanceof SchoologyError) return signinBack(c, error.status === 401 || error.status === 403 ? "schoology_refused" : "schoology_error");
+    console.error("schoology_signin_callback_failed", error);
+    return signinBack(c, "schoology_error");
+  }
+});
+
+/* ────────────────────────────────────────────────────────────────────
  * Sign in with Google (Google Classroom) was removed on 2026-10-19: the public
  * beta is Schoology only. With /auth/google/start and /auth/google/callback
  * gone there is no way to get a Google session, so the Classroom branches
@@ -1008,6 +1128,96 @@ app.delete("/sync/settings", requireSession, async (c) => {
   await deleteSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
   // The profile photo and background in R2 (src/media.ts) are Sync data too.
   await deleteAllMedia(c.env.MEDIA as unknown as MediaBucket | undefined, session.uid);
+  return c.json({ ok: true });
+});
+
+/* ────────────────────────────────────────────────────────────────────
+ * Your data (2026-10-28, Martin: Settings > Privacy's "Download your data"
+ * and "Delete your account", from the Fullscreen pages).
+ *
+ * GET /account/export: one JSON file of everything Averages.io keeps about
+ * this student, put together from the same answers the app already reads
+ * (each asked inside this Worker with the student's own cookie, so it shows
+ * exactly what those routes would): synced settings, which pictures are
+ * stored, notifications, the calendar link, Plus, connected apps. Pictures
+ * themselves aren't inlined (the synced settings name them); grades and files
+ * aren't ours, they stay in Schoology.
+ *
+ * DELETE /account: deletes all of that and signs out. Refused while Plus is
+ * active or ending (cancel in Manage payment first): the payment record has to
+ * stay while a subscription can still charge or refund. After Plus ends, the
+ * record left is the receipts Stripe keeps for the law, not ours to delete.
+ * ──────────────────────────────────────────────────────────────────── */
+async function askSelf(c: any, method: string, path: string): Promise<any> {
+  try {
+    const headers: Record<string, string> = { cookie: c.req.header("cookie") ?? "" };
+    const origin = c.req.header("origin");
+    if (origin) headers.origin = origin;
+    if (method === "POST") headers["content-type"] = "application/json";
+    const r = await app.request(new URL(path, c.req.url).href, { method, headers, ...(method === "POST" ? { body: "{}" } : {}) }, c.env, c.executionCtx);
+    if (!r.ok) return { unavailable: r.status };
+    return await r.json();
+  } catch {
+    return { unavailable: true };
+  }
+}
+/** A synced settings blob with its pictures named, not copied (they can be megabytes). */
+function withoutPictures(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return /^data:image\//.test(value) ? `[picture, ${value.length} characters]` : value;
+  if (depth > 8 || value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.slice(0, 500).map((v) => withoutPictures(v, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = withoutPictures(v, depth + 1);
+  return out;
+}
+
+app.get("/account/export", requireSession, async (c) => {
+  const session = c.get("session");
+  c.header("Cache-Control", "private, no-store");
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  const [sync, push, calendar, billing, cloud, canva] = await Promise.all([
+    isIncognito(session) ? Promise.resolve(null) : loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid).catch(() => ({ unavailable: true })),
+    askSelf(c, "POST", "/push/status"),
+    askSelf(c, "GET", "/calendar/status"),
+    askSelf(c, "GET", "/billing/status"),
+    askSelf(c, "GET", "/cloud/status"),
+    askSelf(c, "GET", "/canva/status"),
+  ]);
+  c.header("Content-Disposition", 'attachment; filename="averages-io-data.json"');
+  return c.json({
+    about: "Everything Averages.io keeps about you, as of exportedAt. Your grades, assignments and files aren't kept by Averages.io: they stay in Schoology.",
+    exportedAt: new Date().toISOString(),
+    account: { id: session.uid, signIn: session.g ? "Google" : "Schoology", mode: isIncognito(session) ? "Incognito" : "Classic" },
+    syncedSettings: sync ? withoutPictures(sync) : null,
+    notifications: push,
+    calendarLink: calendar,
+    plus: billing,
+    connectedApps: { googleDriveAndOneDrive: cloud, canva },
+  });
+});
+
+app.delete("/account", requireSession, async (c) => {
+  const session = c.get("session");
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
+  c.header("Cache-Control", "private, no-store");
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  const billing = await askSelf(c, "GET", "/billing/status");
+  if (billing && billing.plus === true) return c.json({ error: "plus_active", status: billing.status ?? "" }, 409);
+  const results = await Promise.allSettled([
+    // No SYNC binding (a local setup without it): nothing was ever stored there.
+    c.env.SYNC ? deleteSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid) : Promise.resolve(),
+    deleteAllMedia(c.env.MEDIA as unknown as MediaBucket | undefined, session.uid),
+    forgetPush(c.env, session.uid, c.req.url),
+    forgetCalendar(c.env as any, session.uid, c.req.url),
+    forgetConnections(c.env, session.uid, c.req.url),
+  ]);
+  const failed = results.filter((r) => r.status === "rejected").length;
+  for (const r of results) if (r.status === "rejected") console.error("account_delete_failed", r.reason);
+  if (failed) return c.json({ error: "delete_incomplete", failed }, 502);
+  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
+  c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
+  c.header("Set-Cookie", clearProfileCookie(!isLocalRequest(c.req.url)), { append: true });
   return c.json({ ok: true });
 });
 

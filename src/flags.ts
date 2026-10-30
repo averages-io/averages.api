@@ -7,6 +7,8 @@
  *   onedrive-integration           all of OneDrive
  *   drive-integration              all of Google Drive
  *   schoology-signin               signing in with a Schoology API key
+ *   schoology-oauth                Sign in with Schoology (three-legged OAuth; also needs the
+ *                                  SCHOOLOGY_CONSUMER_KEY / _SECRET secrets; 2026-10-29)
  *   test-signin                    the reviewer account (REVIEW_KEY / REVIEW_SECRET)
  *   maintenance-banner             a banner across the app (text: MAINTENANCE_MESSAGE)
  *   coursematerialpreview-feature  previews of course materials (not built yet: off)
@@ -59,6 +61,7 @@ export const DEFAULTS = {
   "calendar-sync": true,
   "live-grades": true,
   fullscreen: false,
+  "schoology-oauth": true,
 } as const;
 
 export type FeatureKey = keyof typeof DEFAULTS;

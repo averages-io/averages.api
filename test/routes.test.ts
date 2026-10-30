@@ -418,9 +418,10 @@ freshCalls();
   check("walked from the root, breadth first", f.folders, [{ id: "77", title: "Unit 1", parent: "", color: "" }, { id: "78", title: "Labs", parent: "77", color: "" }]);
   check("placement (root items sit at the top: not listed)", f.placement, { "assignment:601": "77", "document:502": "78" });
   check("course echoed, not partial", [f.course, f.partial], ["101", false]);
+  check("items: everything listed, top level too, with titles (2026-10-29)", f.items.map((x: any) => x.key + "@" + x.folder).sort(), ["assignment:601@77", "document:502@78", ...f.items.filter((x: any) => x.folder === "").map((x: any) => x.key + "@")].sort());
   check("folder calls use the section id", schoologyCalls().map((x) => x.path), ["/courses/101/folder/0", "/courses/101/folder/77", "/courses/101/folder/78"]);
   const none = await call("/data/folders?course=102", { cookie: schoologySession });
-  check("root 404: no folders, not an error", [none.status, await json(none)], [200, { course: "102", folders: [], placement: {}, partial: false }]);
+  check("root 404: no folders, not an error", [none.status, await json(none)], [200, { course: "102", folders: [], placement: {}, items: [], partial: false }]);
   check("ids digits only", [(await call("/data/folders?course=../1", { cookie: schoologySession })).status, (await call("/data/folders", { cookie: schoologySession })).status], [400, 400]);
 
   // A deep tree: at most 40 folders read, 3 at a time.

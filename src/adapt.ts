@@ -927,6 +927,23 @@ export function adaptRecentGrades(grades: Raw[], assignmentsBySection: Record<st
 }
 
 /**
+ * The extra details on a gradebook row (2026-10-28, the Fullscreen Grades
+ * page): when it was graded and due (ms), the teacher's comment, and
+ * Schoology's missing mark (exception 3). Only fields that have a value.
+ */
+function gradeExtras(graded: Raw | undefined, assignment: Raw | undefined): { gradedAt?: number; due?: number; comment?: string; missing?: boolean } {
+  const out: { gradedAt?: number; due?: number; comment?: string; missing?: boolean } = {};
+  const at = graded ? schoologyTime(graded.timestamp) : null;
+  if (at) out.gradedAt = at;
+  const due = assignment ? schoologyTime(assignment.due) : null;
+  if (due) out.due = due;
+  const comment = graded && String(graded.comment_status ?? "1") !== "0" ? clip(toPlainText(graded.comment ?? ""), 400).trim() : "";
+  if (comment) out.comment = comment;
+  if (graded && num(graded.exception) === 3) out.missing = true;
+  return out;
+}
+
+/**
  * One course's Grades tab for Schoology (the gradebook page's GRADEBOOK
  * shape, same as Classroom's): the class's grading categories with their
  * weights, each holding the work worth points in it, oldest first.
@@ -962,7 +979,7 @@ export function adaptSchoologyGradebook(input: { categories: Raw[] | null; grade
     const title = toPlainText(a?.title ?? "").slice(0, 200) || "Untitled";
     const score = scoreOf(graded);
     rows.push({
-      row: score ? { title, score: score.earned, points, graded: true, id } : { title, points, graded: false, id },
+      row: { ...(score ? { title, score: score.earned, points, graded: true, id } : { title, points, graded: false, id }), ...gradeExtras(graded, a) },
       category: String(a?.grading_category ?? graded?.category_id ?? ""),
       at: schoologyTime(a?.due) ?? schoologyTime(graded?.timestamp) ?? Number.MAX_SAFE_INTEGER,
     });
@@ -974,7 +991,7 @@ export function adaptSchoologyGradebook(input: { categories: Raw[] | null; grade
     const score = scoreOf(row);
     if (!score) continue;
     rows.push({
-      row: { title: "Assignment", score: score.earned, points: score.possible, graded: true, id },
+      row: { title: "Assignment", score: score.earned, points: score.possible, graded: true, id, ...gradeExtras(row, undefined) },
       category: String(row?.category_id ?? ""),
       at: schoologyTime(row?.timestamp) ?? Number.MAX_SAFE_INTEGER,
     });

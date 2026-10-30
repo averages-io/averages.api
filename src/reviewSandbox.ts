@@ -24,6 +24,7 @@
 import type { Credentials } from "./oauth.ts";
 import { schoologyLocalMs } from "./adapt.ts";
 import {
+  CLASSMATES,
   FILES,
   SANDBOX_ZONE,
   SCHOOL_EVENTS,
@@ -634,8 +635,15 @@ function get(path: string[], url: URL, now: number): Response {
       return d ? json(200, documentJson(s, d, now, withAttachments)) : notFound();
     }
     if (path.length === 3) {
-      // Teachers only, whatever `type` asks for: a classmate's name never comes from here.
-      if (sub === "enrollments") return json(200, { enrollment: [teacherEnrollment(s)], total: 1 });
+      // type=member: the invented classmates (CLASSMATES); anything else: the teacher.
+      if (sub === "enrollments") {
+        if (url.searchParams.get("type") === "member") {
+          const index = SECTIONS.indexOf(s);
+          const members = CLASSMATES.filter((m) => m.sections.includes(index)).map((m) => ({ id: `${m.uid.slice(-3)}${s.id.slice(-3)}`, uid: m.uid, name_first: m.first, name_last: m.last, name_display: `${m.first} ${m.last}`, admin: 0, status: 1, picture_url: "" }));
+          return json(200, { enrollment: members, total: members.length });
+        }
+        return json(200, { enrollment: [teacherEnrollment(s)], total: 1 });
+      }
       if (sub === "updates") {
         const updates = [...s.updates]
           .sort((a, b) => a.hoursAgo - b.hoursAgo)
@@ -702,6 +710,14 @@ function post(path: string[], body: unknown, now: number): Response {
   const parsed = bodyJson(body);
   if (path[0] === "messages" && (path.length === 1 || (path.length === 2 && /^\d+$/.test(path[1])))) return sendMessage(path, parsed, now);
   if (path[0] === "upload" && path.length === 1) return startUpload(parsed, now);
+  // Joining with a class code (2026-10-28): "SAMPLE-JOIN" is accepted (nothing changes: the sample classes are
+  // fixed), "SAMPLE-CLOSED" is refused like a closed class, any other code is unknown.
+  if (path[0] === "sections" && path[1] === "accesscode" && path.length === 2) {
+    const code = String((parsed as any)?.access_code ?? "").toUpperCase();
+    if (code === "SAMPLE-JOIN") return json(200, { id: "54179017", uid: REVIEW_UID, section_id: SECTIONS[0].id, admin: 0, status: "1" });
+    if (code === "SAMPLE-CLOSED") return json(403, { error: "This course isn't accepting new members." });
+    return json(404, { error: "Access code not found." });
+  }
   if (path[0] === "sections" && path[2] === "submissions" && path.length === 5 && (path[4] === "file" || path[4] === "create")) {
     const s = sectionById(path[1]);
     const a = s ? assignmentIn(s, path[3]) : null;

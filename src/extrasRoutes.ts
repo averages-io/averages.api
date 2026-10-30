@@ -2,7 +2,7 @@
  * Routes for the per-page extras and Schoology messages (2026-10-06),
  * mounted by index.ts:
  *
- *   app.route("/data", dataExtrasRoutes(deps))      people, updates, events, folders, gradebook
+ *   app.route("/data", dataExtrasRoutes(deps))      people, classmates, updates, events, folders, gradebook
  *   app.route("/messages", messagesRoutes(deps))    list, thread, send, reply, recipients
  *
  * The work is in extras.ts and messages.ts; this file only checks the
@@ -15,9 +15,11 @@
 import { Hono } from "hono";
 import { CALL_BUDGET, CallBudget, CLASSROOM_ID_RE } from "./classroom.ts";
 import {
+  fetchClassroomClassmates,
   fetchClassroomEvents,
   fetchClassroomFolders,
   fetchClassroomPeople,
+  fetchSchoologyClassmates,
   fetchSchoologyEvents,
   fetchSchoologyFolders,
   fetchSchoologyGradebook,
@@ -40,6 +42,7 @@ import {
   sendReply,
 } from "./messages.ts";
 import { SchoologyError } from "./schoology.ts";
+import { schoologyPostJson } from "./submit.ts";
 import { isDemoSession, isGoogleSession, type SessionData } from "./session.ts";
 
 export interface ExtrasDeps {
@@ -104,6 +107,54 @@ export function dataExtrasRoutes(deps: ExtrasDeps) {
     try {
       return c.json(await fetchSchoologyPeople(session.uid, session));
     } catch (error) {
+      return schoologyFailure(c, error);
+    }
+  });
+
+  // Classmates (2026-10-28): names and Schoology pictures, per class. See fetchSchoologyClassmates.
+  app.get("/classmates", deps.requireSession, guard, async (c: any) => {
+    const session = c.get("session");
+    if (isGoogleSession(session)) {
+      try {
+        const { token, budget, letters } = await classroom(c, session);
+        const answer = await fetchClassroomClassmates(token, letters, budget, String(session.uid ?? ""));
+        return c.json({ ...answer, partial: answer.partial || budget.cut });
+      } catch (error) {
+        return deps.classroomFailure(c, error);
+      }
+    }
+    try {
+      return c.json(await fetchSchoologyClassmates(session.uid, session));
+    } catch (error) {
+      return schoologyFailure(c, error);
+    }
+  });
+
+  /*
+   * Join a class with its access code (2026-10-28, the Fullscreen Courses page). Schoology's documented call
+   * is POST /{realm}/accesscode with { access_code }; the student only has the code, not the class's id, so
+   * this asks the sections realm without one. Not yet seen working against a real school (only the review
+   * sandbox): when Schoology won't take it, the answer is `not_joined` and the app sends the student to
+   * Schoology's own Join a Course. Google Classroom: not offered (its join needs a different sign-in scope).
+   */
+  app.post("/join", deps.requireSession, guard, async (c: any) => {
+    const foreign = deps.fromOurApp(c);
+    if (foreign) return foreign;
+    const session = c.get("session");
+    if (isGoogleSession(session)) return c.json({ error: "not_supported" }, 400);
+    const body = (await jsonBody(c)) as { code?: unknown } | null;
+    const code = typeof body?.code === "string" ? body.code.trim().toUpperCase() : "";
+    if (!/^[A-Z0-9][A-Z0-9-]{3,19}$/.test(code)) return c.json({ error: "bad_code" }, 400);
+    try {
+      const { status, json } = await schoologyPostJson("/sections/accesscode", session, { access_code: code });
+      if (status >= 200 && status < 300) {
+        const section = String(json?.section_id ?? json?.realm_id ?? json?.id ?? "");
+        return c.json({ ok: true, section: SCHOOLOGY_ID_RE.test(section) ? section : "" });
+      }
+      return c.json({ error: "not_joined", status }, 400);
+    } catch (error) {
+      // Schoology said no (a wrong code, a class that's closed to joining, or this call not being open to students).
+      if (error instanceof SchoologyError && error.status >= 400 && error.status < 500 && error.status !== 401 && error.status !== 429) return c.json({ error: "not_joined", status: error.status }, 400);
       return schoologyFailure(c, error);
     }
   });

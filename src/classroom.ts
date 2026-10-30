@@ -598,7 +598,15 @@ export interface GradebookCategory {
   name: string;
   /** Percent of the overall grade. */
   weight: number;
-  assignments: ({ title: string; score?: number; points: number; graded: boolean; id: string })[];
+  assignments: ({
+    title: string; score?: number; points: number; graded: boolean; id: string;
+    /** Added 2026-10-28 for the Fullscreen pages (optional, Schoology only for now): when it was graded and due (ms), */
+    gradedAt?: number; due?: number;
+    /** the teacher's comment on the grade (plain text, at most 400 characters), */
+    comment?: string;
+    /** and Schoology's "missing" mark (exception 3). */
+    missing?: boolean;
+  })[];
 }
 interface GradebookRow {
   row: GradebookCategory["assignments"][number];

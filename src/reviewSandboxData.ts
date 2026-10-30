@@ -606,3 +606,21 @@ export function titrationPng(): Uint8Array {
     return [250, 248, 242]; // paper
   });
 }
+
+/**
+ * Invented classmates (2026-10-28, for the Fullscreen Members tab and
+ * Contacts): uids 82000000xx, each in a few of the sample classes by index
+ * into SECTIONS. No pictures (the sandbox has no Schoology CDN).
+ */
+export const CLASSMATES: { uid: string; first: string; last: string; sections: number[] }[] = [
+  { uid: "8200000001", first: "Maya", last: "Chen", sections: [0, 1, 2] },
+  { uid: "8200000002", first: "Jordan", last: "Brooks", sections: [0, 3, 5] },
+  { uid: "8200000003", first: "Priya", last: "Nair", sections: [1, 2, 4] },
+  { uid: "8200000004", first: "Diego", last: "Santos", sections: [0, 4, 5] },
+  { uid: "8200000005", first: "Ella", last: "Fischer", sections: [2, 3] },
+  { uid: "8200000006", first: "Noah", last: "Kim", sections: [1, 3, 5] },
+  { uid: "8200000007", first: "Sofia", last: "Rossi", sections: [0, 2, 4] },
+  { uid: "8200000008", first: "Liam", last: "Okoro", sections: [1, 5] },
+  { uid: "8200000009", first: "Ava", last: "Martin", sections: [3, 4] },
+  { uid: "8200000010", first: "Ethan", last: "Walsh", sections: [0, 1, 3] },
+];

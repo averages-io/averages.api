@@ -9,7 +9,7 @@
  *
  * Limits, per minute (a sliding 60-second window):
  *
- *   sign-in   POST /auth/session, GET /auth/google/start   30 per IP
+ *   sign-in   POST /auth/session, GET /auth/schoology/start and /callback   30 per IP
  *   data      /data/*, GET /messages*, /auth/me, /sync     90 per student
  *   send      POST /messages*                              10 per student
  *   submit    /submit/*                                    90 per student
@@ -104,7 +104,7 @@ function under(path: string, prefix: string): boolean {
 /** Which rule a request counts against, or null for one that's never limited. */
 export function ruleFor(method: string, path: string): RateRule | null {
   if (method === "OPTIONS" || path === "/") return null;
-  if ((method === "POST" && path === "/auth/session") || (method === "GET" && (path === "/auth/google/start" || path === "/auth/google/callback"))) return RATE_RULES.signin;
+  if ((method === "POST" && path === "/auth/session") || (method === "GET" && (path === "/auth/google/start" || path === "/auth/google/callback" || path === "/auth/schoology/start" || path === "/auth/schoology/callback"))) return RATE_RULES.signin;
   if (method === "POST" && path === "/schools/apply") return RATE_RULES.apply;
   if (method === "POST" && path === "/schools/apply/code") return RATE_RULES.applyCode;
   if (method === "POST" && path === "/schools/apply/verify") return RATE_RULES.applyVerify;
@@ -113,7 +113,11 @@ export function ruleFor(method: string, path: string): RateRule | null {
   // Who's signed in, and Sync Across Devices: per student like the data (2026-10-06 review).
   if (path === "/auth/me" || under(path, "/sync")) return RATE_RULES.data;
   if (under(path, "/messages")) return method === "POST" ? RATE_RULES.send : RATE_RULES.data;
+  // Joining a class with a code (2026-10-28): each try is a write on Schoology, so the "send" limit.
+  if (method === "POST" && path === "/data/join") return RATE_RULES.send;
   if (under(path, "/data")) return RATE_RULES.data;
+  // Your data (2026-10-28): the export is a read; deleting the account counts like sending.
+  if (under(path, "/account")) return method === "GET" ? RATE_RULES.data : RATE_RULES.send;
   if (under(path, "/submit")) return RATE_RULES.submit;
   if (under(path, "/push")) return method === "GET" && path === "/push/config" ? null : RATE_RULES.push;
   if (method === "GET" && /^\/canva\/exports\/[^/]+$/.test(path)) return RATE_RULES.canvaPoll;

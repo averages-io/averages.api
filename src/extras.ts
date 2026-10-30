@@ -196,6 +196,119 @@ export async function fetchClassroomPeople(accessToken: string, letters: string,
   return adaptPeople("classroom", courses, byCourse);
 }
 
+/* ── Classmates (2026-10-28, Martin: the Fullscreen Contacts page and each
+ * class's Members tab show who's in the class) ──────────────────────────
+ *
+ * Only what Schoology itself shows a student on a course's Members page:
+ * each classmate's name and Schoology profile picture. No grades, emails
+ * or anything else, and never the student themself or the teachers (those
+ * come from /data/people). Classroom needs the optional rosters permission,
+ * the same one its teachers use.
+ */
+
+export interface Classmate {
+  id: string;
+  name: string;
+  /** Their Schoology picture (https, on schoology.com), or "" for the default one. */
+  photo: string;
+}
+
+/** Most classmates listed per class (Schoology's own page size). */
+export const MAX_CLASSMATES = 200;
+
+export async function getMemberEnrollments(sectionId: string, creds: Credentials): Promise<Raw[]> {
+  const payload = await schoologyGet(`/sections/${sectionId}/enrollments`, creds, { type: "member", limit: MAX_CLASSMATES });
+  return listOf(payload, "enrollment");
+}
+
+/** A profile picture we're willing to show: https on schoology.com (or its CDN), not the generic default. */
+export function safePhoto(url: unknown): string {
+  if (typeof url !== "string" || url.length > 600) return "";
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return "";
+  }
+  if (u.protocol !== "https:" || u.username || u.password || u.port) return "";
+  if (!/(^|\.)schoology\.com$/i.test(u.hostname)) return "";
+  if (/default|user-?default|\/pictures\/?$/i.test(u.pathname)) return "";
+  return u.href;
+}
+
+/** A section's students from its enrollments: not admins, active ones, never the student themself. */
+export function classmateRows(enrollments: Raw[], me: string): Classmate[] {
+  const out: Classmate[] = [];
+  for (const e of enrollments) {
+    if (String(e?.admin ?? "0") === "1") continue;
+    if (e?.status !== undefined && e?.status !== null && String(e.status) !== "1") continue;
+    const id = String(e?.uid ?? "");
+    if (!SCHOOLOGY_ID_RE.test(id) || id === me || out.some((t) => t.id === id)) continue;
+    const name = clip(toPlainText(e?.name_display ?? "") || toPlainText(`${e?.name_first ?? ""} ${e?.name_last ?? ""}`), 120).trim();
+    if (!name) continue;
+    out.push({ id, name, photo: safePhoto(e?.picture_url) });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out.slice(0, MAX_CLASSMATES);
+}
+
+/** A Classroom class's students (GET /courses/{id}/students); Classroom photos are Google's, so none are passed on. */
+export function classroomClassmateRows(students: Raw[], me: string): Classmate[] {
+  const out: Classmate[] = [];
+  for (const s of students) {
+    const id = String(s?.userId ?? s?.profile?.id ?? "");
+    if (!CLASSROOM_ID_RE.test(id) || id === me || out.some((x) => x.id === id)) continue;
+    const name = plain(s?.profile?.name?.fullName, 120);
+    if (!name) continue;
+    out.push({ id, name, photo: "" });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out.slice(0, MAX_CLASSMATES);
+}
+
+export interface ClassmatesAnswer {
+  /** Section id -> its classmates. A class whose list couldn't be read is left out (and `partial`). */
+  CLASSMATES: Record<string, Classmate[]>;
+  partial: boolean;
+  needsPermission: boolean;
+}
+
+export async function fetchSchoologyClassmates(uid: string, creds: Credentials): Promise<ClassmatesAnswer> {
+  const courses = await schoologyCourses(uid, creds);
+  const CLASSMATES: Record<string, Classmate[]> = {};
+  let partial = false;
+  await runPool(courses, SCHOOLOGY_CONCURRENCY, async (course) => {
+    try {
+      CLASSMATES[course.id] = classmateRows(await getMemberEnrollments(course.id, creds), uid);
+    } catch (error) {
+      // A school that hides rosters from students: an empty class, not an error.
+      if (refused(error)) CLASSMATES[course.id] = [];
+      else partial = true;
+    }
+  });
+  return { CLASSMATES, partial, needsPermission: false };
+}
+
+export async function fetchClassroomClassmates(accessToken: string, letters: string, budget: CallBudget, me: string): Promise<ClassmatesAnswer> {
+  if (!letters.includes("r")) return { CLASSMATES: {}, partial: false, needsPermission: true };
+  const raw = await listCourses(accessToken, budget);
+  const CLASSMATES: Record<string, Classmate[]> = {};
+  let partial = false;
+  await Promise.all(
+    raw.map(async (c) => {
+      const id = String(c.id);
+      try {
+        const { items } = await classroomList(`/courses/${encodeURIComponent(id)}/students`, "students", { pageSize: "100", fields: "students(userId,profile(id,name(fullName))),nextPageToken" }, accessToken, budget, 2);
+        CLASSMATES[id] = classroomClassmateRows(items, me);
+      } catch (error) {
+        if (error instanceof ClassroomError && (error.status === 403 || error.status === 404)) CLASSMATES[id] = [];
+        else partial = true;
+      }
+    })
+  );
+  return { CLASSMATES, partial, needsPermission: false };
+}
+
 /* ── Course updates ────────────────────────────────────────────────────── */
 
 export interface CourseUpdate {
@@ -552,14 +665,24 @@ export interface Folder {
   color: string;
 }
 
+/** One thing in a class's folders, for the Materials list: `kind:id`, its title, and its folder ("" = top level). */
+export interface FolderEntry {
+  key: string;
+  title: string;
+  folder: string;
+}
+
 export interface FoldersAnswer {
   folders: Folder[];
   placement: Record<string, string>;
+  /** Everything listed in the folders, top level included (at most MAX_FOLDER_ENTRIES). */
+  items?: FolderEntry[];
   partial: boolean;
   needsPermission?: boolean;
 }
 
 export const MAX_FOLDERS = 40;
+export const MAX_FOLDER_ENTRIES = 400;
 
 /** Schoology folder item types, as the Files/Materials items' kinds (`assignment`, `document`). */
 const ITEM_KIND: Record<string, string> = { assignment: "assignment", assessment: "assignment", assessment_v2: "assignment", document: "document" };
@@ -601,6 +724,20 @@ export function parseFolder(payload: unknown): { folders: { id: string; title: s
   return { folders, items };
 }
 
+/** The titles of a folder's things (not subfolders), by `kind:id`, the same keys as parseFolder's items. */
+export function folderItemTitles(payload: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const item of folderItems(payload)) {
+    const id = String(item?.id ?? "");
+    if (!SCHOOLOGY_ID_RE.test(id) || String(item?.published ?? "1") === "0") continue;
+    const type = String(item?.type ?? "").toLowerCase();
+    if (type === "folder") continue;
+    const kind = ITEM_KIND[type] ?? (/^[a-z][a-z_-]{0,30}$/.test(type) ? type : "");
+    if (kind) out[`${kind}:${id}`] = clip(toPlainText(item?.title ?? ""), 200);
+  }
+  return out;
+}
+
 export async function getFolder(sectionId: string, folderId: string, creds: Credentials): Promise<Raw> {
   // Schoology's docs call this a course id; in content URLs the `courses` realm is the section.
   return schoologyGet<Raw>(`/courses/${sectionId}/folder/${folderId}`, creds);
@@ -615,6 +752,7 @@ export async function getFolder(sectionId: string, folderId: string, creds: Cred
 export async function fetchSchoologyFolders(sectionId: string, creds: Credentials): Promise<FoldersAnswer> {
   const folders: Folder[] = [];
   const placement: Record<string, string> = {};
+  const items: FolderEntry[] = [];
   let partial = false;
   let read = 0;
   let level = ["0"];
@@ -629,9 +767,12 @@ export async function fetchSchoologyFolders(sectionId: string, creds: Credential
     const batch = level.slice(0, room);
     read += batch.length;
     const pages: Record<string, ReturnType<typeof parseFolder> | null> = {};
+    const titles: Record<string, Record<string, string>> = {};
     await runPool(batch, SCHOOLOGY_CONCURRENCY, async (folderId) => {
       try {
-        pages[folderId] = parseFolder(await getFolder(sectionId, folderId, creds));
+        const raw = await getFolder(sectionId, folderId, creds);
+        pages[folderId] = parseFolder(raw);
+        titles[folderId] = folderItemTitles(raw);
       } catch (error) {
         const none = error instanceof SchoologyError && [401, 403, 404].includes(error.status);
         if (folderId === "0") {
@@ -654,10 +795,18 @@ export async function fetchSchoologyFolders(sectionId: string, creds: Credential
         next.push(f.id);
       }
       if (folderId !== "0") for (const key of page.items) placement[key] ??= folderId;
+      for (const key of page.items) {
+        if (items.some((x) => x.key === key)) continue;
+        if (items.length >= MAX_FOLDER_ENTRIES) {
+          partial = true;
+          break;
+        }
+        items.push({ key, title: titles[folderId]?.[key] ?? "", folder: folderId === "0" ? "" : folderId });
+      }
     }
     level = next;
   }
-  return { folders, placement, partial };
+  return { folders, placement, items, partial };
 }
 
 /**
@@ -685,18 +834,32 @@ export function adaptClassroomFolders(topics: Raw[], work: Raw[], materials: Raw
   return { folders, placement };
 }
 
+/** Classroom's coursework and materials as Materials entries (in their topic, or the top level). */
+export function classroomFolderEntries(work: Raw[], materials: Raw[], placement: Record<string, string>): FolderEntry[] {
+  const out: FolderEntry[] = [];
+  for (const [kind, list] of [["assignment", work], ["material", materials]] as const) {
+    for (const item of list) {
+      const id = String(item?.id ?? "");
+      if (!CLASSROOM_ID_RE.test(id) || out.length >= MAX_FOLDER_ENTRIES) continue;
+      const key = `${kind}:${id}`;
+      out.push({ key, title: plain(item?.title, 200), folder: placement[key] ?? "" });
+    }
+  }
+  return out;
+}
+
 export async function fetchClassroomFolders(accessToken: string, letters: string, budget: CallBudget, course: string): Promise<FoldersAnswer> {
   if (!letters.includes("t")) return { folders: [], placement: {}, partial: false, needsPermission: true };
   const enc = encodeURIComponent(course);
   const [topics, work, materials] = await Promise.all([
     classroomList(`/courses/${enc}/topics`, "topic", { pageSize: "100", fields: "topic(topicId,name),nextPageToken" }, accessToken, budget, 2),
-    classroomList(`/courses/${enc}/courseWork`, "courseWork", { pageSize: "100", fields: "courseWork(id,topicId),nextPageToken" }, accessToken, budget, 3).catch(() => null),
+    classroomList(`/courses/${enc}/courseWork`, "courseWork", { pageSize: "100", fields: "courseWork(id,topicId,title),nextPageToken" }, accessToken, budget, 3).catch(() => null),
     letters.includes("m")
-      ? classroomList(`/courses/${enc}/courseWorkMaterials`, "courseWorkMaterial", { pageSize: "100", fields: "courseWorkMaterial(id,topicId),nextPageToken" }, accessToken, budget, 3).catch(() => null)
+      ? classroomList(`/courses/${enc}/courseWorkMaterials`, "courseWorkMaterial", { pageSize: "100", fields: "courseWorkMaterial(id,topicId,title),nextPageToken" }, accessToken, budget, 3).catch(() => null)
       : Promise.resolve({ items: [], next: "" }),
   ]);
   const { folders, placement } = adaptClassroomFolders(topics.items, work?.items ?? [], materials?.items ?? []);
-  return { folders, placement, partial: !work || !materials || !!topics.next || !!work.next || !!materials.next || budget.cut };
+  return { folders, placement, items: classroomFolderEntries(work?.items ?? [], materials?.items ?? [], placement), partial: !work || !materials || !!topics.next || !!work.next || !!materials.next || budget.cut };
 }
 
 /* ── Gradebook ─────────────────────────────────────────────────────────── */
