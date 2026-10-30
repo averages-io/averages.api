@@ -20,13 +20,23 @@
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
 import type { Credentials } from "./oauth.ts";
 
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
+/**
+ * How long a sign-in lasts: 15 days (Martin, 2026-10-30; was 30). Fixed from
+ * sign-in, never extended by using the app.
+ */
+export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 15; // 15 days
+/** Sessions sealed while sign-ins lasted 30 days carry no `v`. */
+const OLD_SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
+/** Stamped on every session sealed since the change to 15 days. */
+const SESSION_VERSION = 2;
 
 export interface SessionData extends Credentials {
   /** Schoology user id resolved at login, so /users/{id}/... calls need no extra round trip. */
   uid: string;
   /** Unix seconds. Checked on every request. */
   exp: number;
+  /** 2 = sealed with the 15-day lifetime. Missing on older (30-day) sessions. */
+  v?: number;
   /**
    * Incognito (2026-10-05): set when the student signed in saying they're
    * under 13. Such a session can't use anything that stores data on our
@@ -178,7 +188,7 @@ export async function sealSession(
   data: Omit<SessionData, "exp">,
   secret: string
 ): Promise<string> {
-  return seal({ ...data, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS } as SessionData, secret);
+  return seal({ ...data, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS, v: SESSION_VERSION } as SessionData, secret);
 }
 
 async function seal(payload: SessionData, secret: string): Promise<string> {
@@ -239,6 +249,9 @@ export async function openSession(
       b64urlDecode(dataPart)
     );
     const data = JSON.parse(new TextDecoder().decode(plaintext)) as SessionData;
+    // A session from before sign-ins were cut to 15 days was sealed for 30:
+    // it ends 15 days after its sign-in too, like every new one.
+    if (data && data.v !== SESSION_VERSION && typeof data.exp === "number") data.exp -= OLD_SESSION_TTL_SECONDS - SESSION_TTL_SECONDS;
     if (!data.exp || data.exp < Math.floor(Date.now() / 1000)) return null;
     if (!data.uid) return null;
 

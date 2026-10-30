@@ -79,7 +79,7 @@ and secret are then always blank) with AES-GCM using `SESSION_SECRET` and sends 
 as a cookie:
 
 - **httpOnly:** no JavaScript, including the app's own, can read it.
-- **Secure, SameSite=Lax**, on `.averages.io`, valid for 30 days.
+- **Secure, SameSite=Lax**, on `.averages.io`, valid for 15 days from sign-in (30 before 2026-10-30; those older sessions now end 15 days after their sign-in too).
 - **Sealed:** the token is unreadable and can't be edited even if it leaks.
 
 The Worker keeps no copy. The tradeoff is that a session can't be cancelled early
@@ -88,7 +88,7 @@ from the server; it lasts until it expires or the student signs out.
 A Google access token lasts an hour. After that the Worker gets a new one with the
 refresh token and keeps it in a second sealed cookie, `averages_google_access`
 (httpOnly, host-only on `api.averages.io`, an hour), tied to that one session. The
-session cookie itself is never rewritten, so a session still ends 30 days after sign-in,
+session cookie itself is never rewritten, so a session still ends 15 days after sign-in,
 and a request that was refreshing while the student signed out can't sign them back in.
 If the student removes Averages.io's access in their Google account, the next request
 signs them out.

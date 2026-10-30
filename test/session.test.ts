@@ -16,6 +16,7 @@ import {
   openSession,
   readCookie,
   sealSession,
+  SESSION_TTL_SECONDS,
   sessionCookie,
 } from "../src/session.ts";
 
@@ -173,6 +174,28 @@ console.log("\nincognito (under 13)");
   const normal = await openSession(await sealSession(CREDS, SECRET), SECRET);
   check("a normal session isn't Incognito", !!normal && isIncognitoSession(normal), false);
   check("only true counts (a stray value from old code doesn't)", isIncognitoSession({ inc: "yes" as unknown }), false);
+}
+
+console.log("\nsign-ins last 15 days (2026-10-30, was 30)");
+{
+  const now = Math.floor(Date.now() / 1000);
+  const DAY = 86400;
+  check("the lifetime is 15 days", SESSION_TTL_SECONDS, 15 * DAY);
+  const fresh = await openSession(await sealSession(CREDS, SECRET), SECRET);
+  checkTrue("a new session ends 15 days from now", !!fresh && Math.abs(fresh.exp - (now + 15 * DAY)) <= 2);
+  checkTrue("the cookie is kept 15 days too", /Max-Age=1296000(;|$)/.test(sessionCookie("t", ".averages.io")));
+  // A cookie sealed before the change: 30 days, and no version stamp.
+  const sealOld = async (exp: number) => {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await crypto.subtle.importKey("raw", await crypto.subtle.digest("SHA-256", new TextEncoder().encode(SECRET)), { name: "AES-GCM" }, false, ["encrypt"]);
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify({ ...CREDS, exp }))));
+    const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    return `${b64(iv)}.${b64(ct)}`;
+  };
+  const day10 = await openSession(await sealOld(now + 20 * DAY), SECRET); // signed in 10 days ago
+  checkTrue("an older sign-in from 10 days ago still works, for 5 more days", !!day10 && Math.abs(day10.exp - (now + 5 * DAY)) <= 2);
+  check("an older sign-in from 16 days ago is signed out now", await openSession(await sealOld(now + 14 * DAY), SECRET), null);
+  check("an older sign-in from 29 days ago is signed out now", await openSession(await sealOld(now + 1 * DAY), SECRET), null);
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -887,7 +887,7 @@ app.get("/auth/schoology/callback", async (c) => {
  * A working Google access token for this request. The one sealed at sign-in
  * lasts an hour; after that a refreshed one is kept in its own short-lived
  * cookie (ACCESS_COOKIE, see google.ts), never by rewriting the session
- * cookie, so the session keeps its 30 days from sign-in and signing out can't
+ * cookie, so the session keeps its 15 days from sign-in and signing out can't
  * be undone by a request that was still refreshing. Throws
  * GoogleError("google_invalid_grant") when the student removed Averages.io's
  * access in their Google account: the caller signs them out.
