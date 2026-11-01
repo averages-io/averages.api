@@ -302,7 +302,18 @@ export async function openSession(
   }
 }
 
-export const SESSION_COOKIE = "schoolagy_session";
+/**
+ * The session cookie. Renamed from the old brand's `schoolagy_session` on 2026-10-31 (Martin: "the cookies r still
+ * called schoolagy"). The old name is still read, so nobody is signed out by the rename: a request that comes in with
+ * only the old cookie gets the new one set and the old one cleared (index.ts, moveLegacyCookie).
+ */
+export const SESSION_COOKIE = "averages_session";
+export const LEGACY_SESSION_COOKIE = "schoolagy_session";
+
+/** The session token from a Cookie header: the new cookie, or the old one while it's still around. */
+export function sessionToken(header: string | null): string | null {
+  return readCookie(header, SESSION_COOKIE) ?? readCookie(header, LEGACY_SESSION_COOKIE);
+}
 
 export function sessionCookie(token: string, domain: string): string {
   return [
@@ -318,9 +329,9 @@ export function sessionCookie(token: string, domain: string): string {
   ].join("; ");
 }
 
-export function clearSessionCookie(domain: string): string {
+export function clearSessionCookie(domain: string, name: string = SESSION_COOKIE): string {
   return [
-    `${SESSION_COOKIE}=`,
+    `${name}=`,
     "Path=/",
     `Domain=${domain}`,
     "HttpOnly",

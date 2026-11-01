@@ -132,7 +132,7 @@ const setCookieHeader = sessionCookie(
 // A browser echoes only the name=value pair, not the attributes.
 const sentBack = setCookieHeader.split(";")[0];
 const roundTripped = await openSession(
-  readCookie(sentBack, "schoolagy_session") ?? "",
+  readCookie(sentBack, "averages_session") ?? "",
   SECRET
 );
 checkTrue("demo sign-in survives the full cookie round trip", roundTripped !== null);

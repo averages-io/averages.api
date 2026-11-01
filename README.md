@@ -12,8 +12,9 @@ Schoology and Classroom.
 > **Naming:** the product is Averages.io. The Worker is `averages-api` and answers on
 > `api.averages.io`, for the app at `app.averages.io` (moved from `schoolagy.io` on
 > 2026-10-05). Everything else was renamed to Averages on 2026-10-05, except the
-> session cookie (`schoolagy_session`) and the app's storage keys (`schoolagy_*`). Don't
-> rename those, or existing users lose their sessions and settings.
+> app's storage keys (`schoolagy_*`). Don't rename those, or existing users lose their settings.
+> The session cookie became `averages_session` on 2026-10-31; the old `schoolagy_session` is
+> still read and moved over on the next request, so nobody was signed out.
 
 ---
 

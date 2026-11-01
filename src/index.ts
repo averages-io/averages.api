@@ -30,7 +30,9 @@ import {
   sealSession,
   sealValue,
   sessionCookie,
+  sessionToken,
   SESSION_COOKIE,
+  LEGACY_SESSION_COOKIE,
   type SessionData,
 } from "./session.ts";
 import {
@@ -508,12 +510,23 @@ function openedSession(c: any): Promise<SessionData | null> {
   const raw: Request = c.req.raw;
   let opened = openedSessions.get(raw);
   if (!opened) {
-    const token = readCookie(c.req.header("Cookie") ?? null, SESSION_COOKIE);
+    const token = sessionToken(c.req.header("Cookie") ?? null);
     opened = token && c.env.SESSION_SECRET ? openSession(token, c.env.SESSION_SECRET) : Promise.resolve(null);
     openedSessions.set(raw, opened);
   }
   return opened;
 }
+
+/**
+ * HTTPS only, remembered by the browser for a year (2026-10-31): the app's pages already send this
+ * (public/_headers); the API didn't, so a browser could still be sent to http://api.averages.io first.
+ * Not on a local `wrangler dev` (plain http://localhost).
+ */
+app.use("*", async (c, next) => {
+  await next();
+  if (isLocalRequest(c.req.url)) return;
+  try { c.res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains"); } catch { /* headers fixed: skip */ }
+});
 
 /**
  * Rate limits on our own routes (2026-10-06): per IP for sign-in, per
@@ -522,6 +535,26 @@ function openedSession(c: any): Promise<SessionData | null> {
  * it. See src/rateLimit.ts for the numbers and the optional binding.
  */
 app.use("*", rateLimit({ studentOf: async (c) => (await openedSession(c))?.uid ?? null }));
+
+/**
+ * The cookie rename (2026-10-31): a signed-in request that still only carries the old `schoolagy_session` cookie
+ * gets the same session under `averages_session`, and the old cookie is cleared. Nobody has to sign in again.
+ * Not on a response that already sets the session (sign-in, sign-out).
+ */
+app.use("*", async (c, next) => {
+  await next();
+  const header = c.req.header("Cookie") ?? null;
+  if (readCookie(header, SESSION_COOKIE) || !readCookie(header, LEGACY_SESSION_COOKIE)) return;
+  if (/(^|,\s*)(averages|schoolagy)_session=/.test(c.res.headers.get("Set-Cookie") ?? "")) return;
+  const token = readCookie(header, LEGACY_SESSION_COOKIE);
+  if (!token || !(await openedSession(c))) return;
+  try {
+    c.res.headers.append("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
+    c.res.headers.append("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE));
+  } catch {
+    // a response whose headers can't change (passed straight through): it moves on the next request
+  }
+});
 
 /**
  * Feature switches (src/flags.ts, 2026-10-09). A route whose feature is off
@@ -558,7 +591,7 @@ app.use("*", async (c, next) => {
 
 /** Resolves the session cookie, or 401s. */
 async function requireSession(c: any, next: any) {
-  const token = readCookie(c.req.header("Cookie") ?? null, SESSION_COOKIE);
+  const token = sessionToken(c.req.header("Cookie") ?? null);
   if (!token) {
     return c.json({ error: "not_authenticated" }, 401);
   }
@@ -566,6 +599,7 @@ async function requireSession(c: any, next: any) {
   if (!session) {
     // Expired or tampered — clear it so the browser stops sending a dead cookie.
     c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
+    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
     return c.json({ error: "session_expired" }, 401);
   }
   c.set("session", session);
@@ -680,6 +714,7 @@ app.post("/auth/session", async (c) => {
     const me = await getMe({ key: SANDBOX_KEY, secret: SANDBOX_SECRET });
     const token = await sealSession({ key: SANDBOX_KEY, secret: SANDBOX_SECRET, uid: REVIEW_UID, p: profileFrom(me) }, c.env.SESSION_SECRET);
     c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
+    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
     return c.json({
       ok: true,
       user: { uid: REVIEW_UID, name: me.name_display ?? "Reviewer", firstName: me.name_first ?? "", email: me.primary_email ?? "", pictureUrl: "" },
@@ -705,6 +740,7 @@ app.post("/auth/session", async (c) => {
       c.env.SESSION_SECRET
     );
     c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
+    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
     return c.json({
       ok: true,
       demo: true,
@@ -726,6 +762,7 @@ app.post("/auth/session", async (c) => {
     const p = profileFrom(me);
     const token = await sealSession(under13 ? { key, secret, uid, inc: true, p } : { key, secret, uid, p }, c.env.SESSION_SECRET);
     c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
+    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
 
     return c.json({
       ok: true,
@@ -771,6 +808,7 @@ app.delete("/auth/session", async (c) => {
   if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetCalendar(c.env as any, session.uid, c.req.url));
   if (forget && session && !isDemo(session)) c.executionCtx.waitUntil(forgetConnections(c.env, session.uid, c.req.url));
   c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
+  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
   // A Google sign-in's refreshed access token, if any (see googleAccess).
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
   // An older Schoology session's name (see /auth/me).
@@ -866,6 +904,7 @@ app.get("/auth/schoology/callback", async (c) => {
     // The access token rides in the sealed session cookie, like a personal key does: never stored on our servers.
     const session = await sealSession({ ...creds, uid, p, ...(pending.u13 ? { inc: true as const } : {}) }, c.env.SESSION_SECRET);
     c.header("Set-Cookie", sessionCookie(session, COOKIE_DOMAIN), { append: true });
+    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
     return c.redirect(`${appOrigin(c.req.url)}/?signin=schoology`, 302);
   } catch (error) {
     if (error instanceof OAuthError) return signinBack(c, error.code);
@@ -920,6 +959,7 @@ function classroomFailure(c: any, error: unknown) {
     (error instanceof ClassroomError && error.status === 401);
   if (signedOut) {
     c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN), { append: true });
+    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
     c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
     return c.json({ error: "session_expired" }, 401);
   }
@@ -1216,6 +1256,7 @@ app.delete("/account", requireSession, async (c) => {
   for (const r of results) if (r.status === "rejected") console.error("account_delete_failed", r.reason);
   if (failed) return c.json({ error: "delete_incomplete", failed }, 502);
   c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
+  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
   c.header("Set-Cookie", clearProfileCookie(!isLocalRequest(c.req.url)), { append: true });
   return c.json({ ok: true });
@@ -1431,7 +1472,7 @@ function appOrigin(requestUrl: string): string {
  * themselves instead of using requireSession.
  */
 async function sessionFrom(c: any): Promise<SessionData | null> {
-  const token = readCookie(c.req.header("Cookie") ?? null, SESSION_COOKIE);
+  const token = sessionToken(c.req.header("Cookie") ?? null);
   if (!token || !c.env.SESSION_SECRET) return null;
   return openSession(token, c.env.SESSION_SECRET);
 }
