@@ -2656,17 +2656,15 @@ app.route("/push", pushRoutes({ requireSession, fromOurApp: notFromOurApp }));
  * Averages Plus (2026-10-21): checkout, status and the customer page
  * (src/billingRoutes.ts), and Stripe's signed webhook at /stripe/webhook.
  */
-app.route("/billing", billingRoutes({ requireSession, fromOurApp: notFromOurApp, appOrigin, storeFor: billingStore }) as any);
-app.route("/stripe", stripeWebhookRoutes({
-  storeFor: billingStore,
-  // Plus ended: notifications and the calendar link are deleted (src/plus.ts).
-  onPlusEnded: async (env, uid, requestUrl) => {
-    // Only while billing is on: with it off, both are free for everyone (2026-10-21).
-    if (!plusRequired(env)) return;
-    await forgetPush(env, uid, requestUrl);
-    await forgetCalendar(env, uid, requestUrl);
-  },
-}) as any);
+// Plus ended: notifications and the calendar link are deleted (src/plus.ts).
+async function onPlusEnded(env: any, uid: string, requestUrl: string): Promise<void> {
+  // Only while billing is on: with it off, both are free for everyone (2026-10-21).
+  if (!plusRequired(env)) return;
+  await forgetPush(env, uid, requestUrl);
+  await forgetCalendar(env, uid, requestUrl);
+}
+app.route("/billing", billingRoutes({ requireSession, fromOurApp: notFromOurApp, appOrigin, storeFor: billingStore, onPlusEnded }) as any);
+app.route("/stripe", stripeWebhookRoutes({ storeFor: billingStore, onPlusEnded }) as any);
 
 /** Calendar sync, an Averages Plus perk (src/calendar.ts). */
 app.route("/calendar", calendarRoutes({ requireSession, fromOurApp: notFromOurApp }) as any);

@@ -52,6 +52,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => 
   if (u.pathname === "/v1/prices") return json({ object: "list", data: prices });
   if (u.pathname === "/v1/checkout/sessions") return checkoutAnswer();
   if (u.pathname === "/v1/billing_portal/sessions") return json({ id: "bps_1", url: "https://billing.stripe.com/p/session/test_1" });
+  if (/^\/v1\/subscriptions\/sub_[A-Za-z0-9]+$/.test(u.pathname) && init.method === "DELETE") return json({ id: u.pathname.split("/").pop(), object: "subscription", status: "canceled", customer: "cus_A1", canceled_at: Math.floor(Date.now() / 1000), metadata: {} });
   throw new Error(`unexpected Stripe call: ${u.pathname}`);
 }) as typeof fetch;
 
@@ -278,6 +279,8 @@ console.log("\nwebhook");
   await webhook("customer.subscription.updated", subscription("4001", "active", { cancel_at: null }));
   const s5 = (await call("/billing/status", { cookie: sam })).data;
   check("…and un-cancelling clears it: renews again on the period's end", [s5.plus, s5.cancelAtPeriodEnd, s5.renewsAt], [true, false, 1800000000 * 1000]);
+  const early0 = await call("/billing/end-now", { method: "POST", cookie: sam, json: {} });
+  check("End early on a plan that renews: refused, nothing sent to Stripe", [early0.res.status, early0.data.error, calls.some((c) => c.method === "DELETE")], [409, "billing_not_ending", false]);
   await webhook("customer.subscription.updated", subscription("4001", "active", { cancel_at_period_end: true }));
 
   calls.length = 0;
@@ -289,6 +292,20 @@ console.log("\nwebhook");
   check("Manage plan works in Incognito too (nobody stuck paying)", kidPortal.res.status, 200);
   const nobody = await call("/billing/portal", { method: "POST", cookie: await cookieFor("4999"), json: {} });
   check("Manage plan without ever subscribing: 404", [nobody.res.status, nobody.data.error], [404, "billing_no_account"]);
+
+  // End early (2026-11-01): a plan that's set to end can end today
+  const nosub = await call("/billing/end-now", { method: "POST", cookie: await cookieFor("4999"), json: {} });
+  check("End early with no plan: 404", [nosub.res.status, nosub.data.error], [404, "billing_no_subscription"]);
+  const foreignEnd = await call("/billing/end-now", { method: "POST", cookie: sam, json: {}, headers: { Origin: "https://evil.example" } });
+  check("End early from another site: refused", foreignEnd.res.status !== 200 && !calls.some((c) => c.method === "DELETE"), true);
+  calls.length = 0;
+  const early = await call("/billing/end-now", { method: "POST", cookie: sam, json: {} });
+  const del = calls.find((c) => c.method === "DELETE");
+  check("End early: Plus ends now", [early.res.status, early.data.ok, early.data.plus, early.data.status], [200, true, false, "canceled"]);
+  check("…by cancelling their own subscription at Stripe, with nothing else asked", [del?.url, Object.keys(del?.form ?? {}).length], ["https://api.stripe.com/v1/subscriptions/sub_A1", 0]);
+  check("…and status agrees", (await call("/billing/status", { cookie: sam })).data.plus, false);
+  const twice = await call("/billing/end-now", { method: "POST", cookie: sam, json: {} });
+  check("…and can't end twice", [twice.res.status, twice.data.error], [404, "billing_no_subscription"]);
 
   await webhook("customer.subscription.deleted", subscription("4001", "canceled"));
   check("subscription deleted: Plus ends", (await call("/billing/status", { cookie: sam })).data.plus, false);

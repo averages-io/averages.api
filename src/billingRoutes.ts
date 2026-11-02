@@ -5,6 +5,7 @@
  *   GET  /billing/status    { enabled, configured, eligible, plus, status, renewsAt, cancelAtPeriodEnd, manageable, price }
  *   POST /billing/checkout  {} -> { url }: Stripe's hosted checkout (Managed Payments)
  *   POST /billing/portal    {} -> { url }: Stripe's page to cancel or change the card
+ *   POST /billing/end-now   {} -> { ok, status }: a plan already set to end (cancelled in the portal) ends today
  *   POST /stripe/webhook    Stripe's events, signed with STRIPE_WEBHOOK_SECRET
  *
  * Checkout and the portal are behind the "billing" feature switch (off by
@@ -25,6 +26,7 @@ import {
   billingConfigured,
   createCheckoutSession,
   createPortalSession,
+  endSubscriptionNow,
   hasPlus,
   statusForBillingCode,
   updateFromEvent,
@@ -32,6 +34,7 @@ import {
   webhookConfigured,
   WEBHOOK_MAX_BYTES,
   type BillingEnv,
+  type BillingRecord,
   type BillingStatus,
   type BillingUpdate,
 } from "./billing.ts";
@@ -42,6 +45,7 @@ export interface BillingStoreApi {
   status(): Promise<BillingStatus>;
   customerId(): Promise<string | null>;
   apply(update: BillingUpdate): Promise<boolean>;
+  record(): Promise<BillingRecord | null>;
 }
 
 export type BillingRouteEnv = BillingEnv & { BILLING?: DurableObjectNamespace };
@@ -52,6 +56,8 @@ export interface BillingDeps {
   /** Where the browser comes back to: app.averages.io, or the local app under wrangler dev. */
   appOrigin: (requestUrl: string) => string;
   storeFor: (env: BillingRouteEnv, uid: string, requestUrl: string) => BillingStoreApi;
+  /** Plus just ended (End early): its server-side perks are deleted, as when Stripe's webhook says so. Must not throw. */
+  onPlusEnded?: (env: any, uid: string, requestUrl: string) => Promise<void>;
 }
 
 function billingFailure(c: any, error: unknown, fallback: string) {
@@ -117,6 +123,32 @@ export function billingRoutes(deps: BillingDeps) {
       return c.json({ url: await createPortalSession(c.env, { customerId, appOrigin: deps.appOrigin(c.req.url) }) });
     } catch (error) {
       return billingFailure(c, error, "billing_portal_failed");
+    }
+  });
+
+  // End early (2026-11-01): only for a plan that's already set to end, so it never surprises anyone who's renewing.
+  // Allowed in Incognito too, like the portal, so nobody is stuck paying.
+  app.post("/end-now", deps.requireSession, async (c) => {
+    const foreign = deps.fromOurApp(c);
+    if (foreign) return foreign;
+    noStore(c);
+    const session = c.get("session");
+    if (isDemoSession(session)) return c.json({ error: "not_available_in_demo" }, 403);
+    if (!billingConfigured(c.env) || !c.env.BILLING) return c.json({ error: "billing_not_configured" }, 503);
+    try {
+      const store = deps.storeFor(c.env, session.uid, c.req.url);
+      const rec = await store.record();
+      if (!rec || !rec.subscriptionId || !hasPlus(rec.status)) return c.json({ error: "billing_no_subscription" }, 404);
+      if (!rec.cancelAtPeriodEnd) return c.json({ error: "billing_not_ending" }, 409);
+      const update = await endSubscriptionNow(c.env, session.uid, rec.subscriptionId);
+      await store.apply(update);
+      if (deps.onPlusEnded) {
+        const ended = deps.onPlusEnded(c.env, session.uid, c.req.url).catch(() => {});
+        try { c.executionCtx.waitUntil(ended); } catch { await ended; }
+      }
+      return c.json({ ok: true, ...(await store.status()) });
+    } catch (error) {
+      return billingFailure(c, error, "billing_end_failed");
     }
   });
 

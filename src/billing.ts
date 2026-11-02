@@ -70,7 +70,10 @@ export function statusForBillingCode(code: string): number {
     case "billing_already_subscribed":
       return 409;
     case "billing_no_account":
+    case "billing_no_subscription":
       return 404;
+    case "billing_not_ending":
+      return 409;
     case "billing_price_missing":
     case "billing_stripe_error":
     case "billing_unavailable":
@@ -110,7 +113,7 @@ export function stripeForm(params: Record<string, unknown>): string {
 /** One call to Stripe's API. Throws BillingError; Stripe's own message only goes to the log. */
 export async function stripeRequest(
   env: BillingEnv,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   params: Record<string, unknown> = {},
   opts: { version?: string } = {}
@@ -377,6 +380,27 @@ export function updateFromEvent(event: any): BillingUpdate | null {
     };
   }
   return null;
+}
+
+/**
+ * End Plus now (2026-11-01, Martin: an "End early" button for a plan that's already set to end). Cancels the
+ * subscription at Stripe right away. Stripe's own default: no proration and no refund for the days left, and no
+ * final invoice. Returns the change to record, the same one the customer.subscription.deleted webhook carries.
+ */
+export async function endSubscriptionNow(env: BillingEnv, uid: string, subscriptionId: string): Promise<BillingUpdate> {
+  if (!/^sub_[A-Za-z0-9]{1,255}$/.test(subscriptionId)) throw new BillingError("billing_no_subscription");
+  const sub = await stripeRequest(env, "DELETE", `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`);
+  return {
+    uid,
+    eventId: `end_now_${subscriptionId}`,
+    created: typeof sub.canceled_at === "number" ? sub.canceled_at : Math.floor(Date.now() / 1000),
+    customerId: idOf(sub.customer, "cus_"),
+    subscriptionId,
+    status: "canceled",
+    periodEnd: endOf(sub),
+    cancelAtPeriodEnd: false,
+    price: priceOf(sub),
+  };
 }
 
 /* ── One student's record ───────────────────────────────────────────── */
