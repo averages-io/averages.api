@@ -767,11 +767,13 @@ app.post("/auth/session", async (c) => {
     });
   } catch (error) {
     if (error instanceof SchoologyError) {
-      // 401/403 from Schoology means the key/secret pair is wrong or revoked —
-      // report that as a credential problem, not a server error.
-      if (error.status === 401 || error.status === 403) {
-        return c.json({ error: "invalid_credentials" }, 401);
-      }
+      // What Schoology said, for the Worker's logs (2026-11-03: a sandbox key that "won't work"). Never the key or
+      // secret; Schoology's answer doesn't carry them.
+      console.error("signin_schoology_refused", error.status, String(error.body ?? "").slice(0, 300));
+      // 401: the key/secret pair is wrong or was reset. 403: Schoology knows the key but won't let it read the
+      // account (API access off for that user or school). Said apart so the student knows which (2026-11-03).
+      if (error.status === 401) return c.json({ error: "invalid_credentials" }, 401);
+      if (error.status === 403) return c.json({ error: "schoology_forbidden" }, 401);
       return c.json({ error: "schoology_error", status: error.status }, 502);
     }
     return c.json({ error: "unexpected_error" }, 500);
