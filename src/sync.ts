@@ -48,6 +48,41 @@ export interface SyncRecord {
    * so the app's pull logic needs no change.)
    */
   settingsUpdatedAt: string;
+  /**
+   * Which notifications this student has opened (2026-11-03, Martin: the "New" stickers came back in a private tab
+   * after he'd seen them): the app's `averages_seen` lists, by kind ('u' update, 'g' grade, 'm' message), the newest
+   * SEEN_CAP ids each. Kept apart from `settings` so a settings save from any device never erases it; changes come
+   * in through mergeSeen, which only ever adds.
+   */
+  seen?: SeenLists;
+}
+
+export type SeenLists = Partial<Record<"u" | "g" | "m", string[]>>;
+export const SEEN_KINDS = ["u", "g", "m"] as const;
+export const SEEN_CAP = 300;
+const SEEN_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/** Only well-formed lists: the three kinds, ids that look like ids, the newest SEEN_CAP of each. */
+export function cleanSeen(raw: unknown): SeenLists {
+  const out: SeenLists = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const k of SEEN_KINDS) {
+    const list = (raw as Record<string, unknown>)[k];
+    if (!Array.isArray(list)) continue;
+    const ids = [...new Set(list.map(String).filter((id) => SEEN_ID_RE.test(id)))];
+    if (ids.length) out[k] = ids.slice(-SEEN_CAP);
+  }
+  return out;
+}
+
+/** The stored lists plus new ones: everything seen anywhere stays seen (older ones drop off past SEEN_CAP). */
+export function mergeSeen(stored: unknown, incoming: unknown): SeenLists {
+  const a = cleanSeen(stored), b = cleanSeen(incoming), out: SeenLists = {};
+  for (const k of SEEN_KINDS) {
+    const ids = [...new Set([...(a[k] ?? []), ...(b[k] ?? [])])];
+    if (ids.length) out[k] = ids.slice(-SEEN_CAP);
+  }
+  return out;
 }
 
 /** Minimal shape of a Cloudflare Workers KV namespace binding. */
@@ -118,6 +153,7 @@ export async function loadSyncRecord(kv: KVLike, uid: string): Promise<SyncRecor
     // treats as untrustworthy rather than something to adopt. See the
     // field's own comment above.
     settingsUpdatedAt: typeof record.settingsUpdatedAt === "string" ? record.settingsUpdatedAt : "",
+    seen: cleanSeen(record.seen),
   };
 }
 
@@ -126,8 +162,8 @@ export async function saveSyncRecord(
   uid: string,
   record: SyncRecord
 ): Promise<void> {
-  // Exactly the three fields, whatever else the object passed in carries.
-  const clean: SyncRecord = { settings: record.settings, updatedAt: record.updatedAt, settingsUpdatedAt: record.settingsUpdatedAt };
+  // Exactly these fields, whatever else the object passed in carries.
+  const clean: SyncRecord = { settings: record.settings, updatedAt: record.updatedAt, settingsUpdatedAt: record.settingsUpdatedAt, seen: cleanSeen(record.seen) };
   await kv.put(syncKey(uid), JSON.stringify(clean));
 }
 

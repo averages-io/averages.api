@@ -13,8 +13,11 @@
  */
 
 import {
+  cleanSeen,
   deleteSyncRecord,
   loadSyncRecord,
+  mergeSeen,
+  SEEN_CAP,
   saveSyncRecord,
   kvFromSyncStore,
   type KVLike,
@@ -112,14 +115,14 @@ console.log("\nan old record's GPA snapshot (weekly email, removed 2026-10-06) i
     })
   );
   const loaded = await loadSyncRecord(kv, "u4");
-  check("loads only settings and the two timestamps", Object.keys(loaded), ["settings", "updatedAt", "settingsUpdatedAt"]);
+  check("loads only settings and the two timestamps", Object.keys(loaded), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]); // + the seen notifications (2026-11-03)
   check("the timestamps come through as they were", [loaded.updatedAt, loaded.settingsUpdatedAt], ["2026-10-01T00:00:00.000Z", "2026-09-30T00:00:00.000Z"]);
   await saveSyncRecord(kv, "u4", { ...loaded, updatedAt: "2026-10-06T00:00:00.000Z" });
   const stored = JSON.parse(kv.store.get("sync:u4")!);
-  check("the next save writes the record without gpaSnapshot or gpaHistory", Object.keys(stored), ["settings", "updatedAt", "settingsUpdatedAt"]);
+  check("the next save writes the record without gpaSnapshot or gpaHistory", Object.keys(stored), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]); // + the seen notifications (2026-11-03)
   // Even when something passes a record that still has one (a caller spreading an old object).
   await saveSyncRecord(kv, "u4", { ...(loaded as any), gpaSnapshot: { current: 1 } });
-  check("saveSyncRecord writes exactly the three fields, whatever it's given", Object.keys(JSON.parse(kv.store.get("sync:u4")!)), ["settings", "updatedAt", "settingsUpdatedAt"]);
+  check("saveSyncRecord writes exactly the three fields, whatever it's given", Object.keys(JSON.parse(kv.store.get("sync:u4")!)), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]); // + the seen notifications (2026-11-03)
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +147,7 @@ console.log("\nkvFromSyncStore (Durable Object storage)");
   check("nothing saved yet reads as an empty record", await loadSyncRecord(kv, "77"), {
     settings: null, updatedAt: "", settingsUpdatedAt: "",
   });
-  const rec = { settings: { theme: "dark" }, updatedAt: "t1", settingsUpdatedAt: "t1" };
+  const rec = { settings: { theme: "dark" }, updatedAt: "t1", settingsUpdatedAt: "t1", seen: {} };
   await saveSyncRecord(kv, "77", rec);
   check("a saved record comes back exactly as written", await loadSyncRecord(kv, "77"), rec);
   checkTrue("it's stored as a JSON string, same as KV was", typeof [...store.data.values()][0] === "string");
@@ -160,6 +163,21 @@ console.log("\nkvFromSyncStore (Durable Object storage)");
   let rejected = false;
   await loadSyncRecord(kv, "77").catch(() => { rejected = true; });
   checkTrue("a missing binding is a rejected promise the caller can catch, not a thrown error", rejected);
+}
+
+console.log("\nseen notifications (2026-11-03)");
+{
+  check("merge keeps everything from both devices, once", mergeSeen({ g: ["1", "2"], m: ["9"] }, { g: ["2", "3"], u: ["5"] }), { u: ["5"], g: ["1", "2", "3"], m: ["9"] });
+  check("only the three kinds and id-looking values", cleanSeen({ g: ["123", "<script>", "a b", 7], x: ["1"], m: "nope" }), { g: ["123", "7"] });
+  const many = Array.from({ length: SEEN_CAP + 50 }, (_, i) => String(i));
+  const merged = mergeSeen({ g: many }, { g: ["new"] });
+  check("capped at SEEN_CAP, oldest dropped, newest kept", [merged.g!.length, merged.g![0], merged.g![merged.g!.length - 1]], [SEEN_CAP, "51", "new"]);
+  check("nothing in, nothing out", [mergeSeen(null, undefined), cleanSeen("x")], [{}, {}]);
+  const store = new Map<string, string>();
+  const kv: KVLike = { get: async (k) => (store.has(k) ? JSON.parse(store.get(k)!) : null), put: async (k, v) => { store.set(k, v); }, delete: async (k) => { store.delete(k); } };
+  await saveSyncRecord(kv, "77", { settings: { a: 1 }, updatedAt: "t", settingsUpdatedAt: "t", seen: { g: ["1"] } });
+  const back = await loadSyncRecord(kv, "77");
+  check("saved and read back with the record", [back.settings, back.seen], [{ a: 1 }, { g: ["1"] }]);
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

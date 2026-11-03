@@ -92,6 +92,7 @@ import {
 } from "./canva.ts";
 import {
   deleteSyncRecord,
+  mergeSeen,
   loadSyncRecord,
   saveSyncRecord,
   kvFromSyncStore,
@@ -1133,15 +1134,53 @@ app.put("/sync/settings", requireSession, async (c) => {
   // the GPA snapshot the weekly email used is gone, and a record that still
   // carries one loses it here, on its next save; see sync.ts).
   const now = new Date().toISOString();
+  // The seen notifications live beside the settings (sync.ts): a settings save keeps them as they are.
+  const kv = syncKV(c.env, session.uid, c.req.url);
+  const before = await loadSyncRecord(kv, session.uid);
   const record = {
     settings: body.settings,
+    seen: before.seen,
     updatedAt: now,
     // See SyncRecord's own comment in sync.ts for why settings.html's pull
     // logic compares this rather than updatedAt.
     settingsUpdatedAt: now,
   };
-  await saveSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid, record);
+  await saveSyncRecord(kv, session.uid, record);
   return c.json(record);
+});
+
+/**
+ * The notifications this student has opened, on every device (2026-11-03, Martin: "New" stickers came back in a
+ * private tab). GET answers the account's lists; POST adds this device's (merged here, never replaced, so two
+ * devices can't undo each other) and answers the result. Same rules as the settings: signed in, not demo, not
+ * Incognito (it stores nothing), and only from our app. Turning Sync Across Devices off deletes it with the rest.
+ */
+app.get("/sync/seen", requireSession, async (c) => {
+  const session = c.get("session");
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  if (isIncognito(session)) return c.json({ error: "incognito_mode" }, 403);
+  c.header("Cache-Control", "private, no-store");
+  const record = await loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
+  return c.json({ seen: record.seen ?? {} });
+});
+app.post("/sync/seen", requireSession, async (c) => {
+  const session = c.get("session");
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  if (isIncognito(session)) return c.json({ error: "incognito_mode" }, 403);
+  c.header("Cache-Control", "private, no-store");
+  let body: { seen?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_body" }, 400);
+  }
+  const kv = syncKV(c.env, session.uid, c.req.url);
+  const record = await loadSyncRecord(kv, session.uid);
+  const seen = mergeSeen(record.seen, body && body.seen);
+  await saveSyncRecord(kv, session.uid, { ...record, seen });
+  return c.json({ seen });
 });
 
 /**
