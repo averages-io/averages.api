@@ -531,7 +531,7 @@ console.log("\nPOST /submit/file");
   check("fileIds not a list: 400", await bad({ section: "111", assignment: "601", fileIds: "1" }), [400, "bad_request"]);
   check("none of those reached Schoology", calls.length, 0);
   attachStatus = 403;
-  check("Schoology refusing (dropbox closed): 502 with its status", (await call("/submit/file", { method: "POST", cookie: student, json: { section: "111", assignment: "601", fileIds: ["1"] } })).data, { error: "schoology_error", status: 403 });
+  check("Schoology refusing (dropbox closed): said as such (2026-11-03)", (await call("/submit/file", { method: "POST", cookie: student, json: { section: "111", assignment: "601", fileIds: ["1"] } })).data, { error: "turn_in_not_allowed" });
   attachStatus = 201;
 }
 
@@ -566,7 +566,7 @@ console.log("\nPOST /submit/file with a description (2026-10-23)");
   attachStatus = 403;
   calls = [];
   const refused = await file({ description: "Final draft" });
-  check("files refused: the usual error, and no comment is tried", [refused.data, calls.length], [{ error: "schoology_error", status: 403 }, 1]);
+  check("files refused: said as such, and no comment is tried", [refused.data, calls.length], [{ error: "turn_in_not_allowed" }, 1]);
   attachStatus = 201;
 }
 

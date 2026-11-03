@@ -368,6 +368,15 @@ function rawRevisionFiles(rev: Raw): Raw[] {
   return Array.isArray(files) ? asList(files) : files && typeof files === "object" && "file" in files ? asList(files.file) : asList(files);
 }
 
+/**
+ * A written answer comes back from Schoology as an HTML file it names itself, "dropbox_<uid>_r<n>.html"
+ * (2026-11-03, Martin: "the files are not named as they were"). It's shown and downloaded as
+ * "Written answer.html" instead; every other file keeps its own name.
+ */
+export function shownSubmissionName(name: string): string {
+  return /^dropbox_\d+_r\d+\.html?$/i.test(name) ? "Written answer.html" : name;
+}
+
 function revisionFiles(rev: Raw): Revision["files"] {
   const list = rawRevisionFiles(rev);
   const out: Revision["files"] = [];
@@ -375,7 +384,7 @@ function revisionFiles(rev: Raw): Revision["files"] {
     const id = String(f?.id ?? "");
     if (!ID_RE.test(id)) continue;
     // Named the same way as the Files page and downloads (adapt.ts), extension included.
-    const name = findAttachment({ attachments: { files: [f] } }, id)?.name ?? "File";
+    const name = shownSubmissionName(findAttachment({ attachments: { files: [f] } }, id)?.name ?? "File");
     const size = Number(f?.filesize ?? 0);
     out.push({ id, name, size: Number.isFinite(size) && size > 0 ? Math.floor(size) : 0 });
   }
@@ -455,7 +464,8 @@ export function findSubmittedFile(
     if (String(raw.revision_id ?? raw.id ?? "") !== revisionId) continue;
     for (const f of rawRevisionFiles(raw)) {
       if (String(f?.id ?? "") !== fileId) continue;
-      return findAttachment({ attachments: { files: [f] } }, fileId);
+      const found = findAttachment({ attachments: { files: [f] } }, fileId);
+      return found ? { ...found, name: shownSubmissionName(found.name) } : null;
     }
   }
   return null;

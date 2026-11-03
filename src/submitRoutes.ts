@@ -122,8 +122,10 @@ export function submitRoutes(deps: SubmitDeps) {
     if (blocked) return blocked;
     const body = await readBody(c, MAX_JSON_BYTES);
     if (!body) return c.json({ error: "invalid_body" }, 400);
-    const section = String(body.section ?? "");
-    const assignment = String(body.assignment ?? "");
+    // A file for a message (2026-11-03): the same upload, not tied to an assignment ("0" stands in for both ids).
+    const forMessage = body.purpose === "message";
+    const section = forMessage ? "0" : String(body.section ?? "");
+    const assignment = forMessage ? "0" : String(body.assignment ?? "");
     const filename = body.filename;
     const filesize = body.filesize;
     const md5 = String(body.md5 ?? "").toLowerCase();
@@ -213,6 +215,8 @@ export function submitRoutes(deps: SubmitDeps) {
     try {
       answer = await attachFiles(session, section, assignment, fileIds);
     } catch (error) {
+      // Schoology's 403 here (2026-11-03): the assignment takes no turn-ins (allow_dropbox off, or closed).
+      if (error instanceof SchoologyError && error.status === 403) return c.json({ error: "turn_in_not_allowed" }, 403);
       return schoologyFailure(c, error);
     }
     const revision = revisionFromAnswer(answer, studentTimeZone(c));
@@ -248,6 +252,7 @@ export function submitRoutes(deps: SubmitDeps) {
       const answer = await submitText(c.get("session"), section, assignment, html);
       return c.json({ ok: true, revision: revisionFromAnswer(answer, studentTimeZone(c)) });
     } catch (error) {
+      if (error instanceof SchoologyError && error.status === 403) return c.json({ error: "turn_in_not_allowed" }, 403);
       return schoologyFailure(c, error);
     }
   });

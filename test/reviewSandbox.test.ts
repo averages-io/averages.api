@@ -159,7 +159,7 @@ console.log("\nwho's signed in, the bundle");
   // Starts with these three (the quiz due today joins them in the last minute of a Pacific day).
   check("overdue: the three past-due items, oldest first", overdue.slice(0, 3), ["Reading Response", "Chapter 6 Discussion", "Lab Report #4"]);
   check("graded work is never overdue", overdue.some((t: string) => /Lab Report #3|Gas Laws/.test(t)), false);
-  check("today: the Algebra II quiz", data.TODAY, [{ title: "Unit 2 Quiz", courseId: ALG, id: "7100000206" }]);
+  check("today: the Algebra II quiz (no turn-ins on Schoology)", data.TODAY, [{ title: "Unit 2 Quiz", courseId: ALG, id: "7100000206", noDropbox: true }]);
   const upcoming = data.UPCOMING.map((u: any) => u.title);
   check("upcoming: this week and next, soonest first", [upcoming.length >= 10, upcoming.indexOf("Titration Lab Prep") < upcoming.indexOf("Unit 3 Test: Thermochemistry"), upcoming.includes("Practice Set 8")], [true, true, true]);
   const lab4 = data.OVERDUE.find((o: any) => o.title === "Lab Report #4");
@@ -347,7 +347,7 @@ console.log("\nturning in");
   const none = await call(`/submit/history?section=${ALG}&assignment=7100000207`, { cookie });
   check("nothing turned in yet: empty", none.data.revisions, []);
   const quiz = await call("/submit/text", { cookie, json: { section: ALG, assignment: "7100000206", body: "answer" } });
-  check("a quiz takes no submissions", [quiz.res.status, quiz.data.status], [502, 403]);
+  check("a quiz takes no submissions", [quiz.res.status, quiz.data.error], [403, "turn_in_not_allowed"]);
   const wrongClass = await call("/submit/text", { cookie, json: { section: ALG, assignment: ESSAY, body: "answer" } });
   check("an assignment from another class: 404", wrongClass.res.status, 404);
 }

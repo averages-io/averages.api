@@ -586,11 +586,14 @@ export function adaptAssignments(
         id: String(assignment?.id ?? ""),
         // Runs in an outside tool (2026-10-16): Pending, not Missing, and opened on Schoology.
         ...(isOutsideTool(assignment) ? { outside: true } : {}),
+        // Takes no turn-ins on Schoology (2026-11-03): allow_dropbox "0", work handed in on paper or in class.
+        // The app doesn't offer Turn in for it (Schoology answers a turn-in with 403).
+        ...(["0", 0, false, "false"].includes(assignment?.allow_dropbox) ? { noDropbox: true } : {}),
       };
 
       if (dayIn(dueMs, tz) === today) {
         // With its id (2026-10-07): Home links to it as assignment?id=<id>.
-        TODAY.push({ title: item.title, courseId, id: item.id, ...(item.outside ? { outside: true } : {}) });
+        TODAY.push({ title: item.title, courseId, id: item.id, ...(item.outside ? { outside: true } : {}), ...(item.noDropbox ? { noDropbox: true } : {}) });
       }
 
       // "Completed" is deliberately not inferred here — Schoology reports

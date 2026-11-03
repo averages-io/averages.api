@@ -129,7 +129,7 @@ check("a link stays plain text", messageHtml("https://example.com/a?b=1&c=2"), "
 console.log("\nchecking a new message");
 {
   const ok = parseNewMessage({ recipientIds: ["5001", 5002, "5001", ME], subject: "  Lab\nreport  ", message: "Hello\r\nthere\u0007 " }, ME);
-  check("recipients deduped (and not the student), subject one line, text cleaned", ok, { ok: true, recipientIds: ["5001", "5002"], subject: "Lab report", message: "Hello\nthere" });
+  check("recipients deduped (and not the student), subject one line, text cleaned", ok, { ok: true, recipientIds: ["5001", "5002"], subject: "Lab report", message: "Hello\nthere", fileIds: [] });
   const bad = (body: unknown) => {
     const r = parseNewMessage(body, ME);
     return r.ok ? "ok" : r.error;
@@ -153,8 +153,20 @@ console.log("\nchecking a new message");
 }
 
 console.log("\nchecking a reply");
-check("ok", parseReply({ id: "88", message: " Thanks " }), { ok: true, id: "88", message: "Thanks" });
+check("ok", parseReply({ id: "88", message: " Thanks " }), { ok: true, id: "88", message: "Thanks", fileIds: [] });
 check("refusals", [parseReply({ id: "8x", message: "m" }), parseReply({ id: "88" }), parseReply("88")].map((r) => (r.ok ? "ok" : r.error)), ["bad_request", "empty_message", "invalid_body"]);
+
+console.log("\nfiles sent with a message (2026-11-03)");
+{
+  const ME = "1";
+  const n = parseNewMessage({ recipientIds: ["5"], subject: "Lab", message: "", fileIds: ["11", 12, "11"] }, ME);
+  check("a new message can be just files (ids deduped, numbers taken)", n.ok && [n.message, n.fileIds], ["", ["11", "12"]]);
+  check("no words and no files is still empty", (parseNewMessage({ recipientIds: ["5"], subject: "Lab", message: " " }, ME) as any).error, "empty_message");
+  check("file ids must be digits, at most 10", [(parseNewMessage({ recipientIds: ["5"], subject: "s", message: "m", fileIds: ["x1"] }, ME) as any).error, (parseNewMessage({ recipientIds: ["5"], subject: "s", message: "m", fileIds: Array.from({ length: 11 }, (_, i) => String(i + 1)) }, ME) as any).error], ["bad_files", "bad_files"]);
+  const r = parseReply({ id: "9", fileIds: ["44"] });
+  check("a reply can be just a file", r.ok && [r.message, r.fileIds], ["", ["44"]]);
+  check("no fileIds is no files", (parseReply({ id: "9", message: "hi" }) as any).fileIds, []);
+}
 
 console.log("\nfiles and links on a message (2026-11-03)");
 {

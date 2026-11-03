@@ -410,6 +410,26 @@ function cleanMessage(value: string): string {
   return value.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 }
 
+/** Most files on one message (2026-11-03). */
+export const MAX_MESSAGE_FILES = 10;
+/** Files uploaded for a message (POST /submit/upload with purpose "message"): their ids, digits only, each once. */
+function parseFileIds(value: unknown): Parsed<{ fileIds: string[] }> {
+  if (value === undefined || value === null) return { ok: true, fileIds: [] };
+  if (!Array.isArray(value) || value.length > MAX_MESSAGE_FILES) return { ok: false, error: "bad_files" };
+  const fileIds: string[] = [];
+  for (const raw of value) {
+    const id = typeof raw === "number" && Number.isSafeInteger(raw) ? String(raw) : raw;
+    if (typeof id !== "string" || !ID_RE.test(id)) return { ok: false, error: "bad_files" };
+    if (!fileIds.includes(id)) fileIds.push(id);
+  }
+  return { ok: true, fileIds };
+}
+/** The words, which may be empty when files go with them. */
+function parseTextWith(value: unknown, files: string[]): Parsed<{ message: string }> {
+  if (files.length && (value === undefined || value === null || (typeof value === "string" && !value.trim()))) return { ok: true, message: "" };
+  return parseText(value);
+}
+
 function parseText(value: unknown): Parsed<{ message: string }> {
   if (typeof value !== "string") return { ok: false, error: "empty_message" };
   const message = cleanMessage(value);
@@ -423,7 +443,7 @@ function parseText(value: unknown): Parsed<{ message: string }> {
  * 1 to 20 recipients, ids digits only (the student's own id is dropped),
  * a subject of 1 to 200 characters and a message of up to 10000.
  */
-export function parseNewMessage(body: unknown, me: string): Parsed<{ recipientIds: string[]; subject: string; message: string }> {
+export function parseNewMessage(body: unknown, me: string): Parsed<{ recipientIds: string[]; subject: string; message: string; fileIds: string[] }> {
   if (!isObject(body)) return { ok: false, error: "invalid_body" };
   const ids = body.recipientIds;
   if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_RECIPIENTS) return { ok: false, error: "bad_recipients" };
@@ -438,19 +458,23 @@ export function parseNewMessage(body: unknown, me: string): Parsed<{ recipientId
   const subject = cleanSubject(body.subject);
   if (subject.length > MAX_SUBJECT) return { ok: false, error: "subject_too_long" };
   if (!subject) return { ok: false, error: "empty_subject" };
-  const text = parseText(body.message);
+  const files = parseFileIds(body.fileIds);
+  if (!files.ok) return files;
+  const text = parseTextWith(body.message, files.fileIds);
   if (!text.ok) return text;
-  return { ok: true, recipientIds, subject, message: text.message };
+  return { ok: true, recipientIds, subject, message: text.message, fileIds: files.fileIds };
 }
 
 /** POST /messages/reply's body: `{ id, message }`. */
-export function parseReply(body: unknown): Parsed<{ id: string; message: string }> {
+export function parseReply(body: unknown): Parsed<{ id: string; message: string; fileIds: string[] }> {
   if (!isObject(body)) return { ok: false, error: "invalid_body" };
   const id = typeof body.id === "number" && Number.isSafeInteger(body.id) ? String(body.id) : body.id;
   if (typeof id !== "string" || !ID_RE.test(id)) return { ok: false, error: "bad_request" };
-  const text = parseText(body.message);
+  const files = parseFileIds(body.fileIds);
+  if (!files.ok) return files;
+  const text = parseTextWith(body.message, files.fileIds);
   if (!text.ok) return text;
-  return { ok: true, id, message: text.message };
+  return { ok: true, id, message: text.message, fileIds: files.fileIds };
 }
 
 export type SendResult = { ok: true; id: string } | { ok: false; error: "recipient_not_allowed" | "school_blocks_new_messages" | "not_found" | "no_recipients" | "too_many_recipients" };
@@ -480,7 +504,7 @@ async function allowedRecipients(creds: Credentials & { uid?: string }, wanted: 
   return allowed;
 }
 
-export async function sendNewMessage(creds: Credentials & { uid?: string }, input: { recipientIds: string[]; subject: string; message: string }): Promise<SendResult> {
+export async function sendNewMessage(creds: Credentials & { uid?: string }, input: { recipientIds: string[]; subject: string; message: string; fileIds?: string[] }): Promise<SendResult> {
   const allowed = await allowedRecipients(creds, input.recipientIds);
   if (!input.recipientIds.every((id) => allowed.has(id))) return { ok: false, error: "recipient_not_allowed" };
   let answer: Raw | null;
@@ -489,6 +513,8 @@ export async function sendNewMessage(creds: Credentials & { uid?: string }, inpu
       subject: input.subject,
       message: messageHtml(input.message),
       recipient_ids: input.recipientIds.join(","),
+      // Files the student uploaded for it (2026-11-03): Schoology takes them the same way as on its own posts.
+      ...(input.fileIds && input.fileIds.length ? { "file-attachment": { id: input.fileIds } } : {}),
     });
   } catch (error) {
     // Schoology's own "no": "Some or all of the recipients you entered are invalid" (400) is
@@ -505,7 +531,7 @@ export async function sendNewMessage(creds: Credentials & { uid?: string }, inpu
  * A reply: the thread is read from Schoology for its subject and the other
  * participants (never from the browser), then the reply goes to them.
  */
-export async function sendReply(creds: Credentials, me: string, input: { id: string; message: string }): Promise<SendResult> {
+export async function sendReply(creds: Credentials, me: string, input: { id: string; message: string; fileIds?: string[] }): Promise<SendResult> {
   const rows = await getThread(input.id, creds);
   if (!rows) return { ok: false, error: "not_found" };
   const recipients = threadParticipants(rows, me);
@@ -515,6 +541,7 @@ export async function sendReply(creds: Credentials, me: string, input: { id: str
     subject: threadSubject(rows) || "No subject",
     message: messageHtml(input.message),
     recipient_ids: recipients.join(","),
+    ...(input.fileIds && input.fileIds.length ? { "file-attachment": { id: input.fileIds } } : {}),
   });
   return { ok: true, id: input.id };
 }

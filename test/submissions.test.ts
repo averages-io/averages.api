@@ -17,6 +17,8 @@ import {
   SUBMISSION_CALL_BUDGET,
   submittedFiles,
   turnInAssignments,
+  shownSubmissionName,
+  adaptHistory,
 } from "../src/submit.ts";
 
 let passed = 0;
@@ -305,6 +307,13 @@ const q = (s: string, a: string, r: string, f: string) => `/data/submission-file
   check("no cookie: 401", (await call(q("101", "601", "81", "901"))).res.status, 401);
   check("demo: 403", (await call(q("101", "601", "81", "901"), demo)).res.status, 403);
   check("Google Classroom: 404 like /data/attachment", (await call(q("101", "601", "81", "901"), google)).data, { error: "classroom_files_open_in_drive" });
+}
+
+console.log("\nwritten answers' file name (2026-11-03)");
+check("Schoology's dropbox_<uid>_r<n>.html is a written answer", [shownSubmissionName("dropbox_146154216_r3.html"), shownSubmissionName("essay.html"), shownSubmissionName("dropbox notes.pdf")], ["Written answer.html", "essay.html", "dropbox notes.pdf"]);
+{
+  const h = adaptHistory({ revision: [{ revision_id: 3, uid: 7, created: 1700000000, attachments: { files: { file: [{ id: 55, filename: "dropbox_7_r3.html", filesize: 900, download_path: "https://api.schoology.com/v1/x" }] } } }] }, "7", "UTC");
+  check("...and shows that way in the history", h[0].files[0].name, "Written answer.html");
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
