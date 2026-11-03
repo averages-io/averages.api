@@ -163,6 +163,7 @@ import {
 import { findMessageFile, getRecipients, getThread, namesFrom } from "./messages.ts";
 import { getSectionGrades } from "./extras.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
+import { getLinkImage, getLinkPreview, parseTarget } from "./linkPreview.ts";
 import { rateLimit } from "./rateLimit.ts";
 import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
@@ -2702,6 +2703,25 @@ app.route("/data", dataExtrasRoutes(extrasDeps));
 /** GET /messages, /messages/thread, /messages/recipients; POST /messages, /messages/reply. Schoology only. */
 app.route("/messages", messagesRoutes(extrasDeps));
 
+// Link previews in messages (2026-11-03, src/linkPreview.ts): the page's title, site and picture; the picture comes
+// through here so a student's browser never contacts the site. Signed-in only.
+app.get("/links/preview", requireSession, async (c) => {
+  c.header("Cache-Control", "private, max-age=3600");
+  const target = parseTarget(c.req.query("url"));
+  if (!target) return c.json({ error: "bad_request" }, 400);
+  return c.json(await getLinkPreview(target));
+});
+app.get("/links/image", requireSession, async (c) => {
+  const target = parseTarget(c.req.query("url"));
+  if (!target) return c.json({ error: "bad_request" }, 400);
+  try {
+    const res = await getLinkImage(target);
+    return res ?? c.json({ error: "not_an_image" }, 404);
+  } catch {
+    return c.json({ error: "not_available" }, 502);
+  }
+});
+
 /** Browser notifications (src/push.ts). */
 app.route("/push", pushRoutes({ requireSession, fromOurApp: notFromOurApp }));
 
@@ -2812,3 +2832,4 @@ export default {
   // The retry queue (2026-10-16): see src/retryQueue.ts.
   queue: async (batch: MessageBatch<unknown>, env: Bindings) => handleRetryBatch(batch, retryHandlers(env)),
 };
+

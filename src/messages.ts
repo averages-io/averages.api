@@ -24,7 +24,7 @@
 
 import { clip, decodeEntities, relativeTime, schoologyTime, toPlainText } from "./adapt.ts";
 import type { Credentials } from "./oauth.ts";
-import { getMessages, getSections, listOf, SchoologyError, schoologyGet, schoologyPost } from "./schoology.ts";
+import { getMessages, getSections, listOf, SchoologyError, schoologyGet, schoologyPost, schoologyRequest } from "./schoology.ts";
 import { getAdminEnrollments, teacherRows } from "./extras.ts";
 
 type Raw = Record<string, any>;
@@ -394,6 +394,29 @@ export async function getThread(id: string, creds: Credentials): Promise<Raw[] |
     if (firstError instanceof SchoologyError && firstError.status === 403 && error instanceof SchoologyError && error.status === 403) throw error;
     return null;
   }
+}
+
+/**
+ * Deletes a conversation from the student's own Schoology folders (2026-11-03, Martin: "delete convos in app").
+ * Schoology: "Delete a message (cannot be undone)", and deleting doesn't un-send it, so the teacher keeps their
+ * copy. A conversation can be in the Inbox and in Sent (the student wrote in it too), so both go. Resolves false
+ * when it's in neither (already gone); a refusal in both folders for another reason is thrown.
+ */
+export async function deleteThread(id: string, creds: Credentials): Promise<boolean> {
+  if (!ID_RE.test(id)) return false;
+  let gone = false;
+  const errors: unknown[] = [];
+  for (const folder of ["inbox", "sent"]) {
+    try {
+      await schoologyRequest("DELETE", `/messages/${folder}/${id}`, creds);
+      gone = true;
+    } catch (error) {
+      if (!notHere(error)) throw error;
+      errors.push(error);
+    }
+  }
+  if (!gone && errors.length === 2 && errors.every((e) => e instanceof SchoologyError && e.status === 403)) throw errors[0];
+  return gone;
 }
 
 /* ── Sending ───────────────────────────────────────────────────────────── */

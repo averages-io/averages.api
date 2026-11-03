@@ -1,7 +1,7 @@
 // The Schoology client's reads (2026-11-03): redirects are re-signed, and the
 // 50-calls-per-5-seconds limit (429) waits and tries again.
 import { getMe, getAssignments, RATE_LIMIT_WAITS_MS } from "../src/schoology.ts";
-import { sendNewMessage } from "../src/messages.ts";
+import { sendNewMessage, deleteThread } from "../src/messages.ts";
 
 let passed = 0, failed = 0;
 function check(name: string, a: unknown, e: unknown) {
@@ -74,6 +74,30 @@ fake(null);
 check("to someone outside their classes: refused before Schoology", [await sendNewMessage(ME, { recipientIds: ["31337"], subject: "Hi", message: "Q" }), posted.length], [{ ok: false, error: "recipient_not_allowed" }, 0]);
 fake(new Response('"Some or all of the recipients you entered are invalid"', { status: 400 }));
 check("Schoology's own no (the school's settings) is said as such", await sendNewMessage(ME, { recipientIds: ["9001"], subject: "Hi", message: "Q" }), { ok: false, error: "school_blocks_new_messages" });
+
+console.log("deleting a conversation");
+{
+  let seen: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    seen.push(`${init?.method ?? "GET"} ${url.pathname}`);
+    return answer(url.pathname, seen.length);
+  }) as typeof fetch;
+  answer = () => new Response(null, { status: 204 });
+  check("in both folders: both deleted", [await deleteThread("1827715414", CREDS), seen], [true, ["DELETE /v1/messages/inbox/1827715414", "DELETE /v1/messages/sent/1827715414"]]);
+  seen = []; answer = (p) => p.includes("/sent/") ? new Response("not found", { status: 404 }) : new Response(null, { status: 204 });
+  check("only in the inbox: still deleted", await deleteThread("55", CREDS), true);
+  seen = []; answer = () => new Response("not found", { status: 404 });
+  check("in neither: false (already gone)", await deleteThread("55", CREDS), false);
+  seen = []; answer = () => new Response("no", { status: 403 });
+  let st = 0; await deleteThread("55", CREDS).catch((e) => { st = e.status; });
+  check("refused in both: the refusal is thrown", st, 403);
+  seen = []; answer = () => new Response("down", { status: 500 });
+  st = 0; await deleteThread("55", CREDS).catch((e) => { st = e.status; });
+  check("Schoology down: thrown", st, 500);
+  seen = [];
+  check("an id that isn't digits never reaches Schoology", [await deleteThread("../users/1", CREDS), seen.length], [false, 0]);
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

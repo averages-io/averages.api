@@ -32,6 +32,7 @@ import {
 import {
   adaptRecipients,
   adaptThread,
+  deleteThread,
   getRecipients,
   getThread,
   ID_RE,
@@ -293,6 +294,22 @@ export function messagesRoutes(deps: ExtrasDeps) {
       if (!sent.ok) return c.json({ error: sent.error }, 403);
       return c.json({ ok: true, id: sent.id });
     } catch (error) {
+      return schoologyFailure(c, error);
+    }
+  });
+
+  // Delete a conversation (2026-11-03): from the student's own Inbox and Sent on Schoology. It can't be undone,
+  // and the teacher keeps their copy. POST, so the check that it came from our app applies.
+  app.post("/delete", deps.requireSession, guard, async (c: any) => {
+    const session = c.get("session");
+    const body = (await jsonBody(c)) as { id?: unknown } | null;
+    const id = typeof body?.id === "string" || typeof body?.id === "number" ? String(body.id) : "";
+    if (!ID_RE.test(id)) return c.json({ error: "bad_request" }, 400);
+    try {
+      const gone = await deleteThread(id, session);
+      return gone ? c.json({ ok: true }) : c.json({ error: "not_found" }, 404);
+    } catch (error) {
+      if (refused(error)) return c.json({ error: "not_allowed" }, 403);
       return schoologyFailure(c, error);
     }
   });
