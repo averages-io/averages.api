@@ -42,6 +42,9 @@ export class CanvaStore extends DurableObject<CanvaConfig> {
   finishConnect(uid: string, state: string, code: string): Promise<string> {
     return this.account.finishConnect(uid, state, code);
   }
+  connectReturn(state: string, consume?: boolean): Promise<string> {
+    return this.account.connectReturn(state, consume);
+  }
   status(uid: string): Promise<{ connected: boolean; name: string }> {
     return this.account.status(uid);
   }

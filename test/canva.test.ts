@@ -171,6 +171,17 @@ console.log("connect");
     await rejects(`a forged state "${forged.slice(0, 12)}" is refused`, fresh.finishConnect(UID, forged, "code"), "canva_state_not_found");
   }
   check("...without ever calling Canva", tokenCalls, 0);
+
+  // Not finished (2026-11-03): a cancel or failure goes back where it started (onboarding), not Settings.
+  {
+    const st2 = new MemoryStorage();
+    const a2 = new CanvaAccount(st2, ENV);
+    const s2 = new URL(await a2.beginConnect("/onboard")).searchParams.get("state")!;
+    check("a connect's start page is kept for a failure", await a2.connectReturn(s2), "/onboard");
+    check("...and a cancel, which forgets the state", await a2.connectReturn(s2, true), "/onboard");
+    check("...so it isn't found again", await a2.connectReturn(s2), "/settings");
+    for (const forged of ["constructor", "__proto__", "A".repeat(32), ""]) check(`an unknown state "${forged.slice(0, 12)}" goes to Settings`, await a2.connectReturn(forged), "/settings");
+  }
   check("...and nothing gets connected", await fresh.status(UID), { connected: false, name: "" });
 
   const unconfigured = new CanvaAccount(new MemoryStorage(), { ...ENV, CANVA_CLIENT_SECRET: "" });

@@ -2021,17 +2021,19 @@ app.get("/canva/callback", async (c) => {
   const session = await sessionFrom(c);
   if (!session || isDemo(session)) return c.redirect(`${origin}/`);
   if (isIncognito(session)) return c.redirect(`${origin}/settings?canva=incognito`);
-  if (c.req.query("error")) return c.redirect(`${origin}/settings?canva=cancelled`);
+  // Not finished (cancelled or failed): back to the page it started from, not
+  // always Settings (2026-11-03, Martin: onboarding lost everything picked).
+  const store = canvaStore(c.env, session.uid, c.req.url);
+  const state = c.req.query("state") ?? "";
+  const startedFrom = (consume = false) => store.connectReturn(state, consume).catch(() => "/settings");
+  if (c.req.query("error")) return c.redirect(`${origin}${withQuery(await startedFrom(true), "canva", "cancelled")}`);
+  const back = await startedFrom();
   try {
-    const returnTo = await canvaStore(c.env, session.uid, c.req.url).finishConnect(
-      session.uid,
-      c.req.query("state") ?? "",
-      c.req.query("code") ?? ""
-    );
+    const returnTo = await store.finishConnect(session.uid, state, c.req.query("code") ?? "");
     return c.redirect(`${origin}${withQuery(safeAppPath(returnTo, "/settings"), "canva", "connected")}`);
   } catch (error) {
     errorCode(error, "canva_callback_failed");
-    return c.redirect(`${origin}/settings?canva=failed`);
+    return c.redirect(`${origin}${withQuery(back, "canva", "failed")}`);
   }
 });
 

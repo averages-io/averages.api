@@ -448,6 +448,23 @@ export class CanvaAccount {
     return entry.returnTo;
   }
 
+  /**
+   * Where a connect came from, for when it doesn't finish (2026-11-03): a
+   * cancel or a failure used to always go to Settings, which threw students
+   * out of onboarding. `consume` also forgets the state (a cancel). Settings
+   * when the state isn't one of this student's.
+   */
+  async connectReturn(state: string, consume = false): Promise<string> {
+    if (!STATE_RE.test(state)) return "/settings";
+    const pending = prune(await this.storage.get<Record<string, PendingConnect>>("connect"), 4);
+    const entry = own(pending, state);
+    if (entry && consume) {
+      delete pending[state];
+      await this.storage.put("connect", pending);
+    }
+    return entry ? safeAppPath(entry.returnTo, "/settings") : "/settings";
+  }
+
   async status(uid: string): Promise<{ connected: boolean; name: string }> {
     const tokens = await this.loadTokens(uid);
     if (!tokens) return { connected: false, name: "" };
