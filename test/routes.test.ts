@@ -507,7 +507,12 @@ resetRateLimits();
   check("someone not in the student's recipients: 403, nothing sent", [stranger.status, (await json(stranger)).error, world.posted.length], [403, "recipient_not_allowed", 0]);
   world.recipients = 403;
   const unlisted = await call("/messages", { method: "POST", cookie: schoologySession, json: { recipientIds: ["5001"], subject: "Hi", message: "x" } });
-  check("recipients can't be read: refused (502), nothing sent", [unlisted.status, world.posted.length], [502, 0]);
+  // 2026-11-03: Schoology's list can be empty or unreadable; a teacher of the student's own classes is still allowed.
+  check("recipients can't be read: their class's teacher still gets it", [unlisted.status, world.posted.length], [200, 1]);
+  world.posted = [];
+  const unlistedStranger = await call("/messages", { method: "POST", cookie: schoologySession, json: { recipientIds: ["9999"], subject: "Hi", message: "x" } });
+  check("...but not someone outside their classes", [unlistedStranger.status, world.posted.length], [403, 0]);
+  resetRateLimits(); // the two sends above count toward the per-minute limit the checks below don't expect
   world.recipients = [{ id: "5001", name: "Mr. Cho" }, { id: "5002", name: "Ms. Whitfield" }];
 
   const bad = async (body: unknown) => {

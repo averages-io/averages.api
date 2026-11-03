@@ -24,7 +24,8 @@
 
 import { clip, decodeEntities, relativeTime, schoologyTime, toPlainText } from "./adapt.ts";
 import type { Credentials } from "./oauth.ts";
-import { getMessages, listOf, SchoologyError, schoologyGet, schoologyPost } from "./schoology.ts";
+import { getMessages, getSections, listOf, SchoologyError, schoologyGet, schoologyPost } from "./schoology.ts";
+import { getAdminEnrollments, teacherRows } from "./extras.ts";
 
 type Raw = Record<string, any>;
 
@@ -386,7 +387,7 @@ export function parseReply(body: unknown): Parsed<{ id: string; message: string 
   return { ok: true, id, message: text.message };
 }
 
-export type SendResult = { ok: true; id: string } | { ok: false; error: "recipient_not_allowed" | "not_found" | "no_recipients" | "too_many_recipients" };
+export type SendResult = { ok: true; id: string } | { ok: false; error: "recipient_not_allowed" | "school_blocks_new_messages" | "not_found" | "no_recipients" | "too_many_recipients" };
 
 /**
  * A new thread. Every recipient must be someone GET /messages/recipients
@@ -394,14 +395,41 @@ export type SendResult = { ok: true; id: string } | { ok: false; error: "recipie
  * A recipients list that can't be read throws (the route answers 502): with
  * no list there's nothing to check against.
  */
-export async function sendNewMessage(creds: Credentials, input: { recipientIds: string[]; subject: string; message: string }): Promise<SendResult> {
-  const allowed = new Set(adaptRecipients(await getRecipients(creds)).map((r) => r.id));
+/**
+ * Who a new message may go to (2026-11-03, found with the sandbox): Schoology's
+ * own list (GET /messages/recipients) can come back empty, even for a teacher,
+ * which refused every new message. Then it's the teachers of the student's own
+ * classes. Schoology still has the last word on the send itself.
+ */
+async function allowedRecipients(creds: Credentials & { uid?: string }, wanted: string[]): Promise<Set<string>> {
+  const allowed = new Set(adaptRecipients(await getRecipients(creds).catch(() => [])).map((r) => r.id));
+  if (wanted.every((id) => allowed.has(id)) || !creds.uid) return allowed;
+  const sections = (await getSections(creds.uid, creds).catch(() => [])).slice(0, 15);
+  await Promise.all(sections.map(async (sec: Raw) => {
+    const id = String(sec?.id ?? "");
+    if (!ID_RE.test(id)) return;
+    const rows = await getAdminEnrollments(id, creds).catch(() => []);
+    for (const t of teacherRows(rows, creds.uid!)) allowed.add(t.id);
+  }));
+  return allowed;
+}
+
+export async function sendNewMessage(creds: Credentials & { uid?: string }, input: { recipientIds: string[]; subject: string; message: string }): Promise<SendResult> {
+  const allowed = await allowedRecipients(creds, input.recipientIds);
   if (!input.recipientIds.every((id) => allowed.has(id))) return { ok: false, error: "recipient_not_allowed" };
-  const answer = await schoologyPost<Raw>("/messages", creds, {
-    subject: input.subject,
-    message: messageHtml(input.message),
-    recipient_ids: input.recipientIds.join(","),
-  });
+  let answer: Raw | null;
+  try {
+    answer = await schoologyPost<Raw>("/messages", creds, {
+      subject: input.subject,
+      message: messageHtml(input.message),
+      recipient_ids: input.recipientIds.join(","),
+    });
+  } catch (error) {
+    // Schoology's own "no": "Some or all of the recipients you entered are invalid" (400) is
+    // the school's messaging permissions, not a broken request. Replies still work.
+    if (error instanceof SchoologyError && (error.status === 400 || error.status === 403) && /recipient/i.test(String(error.body ?? ""))) return { ok: false, error: "school_blocks_new_messages" };
+    throw error;
+  }
   const first = Array.isArray(answer?.message) ? answer?.message[0] : answer?.message;
   const id = String(answer?.id ?? first?.id ?? "");
   return { ok: true, id: ID_RE.test(id) ? id : "" };

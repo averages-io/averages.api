@@ -1,6 +1,7 @@
 // The Schoology client's reads (2026-11-03): redirects are re-signed, and the
 // 50-calls-per-5-seconds limit (429) waits and tries again.
 import { getMe, getAssignments, RATE_LIMIT_WAITS_MS } from "../src/schoology.ts";
+import { sendNewMessage } from "../src/messages.ts";
 
 let passed = 0, failed = 0;
 function check(name: string, a: unknown, e: unknown) {
@@ -49,6 +50,30 @@ calls = [];
 answer = () => new Response("nope", { status: 403 });
 await getAssignments("5", CREDS).catch(() => {});
 check("other refusals aren't retried", calls.length, 1);
+
+console.log("new messages (who they may go to)");
+// Schoology's recipients list empty (seen in the sandbox): the teachers of the student's own classes are allowed.
+let posted: string[] = [];
+const fake = (schoologySays: Response | null) => {
+  posted = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    const p = url.pathname;
+    if (p === "/v1/messages/recipients") return json({ recipient: [] });
+    if (p === "/v1/users/42/sections") return json({ section: [{ id: 700 }, { id: 701 }] });
+    if (p === "/v1/sections/700/enrollments") return json({ enrollment: [{ uid: 9001, admin: 1, status: 1, name_display: "Ms. Reyes" }, { uid: 42, admin: 0, status: 1 }] });
+    if (p === "/v1/sections/701/enrollments") return json({ enrollment: [{ uid: 9002, admin: 1, status: 1, name_display: "Mr. Hall" }] });
+    if (p === "/v1/messages" && init?.method === "POST") { posted.push(String(init.body)); return schoologySays ?? json({ id: 555 }); }
+    return json({}, 404);
+  }) as typeof fetch;
+};
+const ME = { key: "k", secret: "s", uid: "42" };
+fake(null);
+check("to a teacher of one of their classes: sent", [await sendNewMessage(ME, { recipientIds: ["9002"], subject: "Hi", message: "Q" }), posted.length], [{ ok: true, id: "555" }, 1]);
+fake(null);
+check("to someone outside their classes: refused before Schoology", [await sendNewMessage(ME, { recipientIds: ["31337"], subject: "Hi", message: "Q" }), posted.length], [{ ok: false, error: "recipient_not_allowed" }, 0]);
+fake(new Response('"Some or all of the recipients you entered are invalid"', { status: 400 }));
+check("Schoology's own no (the school's settings) is said as such", await sendNewMessage(ME, { recipientIds: ["9001"], subject: "Hi", message: "Q" }), { ok: false, error: "school_blocks_new_messages" });
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
