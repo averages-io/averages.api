@@ -112,7 +112,30 @@ export async function schoologyGet<T = unknown>(
  * sign-in said the key "didn't work". Only redirects within api.schoology.com
  * are followed (never our signature to anywhere else), at most 3.
  */
+/**
+ * Schoology's limit (2026-11-03, found with the sandbox): 50 calls per 5
+ * seconds per key. A first page load asks for the bundle, people, files,
+ * events, updates and submissions at once, each a call per class, so a
+ * student with 5+ classes goes over it, and the calls that lost the race came
+ * back 429 and were quietly treated as empty. That's why new grades, due work
+ * and the bell were missing on first open and fine after a reload. A 429 now
+ * waits for the window to pass and tries again (each try signed fresh).
+ */
+export const RATE_LIMIT_WAITS_MS = [1200, 2500, 4500];
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function signedGet(url: URL, path: string, creds: Credentials): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await signedGetOnce(url, path, creds);
+    const wait = RATE_LIMIT_WAITS_MS[attempt];
+    if (res.status !== 429 || wait === undefined) return res;
+    await res.body?.cancel().catch(() => {});
+    // A little jitter, so the calls that were refused together don't all come back together.
+    await sleep(wait + Math.floor(Math.random() * 400));
+  }
+}
+
+async function signedGetOnce(url: URL, path: string, creds: Credentials): Promise<Response> {
   let at = url;
   for (let hop = 0; ; hop++) {
     const res = await signedFetch("GET", at, path, creds, { redirect: "manual" });

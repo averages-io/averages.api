@@ -1318,7 +1318,8 @@ app.get("/data/bundle", requireSession, async (c) => {
             course.id,
             session
           );
-        } catch {
+        } catch (error) {
+          console.error("bundle_assignments_failed", error instanceof SchoologyError ? error.status : "", error instanceof SchoologyError ? String(error.body ?? "").slice(0, 160) : String(error).slice(0, 160));
           assignmentsBySection[course.id] = [];
         }
       })

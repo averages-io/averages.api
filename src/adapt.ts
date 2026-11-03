@@ -439,6 +439,23 @@ function asArray(value: unknown): Raw[] {
   return [];
 }
 
+/**
+ * When a class's grades last changed (2026-11-03, Martin: "the updated column
+ * doesn't work"). Schoology's grades answer has no time for the section, only
+ * one per grade, and the section list has none either, so "Updated" was always
+ * blank. This is the newest grade's time (unix seconds), or undefined.
+ */
+function latestGradeTime(gradeEntry: Raw): number | undefined {
+  let latest = 0;
+  for (const period of asArray(gradeEntry?.period)) {
+    for (const a of asArray(period?.assignment)) {
+      const t = toDate(a?.timestamp)?.getTime() ?? 0;
+      if (t > latest) latest = t;
+    }
+  }
+  return latest ? Math.floor(latest / 1000) : undefined;
+}
+
 export function adaptCourses(
   sections: Raw[],
   grades: Raw[]
@@ -492,7 +509,7 @@ export function adaptCourses(
       predicted: letterFromPct(predictedPct || pct),
       predictedPct: predictedPct || pct,
       trend,
-      updated: relativeTime(gradeEntry?.timestamp ?? section?.last_updated),
+      updated: relativeTime(latestGradeTime(gradeEntry) ?? gradeEntry?.timestamp ?? section?.last_updated),
       code: toPlainText(section?.course_code ?? "").slice(0, 40),
       period: period === "" ? parsePeriod(section?.section_code) : period,
       section: titleLabel || (section?.section_title ? "" : sectionLabel(section?.section_code, String(name))),

@@ -142,6 +142,13 @@ check("scores are percentages, not raw points", HISTORY["101"].points[1], 80);
 // but haven't been graded in yet should show up, just without a grade.
 check("ungraded section still listed", COURSES[1].name, "Algebra II");
 check("ungraded section has empty history", HISTORY["102"].points, []);
+// "Updated" (2026-11-03): Schoology gives no time for the section, only per grade: the newest grade's.
+check("updated is the newest grade's date (Aug 13, the excused one counts: it was entered then)", COURSES[0].updated, "Aug 13");
+check("a class with no grades has no updated", COURSES[1].updated, "");
+{
+  const recent = adaptCourses([{ id: 7, course_title: "Bio" }], [{ section_id: 7, period: [{ assignment: [{ assignment_id: 1, grade: 9, max_points: 10, timestamp: Math.floor((Date.now() - 3 * 3600 * 1000) / 1000) }] }, { assignment: [{ assignment_id: 2, grade: 8, max_points: 10, timestamp: Math.floor((Date.now() - 30 * 3600 * 1000) / 1000) }] }] }]);
+  check("recent grades read as hours ago, newest across periods", recent.COURSES[0].updated, "3h ago");
+}
 
 console.log("\nassignments bucketing");
 const dayMs = 24 * 60 * 60 * 1000;
