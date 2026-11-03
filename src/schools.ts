@@ -17,7 +17,11 @@ export interface School {
 }
 
 export const SCHOOLS: Readonly<Record<"schoology", readonly School[]>> = {
-  schoology: [],
+  schoology: [
+    // Schools without their own address, and Schoology's developer sandbox schools, sign in at app.schoology.com
+    // (2026-11-03, Martin couldn't find his sandbox school).
+    { name: "Schoology (app.schoology.com)", domain: "app.schoology.com", aliases: ["schoology.com", "www.schoology.com"] },
+  ],
 };
 
 export function schoolsFor(lms: unknown): readonly School[] | null {

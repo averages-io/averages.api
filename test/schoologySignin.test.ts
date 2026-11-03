@@ -84,7 +84,7 @@ let pending = "";
   const r = await call("/auth/schoology/start?domain=nmusd.schoology.com&under13=0");
   const to = new URL(r.headers.get("Location") ?? "about:blank");
   check("302 to the school's Schoology authorize page", [r.status, to.origin + to.pathname], [302, "https://nmusd.schoology.com/oauth/authorize"]);
-  check("with the request token and our callback", [to.searchParams.get("oauth_token"), to.searchParams.get("oauth_callback")], ["REQTOKEN1", "https://api.averages.io/auth/schoology/callback"]);
+  check("with the request token, coming back to the app's own site (Schoology only returns to the App URL's site)", [to.searchParams.get("oauth_token"), to.searchParams.get("oauth_callback")], ["REQTOKEN1", "https://app.averages.io/auth/schoology/callback"]);
   check("asked Schoology for a request token, signed with no token yet", [calls.map((c) => c.path), /oauth_token=""/.test(calls[0]?.auth ?? ""), /oauth_consumer_key="consumer-key-abc"/.test(calls[0]?.auth ?? "")], [["/v1/oauth/request_token"], true, true]);
   pending = cookieValue(r, OAUTH_COOKIE) ?? "";
   const raw = setCookies(r).find((c) => c.startsWith(OAUTH_COOKIE)) ?? "";

@@ -851,7 +851,10 @@ app.get("/auth/schoology/start", async (c) => {
     const sealed = await sealValue({ t: req.token, s: req.secret, d: domain, u13: c.req.query("under13") === "1" }, c.env.SESSION_SECRET, OAUTH_PURPOSE, OAUTH_TTL_SECONDS);
     c.header("Set-Cookie", pendingCookie(sealed, secure));
     c.header("Cache-Control", "no-store");
-    const callback = `${new URL(c.req.url).origin}/auth/schoology/callback`;
+    // Schoology only returns to an address on the app's own site (its App URL, https://app.averages.io): elsewhere
+    // it stops with "no valid return URL found" (2026-11-03, Martin). So it comes back to app.averages.io, whose
+    // /auth/schoology/callback page hands the answer straight to this API (public/auth/schoology/callback.html).
+    const callback = sandbox ? `${new URL(c.req.url).origin}/auth/schoology/callback` : `${appOrigin(c.req.url)}/auth/schoology/callback`;
     // The sandbox approves on a page of our own (no real Schoology to go to).
     const to = sandbox ? `${new URL(c.req.url).origin}/auth/schoology/sandbox-authorize?oauth_token=${encodeURIComponent(req.token)}&oauth_callback=${encodeURIComponent(callback)}` : authorizeUrl(domain, req.token, callback);
     return c.redirect(to, 302);
