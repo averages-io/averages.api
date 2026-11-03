@@ -96,11 +96,35 @@ export async function schoologyGet<T = unknown>(
    * app's lib/averages.ts, where tearing down the request meant the clearing
    * Set-Cookie never arrived). These are GETs: nothing is left half-done.
    */
-  const response = await signedFetch("GET", url, path, creds, { redirect: "follow" });
+  const response = await signedGet(url, path, creds);
 
   if (!response.ok) throw await failure(response, path);
 
   return (await response.json()) as T;
+}
+
+/**
+ * A signed GET that follows Schoology's redirects itself, signing each new
+ * address afresh (2026-11-03). /users/me answers 303 to /users/<id>; letting
+ * fetch follow it sent the same Authorization header (same nonce and
+ * timestamp) twice, and Schoology now refuses the second with 401 "Duplicate
+ * timestamp/nonce combination, possible replay attack", so every API-key
+ * sign-in said the key "didn't work". Only redirects within api.schoology.com
+ * are followed (never our signature to anywhere else), at most 3.
+ */
+async function signedGet(url: URL, path: string, creds: Credentials): Promise<Response> {
+  let at = url;
+  for (let hop = 0; ; hop++) {
+    const res = await signedFetch("GET", at, path, creds, { redirect: "manual" });
+    if (res.status < 300 || res.status >= 400 || res.status === 304) return res;
+    const loc = res.headers.get("Location");
+    if (!loc || hop >= 3) return res;
+    let next: URL;
+    try { next = new URL(loc, at); } catch { return res; }
+    if (next.protocol !== "https:" || next.hostname !== new URL(SCHOOLOGY_BASE).hostname) return res;
+    await res.body?.cancel().catch(() => {});
+    at = next;
+  }
 }
 
 /**
