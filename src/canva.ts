@@ -718,6 +718,8 @@ export interface DesignInfo {
   thumbnailUrl: string;
   /** Epoch ms. */
   updatedAt: number;
+  /** Canva's design_types ("doc", "presentation", ...; 2026-11-03). Empty when Canva doesn't say. */
+  designTypes: string[];
 }
 
 function toDesign(d: any): DesignInfo {
@@ -730,6 +732,7 @@ function toDesign(d: any): DesignInfo {
     thumbnailUrl: String(d?.thumbnail?.url ?? ""),
     // Canva sends seconds; tolerate milliseconds too.
     updatedAt: updated > 1e12 ? updated : updated * 1000,
+    designTypes: Array.isArray(d?.design_types) ? d.design_types.filter((t: unknown) => typeof t === "string" && /^[a-z_]{1,20}$/.test(t)).slice(0, 6) : [],
   };
 }
 

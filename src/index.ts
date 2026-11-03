@@ -187,7 +187,6 @@ import {
   type SubmittedFile,
 } from "./submit.ts";
 import { canvaExportRoutes } from "./canvaExport.ts";
-import { converterOn, pdfToDocx, type Converter } from "./convert.ts";
 import { canvaFolderRoutes, createFolder, moveItem } from "./canvaFolders.ts";
 import { cleanFolderName, newJobId, parseSaveFiles, SAVE_CRED_TTL_S, SAVE_JOB_RE, SAVE_MAX_FILES, SAVE_SPACING_S, saveOneFile } from "./canvaSave.ts";
 
@@ -199,7 +198,6 @@ export { CloudStore } from "./cloudStore.ts";
 export { BillingStore } from "./billingStore.ts";
 export { PushStore } from "./pushStore.ts";
 export { CalendarStore } from "./calendar.ts";
-export { Converter } from "./convert.ts";
 
 type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
@@ -234,13 +232,6 @@ type Bindings = {
    * canvaScopes() in canva.ts.
    */
   CANVA_EXPORT_ENABLED?: string;
-  /**
-   * The file converter container (src/convert.ts, 2026-10-15): turns Canva's
-   * PDF into Word for the type pill. "1" turns it on; without the binding or
-   * the switch the app doesn't offer Word.
-   */
-  CONVERTER?: DurableObjectNamespace<Converter>;
-  CONVERT_ENABLED?: string;
   /**
    * "1" once folder:read and folder:write are enabled for the Canva
    * integration (2026-10-06): Connect asks for them and the Files page shows
@@ -2686,8 +2677,6 @@ app.route(
     canvaGuard,
     fromOurApp: notFromOurApp,
     storeFor: (c, uid) => canvaStore(c.env, uid, c.req.url),
-    converterOn: (c) => converterOn(c.env),
-    pdfToDocx: (c, pdf) => pdfToDocx(c.env, pdf),
   })
 );
 /** Canva folders on the Files page (src/canvaFolders.ts), off until CANVA_FOLDERS_ENABLED. */

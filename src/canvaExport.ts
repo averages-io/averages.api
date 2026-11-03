@@ -3,12 +3,14 @@
  * Drafts, Add from Canva; 2026-10-06).
  *
  * The type pill (2026-10-15): the student picks what their teacher gets.
- * PDF, PowerPoint and PNG come straight from Canva (a PNG export is one image
- * per page). Word comes from a PDF export, turned into a .docx by our
- * converter container (src/convert.ts): Canva's API has no Word export,
- * though Canva's own Download menu does. GET /designs/:id/formats says which
- * of these a design can be: Canva's export-formats answer, plus Word for
- * designs that can't be a PowerPoint (Canva Docs) when the converter is on.
+ * PDF, PowerPoint, PNG and JPG, all straight from Canva. A PNG is one image of
+ * the whole design (Canva's as_single_image; 2026-11-03, was one per page); a
+ * JPG is one image per page. GET /designs/:id/formats says which of these a
+ * design can be (Canva's export-formats answer) and what kind of design it is.
+ *
+ * No Word (2026-11-03, Martin: "we don't need a container for canva exports"):
+ * Canva's API has no Word export, and the converter container that turned the
+ * PDF into a .docx (src/convert.ts) is gone. A Canva Doc goes as a PDF.
  *
  * A Hono sub-app that index.ts mounts with
  * `app.route("/canva", canvaExportRoutes(deps))`, next to the other /canva
@@ -59,29 +61,22 @@ export interface CanvaExportDeps {
   canvaGuard: (c: Context<any>) => Response | null;
   fromOurApp: (c: Context<any>) => Response | null;
   storeFor: (c: Context<any>, uid: string) => CanvaExportStore;
-  /** The converter container (src/convert.ts): is it on, and PDF bytes in, .docx bytes out. Without it there's no Word. */
-  converterOn?: (c: Context<any>) => boolean;
-  pdfToDocx?: (c: Context<any>, pdf: Uint8Array) => Promise<Uint8Array>;
 }
 
 /** What a design can be turned in as (the type pill), in the order the app shows them. */
-export const TURN_IN_FORMATS = ["pdf", "docx", "pptx", "png"] as const;
+export const TURN_IN_FORMATS = ["pdf", "pptx", "png", "jpg"] as const;
 export type TurnInFormat = (typeof TURN_IN_FORMATS)[number];
 export function isTurnInFormat(v: unknown): v is TurnInFormat {
   return typeof v === "string" && (TURN_IN_FORMATS as readonly string[]).includes(v);
 }
-/** What Canva is asked for: Word starts as a PDF. */
-const CANVA_TYPE: Record<TurnInFormat, "pdf" | "pptx" | "png"> = { pdf: "pdf", docx: "pdf", pptx: "pptx", png: "png" };
 export const FORMAT_MIME: Record<TurnInFormat, string> = {
   pdf: "application/pdf",
-  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   png: "image/png",
+  jpg: "image/jpeg",
 };
-/** A PNG export is one file per page; more than this many can't be one turn-in (Schoology's MAX_FILES is 20). */
+/** A JPG export is one file per page; more than this many can't be one turn-in (Schoology's MAX_FILES is 20). */
 export const MAX_PNG_PAGES = 20;
-/** The biggest PDF sent to the converter. */
-export const MAX_CONVERT_BYTES = 40 * 1024 * 1024;
 
 type ExportEnv = {
   Bindings: { SESSION_SECRET: string; CANVA_EXPORT_ENABLED?: string };
@@ -162,12 +157,18 @@ export async function createPdfExport(token: string, designId: string): Promise<
   return createExport(token, designId, "pdf");
 }
 
-/** Starts an export of the design as a PDF, a PowerPoint or PNGs (one per page). Returns Canva's job id. */
-export async function createExport(token: string, designId: string, type: "pdf" | "pptx" | "png"): Promise<string> {
+/**
+ * Starts an export of the design as a PDF, a PowerPoint, one PNG of the whole design (as_single_image), or JPGs
+ * (one per page). Returns Canva's job id.
+ */
+export async function createExport(token: string, designId: string, type: TurnInFormat): Promise<string> {
+  const format: Record<string, unknown> = { type };
+  if (type === "png") format.as_single_image = true;
+  if (type === "jpg") format.quality = 90; // Canva's JPG needs a quality, 1 to 100
   const res = await canvaFetch(`${CANVA_API}/exports`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ design_id: designId, format: { type } }),
+    body: JSON.stringify({ design_id: designId, format }),
   });
   const json = await readJson(res);
   if (!res.ok) throw exportFailure(res, json);
@@ -281,6 +282,12 @@ function capBytes(max: number): TransformStream<Uint8Array, Uint8Array> {
   });
 }
 
+/** The design's kind from Canva's design_types: the first one we know, or null. */
+export function designKind(types: string[] | undefined): string | null {
+  const known = ["doc", "presentation", "whiteboard", "sheet", "email", "custom"];
+  return (types || []).find((t) => known.includes(t)) ?? null;
+}
+
 /** "Lab Report.pdf" from a design title: no path characters, no control characters. */
 export function pdfName(title: string): string {
   return exportName(title, "pdf");
@@ -295,38 +302,8 @@ export function exportName(title: string, ext: TurnInFormat, page?: { n: number;
     .slice(0, 200)
     .join("")
     .trim();
-  const base = clean.replace(/\.(pdf|docx|pptx|png)$/i, "").trim() || "Canva design";
+  const base = clean.replace(/\.(pdf|docx|pptx|png|jpe?g)$/i, "").trim() || "Canva design";
   return page && page.of > 1 ? `${base} (page ${page.n} of ${page.of}).${ext}` : `${base}.${ext}`;
-}
-
-/** Reads a whole response body, failing past `max` bytes. */
-async function readCapped(res: Response, max: number): Promise<Uint8Array | null> {
-  const declared = res.headers.get("Content-Length");
-  if (declared && /^\d{1,12}$/.test(declared) && Number(declared) > max) {
-    await res.body?.cancel().catch(() => {});
-    return null;
-  }
-  if (!res.body) return new Uint8Array(0);
-  const reader = res.body.getReader();
-  const parts: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > max) {
-      await reader.cancel().catch(() => {});
-      return null;
-    }
-    parts.push(value);
-  }
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.byteLength;
-  }
-  return out;
 }
 
 /** RFC 5987 filename*, plus a plain ASCII fallback, the same as GET /data/attachment builds it. */
@@ -346,11 +323,6 @@ export function contentDisposition(name: string): string {
 /** An error code safe for the app, with its status (same picking-out rule as index.ts's errorCode). */
 function failure(c: C, error: unknown, fallback: string) {
   if (error instanceof CanvaError) return c.json({ error: error.message }, error.status as any);
-  // The converter's own errors (src/convert.ts): convert_failed, convert_unavailable, file_too_large.
-  if (error instanceof Error && error.name === "ConvertError") {
-    const e = error as Error & { status?: number };
-    return c.json({ error: e.message }, (e.status ?? 503) as any);
-  }
   // From the Durable Object over RPC the class is gone but the code survives in the message.
   const message = error instanceof Error ? error.message : String(error ?? "");
   const code = message.match(/\bcanva_[a-z_]+/)?.[0];
@@ -378,13 +350,12 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
     return claim && claim.u === c.get("session").uid ? claim : null;
   };
 
-  const wordOn = (c: C) => !!(deps.converterOn && deps.pdfToDocx && deps.converterOn(c));
-
   /**
    * What this design can be turned in as (the type pill), from Canva's
-   * export-formats: PDF, PowerPoint and PNG as Canva offers them, plus Word
-   * (made from the PDF) for a design that can't be a PowerPoint, which is
-   * how Canva Docs answer, when the converter is on.
+   * export-formats: PDF, PowerPoint, PNG and JPG as Canva offers them. `kind`
+   * is the design's type from Canva's own design_types (2026-11-03: "doc",
+   * "presentation", "whiteboard", "sheet", "email", "custom"), for the app to
+   * label it; null when Canva doesn't say.
    */
   app.get("/designs/:id/formats", deps.requireSession, async (c) => {
     const blocked = begin(c, false);
@@ -395,16 +366,14 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
     const store = deps.storeFor(c, session.uid);
     try {
       const token = await store.accessTokenWithScope(session.uid, EXPORT_SCOPE);
-      const canva = await getExportFormats(token, designId);
+      const [canva, design] = await Promise.all([getExportFormats(token, designId), getDesign(token, designId).catch(() => null)]);
       if (!canva) {
         await store.removeDraft(designId).catch(() => false);
         return c.json({ error: "canva_design_gone" }, 404);
       }
       const has = new Set(canva);
-      const formats: TurnInFormat[] = TURN_IN_FORMATS.filter((f) =>
-        f === "docx" ? wordOn(c) && has.has("pdf") && !has.has("pptx") : has.has(f),
-      );
-      return c.json({ formats: formats.length ? formats : ["pdf"] });
+      const formats: TurnInFormat[] = TURN_IN_FORMATS.filter((f) => has.has(f));
+      return c.json({ formats: formats.length ? formats : ["pdf"], kind: design ? designKind(design.designTypes) : null });
     } catch (error) {
       return failure(c, error, "canva_export_failed");
     }
@@ -430,8 +399,10 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
       return c.json({ error: "bad_request" }, 400);
     }
     const format = body?.format === undefined ? "pdf" : body.format;
+    // Word was made by the converter container, gone since 2026-11-03: an app from before then hears the same
+    // "not available, turn it in as a PDF" it already knows
+    if (format === "docx") return c.json({ error: "convert_unavailable" }, 503);
     if (!isTurnInFormat(format)) return c.json({ error: "bad_request" }, 400);
-    if (format === "docx" && !wordOn(c)) return c.json({ error: "convert_unavailable" }, 503);
     const session = c.get("session");
     const store = deps.storeFor(c, session.uid);
     try {
@@ -441,7 +412,7 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
         await store.removeDraft(designId).catch(() => false);
         return c.json({ error: "canva_design_gone" }, 404);
       }
-      const jobId = await createExport(token, designId, CANVA_TYPE[format]);
+      const jobId = await createExport(token, designId, format);
       const claim: ExportClaim = { j: jobId, d: designId, t: design.title.slice(0, 255), u: session.uid };
       if (format !== "pdf") claim.f = format;
       const job = await sealExport(claim, c.env.SESSION_SECRET);
@@ -462,10 +433,10 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
       const token = await deps.storeFor(c, session.uid).accessTokenWithScope(session.uid, EXPORT_SCOPE);
       const job = await getExportJob(token, claim.j);
       if (job.status === "failed") return c.json({ status: "failed", error: job.error });
-      // How many files it makes: one, or a PNG per page.
+      // How many files it makes: one, or a JPG per page.
       if (job.status === "success") {
-        const files = claim.f === "png" ? job.urls.length : 1;
-        if (claim.f === "png" && files > MAX_PNG_PAGES) return c.json({ status: "failed", error: "canva_export_too_many_pages" });
+        const files = claim.f === "jpg" || claim.f === "png" ? job.urls.length : 1;
+        if (files > MAX_PNG_PAGES) return c.json({ status: "failed", error: "canva_export_too_many_pages" });
         return c.json({ status: "success", files });
       }
       return c.json({ status: job.status });
@@ -476,9 +447,8 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
 
   /**
    * The finished file, streamed through (never stored), named after the
-   * design. `design` must be the design the export was started for. A PNG
-   * export has a file per page: `page` picks one (from 1). Word is the PDF
-   * export turned into a .docx by the converter, nothing kept.
+   * design. `design` must be the design the export was started for. A JPG
+   * export has a file per page: `page` picks one (from 1).
    */
   app.get("/exports/:job/file", deps.requireSession, async (c) => {
     const blocked = begin(c, false);
@@ -490,8 +460,8 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
     const pageRaw = c.req.query("page") ?? "1";
     if (!/^\d{1,2}$/.test(pageRaw) || Number(pageRaw) < 1) return c.json({ error: "bad_request" }, 400);
     const page = Number(pageRaw);
-    if (format !== "png" && page !== 1) return c.json({ error: "bad_request" }, 400);
-    if (format === "docx" && !wordOn(c)) return c.json({ error: "convert_unavailable" }, 503);
+    const perPage = format === "jpg" || format === "png";
+    if (!perPage && page !== 1) return c.json({ error: "bad_request" }, 400);
     const session = c.get("session");
     try {
       const token = await deps.storeFor(c, session.uid).accessTokenWithScope(session.uid, EXPORT_SCOPE);
@@ -499,30 +469,11 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
       if (job.status === "in_progress") return c.json({ error: "canva_export_not_ready" }, 409);
       if (job.status === "failed") return c.json({ error: job.error ?? "canva_export_failed" }, 422);
       if (!job.urls.length) return c.json({ error: "canva_export_unavailable" }, 502);
-      if (format === "png" && job.urls.length > MAX_PNG_PAGES) return c.json({ error: "canva_export_too_many_pages" }, 422);
+      if (perPage && job.urls.length > MAX_PNG_PAGES) return c.json({ error: "canva_export_too_many_pages" }, 422);
       if (page > job.urls.length) return c.json({ error: "bad_request" }, 400);
 
       const upstream = await openExportFile(job.urls[page - 1]);
-      const name = exportName(claim.t, format, format === "png" ? { n: page, of: job.urls.length } : undefined);
-
-      if (format === "docx") {
-        // The whole PDF first (the converter needs all of it), then the .docx.
-        const pdf = await readCapped(upstream, MAX_CONVERT_BYTES);
-        if (!pdf) return c.json({ error: "file_too_large", maxBytes: MAX_CONVERT_BYTES }, 413);
-        const docx = await deps.pdfToDocx!(c, pdf);
-        if (docx.byteLength > MAX_EXPORT_BYTES) return c.json({ error: "file_too_large", maxBytes: MAX_EXPORT_BYTES }, 413);
-        return new Response(docx, {
-          status: 200,
-          headers: {
-            "Content-Type": FORMAT_MIME.docx,
-            "Content-Length": String(docx.byteLength),
-            "Content-Disposition": contentDisposition(name),
-            "Cache-Control": "private, no-store",
-            "X-Content-Type-Options": "nosniff",
-            "Access-Control-Expose-Headers": "Content-Disposition",
-          },
-        });
-      }
+      const name = exportName(claim.t, format, perPage ? { n: page, of: job.urls.length } : undefined);
 
       const declared = upstream.headers.get("Content-Length");
       const length = declared && /^\d{1,12}$/.test(declared) ? Number(declared) : null;
