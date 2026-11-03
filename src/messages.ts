@@ -140,13 +140,75 @@ export function threadSubject(rows: Raw[]): string {
  * shows paragraphs). Same order as toPlainText: tags out first, then entities
  * decoded exactly one level, so typed "&lt;b&gt;" stays the text "<b>".
  */
+/**
+ * A message's files (2026-11-03): ids, names and sizes only. Never the download path: GET
+ * /messages/file looks the file up again in the student's own conversation to open it.
+ */
+export function messageFiles(row: Raw): { id: string; name: string; size: number }[] {
+  const out: { id: string; name: string; size: number }[] = [];
+  for (const f of listOf<Raw>(row?.attachments?.files, "file").slice(0, 20)) {
+    const id = String(f?.id ?? "");
+    if (!ID_RE.test(id) || out.some((x) => x.id === id)) continue;
+    const name = clip(toPlainText(f?.filename || f?.title || "File").replace(/[\\/]/g, "_"), 200) || "File";
+    const size = Number(f?.filesize);
+    out.push({ id, name, size: Number.isFinite(size) && size > 0 ? Math.floor(size) : 0 });
+  }
+  return out;
+}
+
+/** A link someone attached, made a full web address ("google.com" → https://google.com); anything that isn't one is left out. */
+export function webAddress(raw: unknown): string {
+  const t = String(raw ?? "").trim();
+  if (!t || t.length > 2000 || /\s/.test(t)) return "";
+  let u: URL;
+  try {
+    u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(t) ? t : "https://" + t);
+  } catch {
+    return "";
+  }
+  if ((u.protocol !== "https:" && u.protocol !== "http:") || !u.hostname.includes(".") || u.username || u.password) return "";
+  return u.href;
+}
+
+/** A message's attached links: the address and the title the sender gave it. */
+export function messageLinks(row: Raw): { url: string; title: string }[] {
+  const out: { url: string; title: string }[] = [];
+  for (const l of listOf<Raw>(row?.attachments?.links, "link").slice(0, 20)) {
+    const url = webAddress(l?.url);
+    if (!url || out.some((x) => x.url === url)) continue;
+    out.push({ url, title: clip(toPlainText(l?.title ?? ""), 200) });
+  }
+  return out;
+}
+
+/** One file from a conversation, found again in the student's own copy of it: its name and download path, or null. */
+export function findMessageFile(rows: Raw[], fileId: string): { name: string; downloadPath: string } | null {
+  for (const row of rows) {
+    for (const f of listOf<Raw>(row?.attachments?.files, "file")) {
+      if (String(f?.id ?? "") !== fileId) continue;
+      const downloadPath = String(f?.download_path ?? "");
+      if (!downloadPath) return null;
+      return { name: clip(toPlainText(f?.filename || f?.title || "File"), 200) || "File", downloadPath };
+    }
+  }
+  return null;
+}
+
 export function messageText(html: unknown, max = MAX_MESSAGE): string {
   // Linear on any input and capped first (2026-10-06 review; see toPlainText in adapt.ts).
   const withBreaks = String(html ?? "")
     .slice(0, 100_000)
     .replace(/\r\n?/g, "\n")
     .replace(/<\s*br\b[^<>]*>/gi, "\n")
-    .replace(/<\s*\/\s*(p|div|li|h[1-6]|blockquote)\s*>/gi, "\n");
+    .replace(/<\s*\/\s*(p|div|li|h[1-6]|blockquote)\s*>/gi, "\n")
+    // A link written in the message keeps its address (2026-11-03): "the handout" becomes "the handout (https://…)".
+    .replace(/<a\b[^<>]*?\bhref\s*=\s*["']([^"'<>]{1,2000})["'][^<>]*>([^<]{0,500})<\s*\/\s*a\s*>/gi, (_m, href: string, label: string) => {
+      const url = webAddress(decodeEntities(href));
+      const text = label.trim();
+      if (!url) return label;
+      if (!text) return url;
+      return decodeEntities(text).replace(/\/$/, "") === url.replace(/\/$/, "") ? label : `${label} (${url})`;
+    });
   const text = decodeEntities(withBreaks.replace(/<[^<>]*>/g, ""))
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
     .split("\n")
@@ -282,6 +344,8 @@ export function adaptThread(id: string, rows: Raw[], me: string, tz: string) {
         text: messageText(row?.message),
         time: at ? formatMessageTime(at, tz) : "",
         at,
+        files: messageFiles(row),
+        links: messageLinks(row),
       };
     }),
   };
@@ -313,14 +377,16 @@ function notHere(error: unknown): boolean {
 export async function getThread(id: string, creds: Credentials): Promise<Raw[] | null> {
   let firstError: unknown = null;
   try {
-    const rows = listOf(await schoologyGet(`/messages/inbox/${id}`, creds), "message");
+    // with_attachments (2026-11-03, Martin: files and links teachers sent didn't show): without it
+    // Schoology leaves a message's attachments out entirely.
+    const rows = listOf(await schoologyGet(`/messages/inbox/${id}`, creds, { with_attachments: 1 }), "message");
     if (rows.length) return rows;
   } catch (error) {
     if (!notHere(error)) throw error;
     firstError = error;
   }
   try {
-    const rows = listOf(await schoologyGet(`/messages/sent/${id}`, creds), "message");
+    const rows = listOf(await schoologyGet(`/messages/sent/${id}`, creds, { with_attachments: 1 }), "message");
     return rows.length ? rows : null;
   } catch (error) {
     if (!notHere(error)) throw error;

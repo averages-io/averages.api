@@ -16,6 +16,10 @@ import {
   MAX_MESSAGE,
   messageHtml,
   messageText,
+  findMessageFile,
+  messageFiles,
+  messageLinks,
+  webAddress,
   namesFrom,
   parseNewMessage,
   parseReply,
@@ -151,6 +155,25 @@ console.log("\nchecking a new message");
 console.log("\nchecking a reply");
 check("ok", parseReply({ id: "88", message: " Thanks " }), { ok: true, id: "88", message: "Thanks" });
 check("refusals", [parseReply({ id: "8x", message: "m" }), parseReply({ id: "88" }), parseReply("88")].map((r) => (r.ok ? "ok" : r.error)), ["bad_request", "empty_message", "invalid_body"]);
+
+console.log("\nfiles and links on a message (2026-11-03)");
+{
+  const row = {
+    message: 'See <a href="https://example.com/rubric">the rubric</a> and <a href="https://khanacademy.org">https://khanacademy.org</a>.',
+    attachments: {
+      files: { file: [{ id: 302540774, filename: "cell diagram.png", filesize: 21299, download_path: "https://api.schoology.com/v1/system/files/attachments/files/m/1/x.png" }, { id: "bad id", filename: "x" }] },
+      links: { link: [{ url: "google.com", title: "google" }, { url: "javascript:alert(1)", title: "x" }, { url: "ftp://files.example.com", title: "ftp" }] },
+    },
+  };
+  check("files: ids, names and sizes only (never the download path)", messageFiles(row), [{ id: "302540774", name: "cell diagram.png", size: 21299 }]);
+  check("links: made full web addresses; anything else left out", messageLinks(row), [{ url: "https://google.com/", title: "google" }]);
+  check("web addresses", [webAddress("google.com"), webAddress("http://a.b/c"), webAddress("javascript:x"), webAddress("localhost"), webAddress("https://u:p@a.com"), webAddress("two words.com")], ["https://google.com/", "http://a.b/c", "", "", "", ""]);
+  check("a link written in the message keeps its address", messageText(row.message), "See the rubric (https://example.com/rubric) and https://khanacademy.org.");
+  check("a file found again in the conversation", findMessageFile([row], "302540774"), { name: "cell diagram.png", downloadPath: "https://api.schoology.com/v1/system/files/attachments/files/m/1/x.png" });
+  check("...and one that isn't in it", findMessageFile([row], "999"), null);
+  const t = adaptThread("5", [{ author_id: "7", message: "hi", last_updated: 1700000000, ...row }], "1", "UTC");
+  check("a thread's message carries its files and links", [t.messages[0].files.length, t.messages[0].links.length], [1, 1]);
+}
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);

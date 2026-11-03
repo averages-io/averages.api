@@ -160,7 +160,7 @@ import {
   plain,
   safeTimeZone,
 } from "./classroom.ts";
-import { getRecipients, namesFrom } from "./messages.ts";
+import { findMessageFile, getRecipients, getThread, namesFrom } from "./messages.ts";
 import { getSectionGrades } from "./extras.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
 import { rateLimit } from "./rateLimit.ts";
@@ -1659,6 +1659,36 @@ app.get("/data/attachment", async (c) => {
     const upstream = await openAttachment(file.downloadPath, session);
     // ?view=1 (2026-10-21): open it in the browser's own viewer (PDF, picture,
     // text, audio, video) instead of downloading. Anything else still downloads.
+    if (c.req.query("view") === "1") {
+      const viewed = viewResponse(upstream, file.name);
+      if (viewed) return viewed;
+    }
+    return downloadResponse(upstream, file.name);
+  } catch (error) {
+    if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
+    return c.json({ error: "unexpected_error" }, 500);
+  }
+});
+
+/**
+ * A file someone sent in a message (2026-11-03): looked up again in the
+ * student's own copy of that conversation (ids only from the browser), then
+ * streamed through from Schoology the same safe way as GET /data/attachment.
+ * ?view=1 opens it in the browser's own viewer when it's a safe type.
+ */
+app.get("/messages/file", async (c) => {
+  const session = await sessionFrom(c);
+  if (!session) return c.json({ error: "not_authenticated" }, 401);
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  if (isGoogle(session)) return c.json({ error: "not_available" }, 404);
+  const thread = c.req.query("thread") ?? "";
+  const fileId = c.req.query("file") ?? "";
+  if (!ID_RE.test(thread) || !ID_RE.test(fileId)) return c.json({ error: "bad_request" }, 400);
+  try {
+    const rows = await getThread(thread, session);
+    const file = rows ? findMessageFile(rows, fileId) : null;
+    if (!file) return c.json({ error: "file_not_found" }, 404);
+    const upstream = await openAttachment(file.downloadPath, session);
     if (c.req.query("view") === "1") {
       const viewed = viewResponse(upstream, file.name);
       if (viewed) return viewed;
