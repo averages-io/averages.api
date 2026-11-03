@@ -75,7 +75,57 @@ async function failure(response: Response, path: string): Promise<SchoologyError
   return new SchoologyError(`Schoology returned ${response.status} for ${path}`, response.status, body.slice(0, 500));
 }
 
+/**
+ * Reads shared for a moment (2026-11-03, Martin: pages took 2, then 5 seconds).
+ * One page open asks our API for the bundle, people, files, events, updates
+ * and submissions at once, and each of those reads some of the same things
+ * from Schoology (the class list, each class's assignments). A read's answer
+ * is kept for READS.shareMs in this Worker's memory (never stored anywhere),
+ * so the same read for the same student shortly after, from any of those
+ * requests, doesn't go to Schoology again; that also helps a call that waited
+ * out Schoology's limit. Only finished answers are shared: a Worker request
+ * can't wait on another request's call in progress. Anything that changes
+ * Schoology (a turn-in, a message) forgets that student's reads.
+ *
+ * On in the Workers runtime only: the tests swap Schoology's answers between
+ * calls, so they read fresh unless a test turns this on.
+ */
+export const READS = {
+  on: typeof navigator !== "undefined" && (navigator as any).userAgent === "Cloudflare-Workers",
+  shareMs: 30_000,
+  max: 400,
+};
+const shared = new Map<string, { at: number; text: string }>();
+const whoOf = (creds: Credentials) => `${creds.key}\u0000${creds.token ?? ""}`;
+
+/** Forget a student's shared reads: after anything that changes their Schoology. */
+export function forgetReads(creds: Credentials): void {
+  const who = whoOf(creds) + "\u0001";
+  for (const k of [...shared.keys()]) if (k.startsWith(who)) shared.delete(k);
+}
+export function forgetAllReads(): void {
+  shared.clear();
+}
+
 export async function schoologyGet<T = unknown>(
+  path: string,
+  creds: Credentials,
+  query: Record<string, string | number | undefined> = {}
+): Promise<T> {
+  if (!READS.on) return schoologyGetFresh<T>(path, creds, query);
+  const url = schoologyUrl(path, query);
+  const k = `${whoOf(creds)}\u0001${url.href}`;
+  const hit = shared.get(k);
+  // Kept as text and parsed for each caller, so no request can change another's copy.
+  if (hit && Date.now() - hit.at < READS.shareMs) return JSON.parse(hit.text) as T;
+  const value = await schoologyGetFresh<T>(path, creds, query);
+  const now = Date.now();
+  try { shared.set(k, { at: now, text: JSON.stringify(value) }); } catch { /* not worth keeping */ }
+  if (shared.size > READS.max) for (const [key, v] of shared) { if (now - v.at >= READS.shareMs || shared.size > READS.max * 0.8) shared.delete(key); else break; }
+  return value;
+}
+
+async function schoologyGetFresh<T = unknown>(
   path: string,
   creds: Credentials,
   query: Record<string, string | number | undefined> = {}
@@ -176,6 +226,7 @@ export async function schoologyRequest<T = unknown>(
   query: Record<string, string | number | undefined> = {}
 ): Promise<T | null> {
   const url = schoologyUrl(path, query);
+  forgetReads(creds);
   const response = await signedFetch(method, url, path, creds, {
     body: body === undefined ? undefined : JSON.stringify(body),
     redirect: "manual",
@@ -256,10 +307,9 @@ export async function getGrades(uid: string, creds: Credentials) {
 }
 
 export async function getAssignments(sectionId: string, creds: Credentials) {
-  const payload = await schoologyGet(`/sections/${sectionId}/assignments`, creds, {
-    limit: 200,
-  });
-  return listOf(payload, "assignment");
+  // The same read as getAssignmentsWithAttachments (2026-11-03): one answer serves the bundle and
+  // the Files list (see READS), instead of each class's assignments being read twice per page open.
+  return getAssignmentsWithAttachments(sectionId, creds);
 }
 
 /**

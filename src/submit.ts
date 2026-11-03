@@ -25,7 +25,7 @@
  */
 
 import { buildAuthHeader, type Credentials } from "./oauth.ts";
-import { isSchoologyApiUrl, listOf, schoologyGet, SchoologyError, SCHOOLOGY_BASE, UPSTREAM_TIMEOUT_MS } from "./schoology.ts";
+import { forgetReads, isSchoologyApiUrl, listOf, schoologyGet, SchoologyError, SCHOOLOGY_BASE, UPSTREAM_TIMEOUT_MS } from "./schoology.ts";
 import { isSandboxCreds, sandboxFetch } from "./reviewSandbox.ts";
 import { findAttachment, isOutsideTool, toPlainText } from "./adapt.ts";
 import { openValue, sealValue } from "./session.ts";
@@ -181,6 +181,7 @@ export async function openUpload(token: string, secret: string): Promise<UploadC
  */
 export async function schoologyPostJson(path: string, creds: Credentials, body: unknown): Promise<{ status: number; json: any }> {
   const url = `${SCHOOLOGY_BASE}${path}`;
+  forgetReads(creds); // a turn-in: this student's reads (their turn-ins) are out of date
   let res: Response;
   try {
     // The reviewer account (reviewSandbox.ts): answered here, never sent to Schoology.

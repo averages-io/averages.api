@@ -672,6 +672,9 @@ export function adaptMessages(messages: Raw[], names?: Map<string, string>): Raw
     subject: toPlainText(message?.subject ?? ""),
     unread: String(message?.message_status ?? "").toLowerCase() === "unread",
     id: String(message?.id ?? ""),
+    // Who sent it (2026-11-03): Schoology's list of who you can message can be empty, so the name
+    // isn't known here; the app finds it among the student's teachers by this id.
+    authorId: /^\d{1,20}$/.test(String(message?.author_id ?? "")) ? String(message.author_id) : "",
   }));
 }
 

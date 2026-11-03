@@ -1840,6 +1840,28 @@ app.get("/data/submissions", async (c) => {
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
   c.header("Cache-Control", "private, no-store");
   if (isGoogle(session)) return c.json({ platform: "classroom", courses: [], files: [], partial: false });
+  // ?for=<section>:<assignment>,... (2026-11-03, Martin: pages took 5 seconds): the Fullscreen pages
+  // already have the assignments from the bundle and only need what's turned in for the work they
+  // show, so they name it (at most 15). That skips re-reading every class's list (6 calls) and the
+  // 30-60 other histories, keeping a page open under Schoology's 50 calls per 5 seconds. Only digits
+  // get through, and Schoology answers each history for this student only.
+  const forList = c.req.query("for");
+  if (typeof forList === "string") {
+    const pairs = [...new Set(forList.split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 15)
+      .map((x) => x.split(":")).filter((p) => p.length === 2 && ID_RE.test(p[0]) && ID_RE.test(p[1]));
+    const found: SubmittedFile[] = [];
+    let partial = false;
+    await eachAtMost(pairs, 5, async ([course, id]) => {
+      try {
+        found.push(...submittedFiles(await getHistory(session, course, id, session.uid), session.uid, { course, id, title: "" }));
+      } catch (error) {
+        if (error instanceof SchoologyError && error.status === 404) return;
+        partial = true;
+      }
+    });
+    const { files, cut } = newestSubmittedFiles(found);
+    return c.json({ platform: "schoology", courses: [], files, partial: partial || cut });
+  }
   try {
     const { COURSES } = adaptCourses(await getSections(session.uid, session), []);
     const courses = COURSES.slice(0, 12).map((course) => ({ id: course.id, name: course.name, color: course.color }));
