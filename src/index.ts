@@ -1957,6 +1957,11 @@ app.get("/data/submission-file", async (c) => {
     const file = findSubmittedFile(history, session.uid, revision, fileId);
     if (!file || !file.downloadPath) return c.json({ error: "not_found" }, 404);
     const upstream = await openAttachment(file.downloadPath, session);
+    // ?view=1 (2026-11-03): open it in the browser's own viewer (PDF, picture, text...) instead of downloading.
+    if (c.req.query("view") === "1") {
+      const viewed = viewResponse(upstream, file.name);
+      if (viewed) return viewed;
+    }
     return downloadResponse(upstream, file.name);
   } catch (error) {
     if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);

@@ -560,13 +560,19 @@ export async function fetchSchoologyEvents(uid: string, creds: Credentials, rang
     }
   });
   if (!course) {
-    tasks.push(async () => {
-      try {
-        user = await getUserEvents(uid, creds, range);
-      } catch (error) {
-        user = refused(error) ? [] : null;
-      }
-    });
+    // The student's own calendar first (2026-11-03, Martin: pages loading slowly): it already has their classes'
+    // events (each with its section_id), so when it does, the per-class reads (one call per class, against
+    // Schoology's 50 calls per 5 seconds) are skipped. A calendar with no class events in it, or one that
+    // can't be read, falls back to asking each class as before.
+    try {
+      user = await getUserEvents(uid, creds, range);
+    } catch (error) {
+      user = refused(error) ? [] : null;
+    }
+    const mine = new Set(courses);
+    if (user && user.length && user.some((e) => mine.has(String(e?.section_id ?? "")))) {
+      return adaptSchoologyEvents({ bySection: {}, user, courses, range });
+    }
   }
   await runPool(tasks, SCHOOLOGY_CONCURRENCY, (task) => task());
   return adaptSchoologyEvents({ bySection, user, courses, range });
