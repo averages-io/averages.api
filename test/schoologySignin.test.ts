@@ -118,7 +118,7 @@ console.log("\ncallback");
 
   calls.length = 0;
   r = await call("/auth/schoology/callback?oauth_token=REQTOKEN1", `${OAUTH_COOKIE}=${pending}`);
-  check("signed in: back to the app", [r.status, r.headers.get("Location")], [302, "https://app.averages.io/?signin=schoology"]);
+  check("signed in: back to the app", [r.status, r.headers.get("Location")], [302, "https://app.averages.io/?signin=schoology#schoology"]);
   check("swapped the request token, then asked who it is", calls.map((c) => c.path), ["/v1/oauth/access_token", "/v1/users/me"]);
   check("the swap is signed with the request token", /oauth_token="REQTOKEN1"/.test(calls[0]?.auth ?? ""), true);
   check("/users/me is signed with the access token", /oauth_token="ACCTOKEN9"/.test(calls[1]?.auth ?? ""), true);
@@ -150,7 +150,7 @@ console.log("\nsandbox test mode");
   const back = new URL(ok.headers.get("Location") ?? "about:blank");
   const done = await call(back.pathname + back.search, `${OAUTH_COOKIE}=${cookieValue(st, OAUTH_COOKIE)}`);
   const s = await openSession(cookieValue(done, SESSION_COOKIE) ?? "", SECRET);
-  check("signs in as the reviewer account", [done.headers.get("Location"), s?.uid, s?.key, calls.length], ["https://app.averages.io/?signin=schoology", REVIEW_UID, SANDBOX_KEY, 0]);
+  check("signs in as the reviewer account", [done.headers.get("Location"), s?.uid, s?.key, calls.length], ["https://app.averages.io/?signin=schoology#schoology", REVIEW_UID, SANDBOX_KEY, 0]);
   ENV = { ...ENV, FEATURES_OFF: "test-signin" };
   const off = await call("/auth/schoology/sandbox-authorize?oauth_token=x");
   const st2 = await call("/auth/schoology/start?domain=app.schoology.com");

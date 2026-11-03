@@ -826,7 +826,12 @@ app.get("/auth/schoology/status", (c) => {
   return c.json({ on });
 });
 
-function signinBack(c: any, code: string) {
+function signinBack(c: any, code: string, detail?: unknown) {
+  // Which step said no, in the Worker's logs (npx wrangler tail), so a failed sign-in can be told apart (2026-11-03).
+  // Codes and Schoology's status only, never tokens.
+  const status = detail instanceof SchoologyError || detail instanceof OAuthError ? detail.status : undefined;
+  const body = detail instanceof SchoologyError ? String(detail.body ?? "").replace(/oauth_[a-z_]+=[^&\s"]+/gi, "oauth_…").slice(0, 160) : undefined;
+  console.log(JSON.stringify({ event: "schoology_signin_back", code, ...(status ? { status } : {}), ...(body ? { body } : {}) }));
   return c.redirect(`${appOrigin(c.req.url)}/?signin_error=${encodeURIComponent(code)}#schoology`, 302);
 }
 
@@ -902,10 +907,11 @@ app.get("/auth/schoology/callback", async (c) => {
     const session = await sealSession({ ...creds, uid, p, ...(pending.u13 ? { inc: true as const } : {}) }, c.env.SESSION_SECRET);
     c.header("Set-Cookie", sessionCookie(session, COOKIE_DOMAIN), { append: true });
     c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
-    return c.redirect(`${appOrigin(c.req.url)}/?signin=schoology`, 302);
+    console.log(JSON.stringify({ event: "schoology_signin_ok" }));
+    return c.redirect(`${appOrigin(c.req.url)}/?signin=schoology#schoology`, 302);
   } catch (error) {
-    if (error instanceof OAuthError) return signinBack(c, error.code);
-    if (error instanceof SchoologyError) return signinBack(c, error.status === 401 || error.status === 403 ? "schoology_refused" : "schoology_error");
+    if (error instanceof OAuthError) return signinBack(c, error.code === "schoology_refused" ? "schoology_refused_token" : error.code, error);
+    if (error instanceof SchoologyError) return signinBack(c, error.status === 401 || error.status === 403 ? "schoology_refused_profile" : "schoology_error", error);
     console.error("schoology_signin_callback_failed", error);
     return signinBack(c, "schoology_error");
   }
