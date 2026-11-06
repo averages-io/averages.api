@@ -1,29 +1,4 @@
-/**
- * Browser notification routes (2026-10-05), mounted by index.ts with
- * `app.route("/push", pushRoutes({...}))`. The work happens in the student's
- * PushStore (src/pushStore.ts); what changed is worked out in src/notify.ts.
- *
- *   GET    /push/config      public: { publicKey } (null until set up)
- *   POST   /push/subscribe   { subscription, types }: turn on for this browser
- *   DELETE /push/subscribe   { endpoint }: turn off for this browser (the last
- *                            one off deletes everything)
- *   DELETE /push             everything, every browser
- *   PUT    /push/types       { types } (only the switches sent change)
- *   POST   /push/test        { endpoint }: a test notification to this browser
- *   POST   /push/touch       keep the stored sign-in in step with this session
- *   POST   /push/status      { endpoint }: on? on in this browser? which types?
- *
- * Averages Plus (2026-10-21): while billing is on and set up, notifications
- * are a Plus perk (src/plus.ts). Turning on, testing and changing types need
- * Plus (403 plus_required); a student without it who still has them on is
- * turned off (their stored sign-in deleted) by /status, /touch and the
- * background check, and /status says why (turnedOff: "plus_required").
- *
- * Only for opted-in students: the demo has no account behind it and Incognito
- * stores nothing on our servers, so both are refused (deleting stays allowed
- * in Incognito: deleting is always fine). State-changing calls must come from
- * our own app (deps.fromOurApp: allowed Origin, JSON for POSTs).
- */
+// Browser notification routes, mounted by index.ts with `app.route("/push", pushRoutes({...}))`.
 
 import { Hono } from "hono";
 import { DEMO_UID, isDemoSession, isIncognitoSession, sealValue, type SessionData } from "./session.ts";
@@ -162,7 +137,6 @@ export function pushRoutes(deps: PushDeps) {
     const credential = await sealCredential(session, c.env.PUSH_SECRET!);
     if (!credential) return c.json({ error: "session_expired" }, 401);
     try {
-      // The student's time zone (2026-10-07): Schoology due times are local, so "due within a day" needs it.
       const tz = safeTimeZone(body.tz, (c.req.raw as any)?.cf?.timezone);
       const status = await storeFor(c.env, session.uid, c.req.url).subscribe({ subscription, types, tz, ...credential });
       return c.json({ ok: true, ...status });
@@ -278,7 +252,6 @@ export function pushRoutes(deps: PushDeps) {
     if (isDemoSession(session) || isIncognitoSession(session)) return c.json({ ...off, configured: pushConfigured(c.env) });
     if (!pushConfigured(c.env)) return c.json({ ...off, configured: false });
     const endpoint = endpointFrom(await jsonBody(c));
-    // Plus (2026-10-21): plusRequired tells Settings to offer Plus instead of the switch.
     const p = await plusFor(c);
     const plusInfo = { plusRequired: !!p && p.required && !p.plus, plus: !!p && p.plus };
     try {

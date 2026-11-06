@@ -1,16 +1,5 @@
-/**
- * The reviewer account (2026-10-07): signing in with the REVIEW_KEY /
- * REVIEW_SECRET secrets and using the whole app on reviewSandbox.ts's
- * pretend Schoology, through the real Worker routes. Bundle, assignment,
- * downloads, Files, the per-page extras, messages, turning in, and the
- * integrations (Canva, Sync, notifications) that demo mode refuses.
- *
- * globalThis.fetch is replaced for the whole run: once the reviewer is signed
- * in, any outgoing request at all fails the test (and throws), so nothing
- * about the account can reach api.schoology.com or anywhere else.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/reviewSandbox.test.ts
- */
+// The reviewer account: signing in with the REVIEW_KEY / REVIEW_SECRET secrets and using the whole app on.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/reviewSandbox.test.ts
 import worker, { viewableType } from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET, resetSandbox, sandboxComments, sandboxFetch } from "../src/reviewSandbox.ts";
@@ -210,7 +199,6 @@ console.log("\nassignment, attachments, files");
   check("a file asked for under the wrong class: refused", wrongParent.res.status, 502);
 }
 {
-  // ?view=1 (2026-10-21): Course Materials' double-click opens the file in the browser's own viewer.
   const pdf = await call(`/data/attachment?section=${CHEM}&assignment=${LAB4}&file=7400000001&view=1`, { cookie });
   const head = new TextDecoder().decode((await pdf.res.arrayBuffer()).slice(0, 8));
   check("view a PDF: inline, application/pdf, the real bytes", [pdf.res.status, pdf.res.headers.get("Content-Type"), pdf.res.headers.get("Content-Disposition")?.startsWith('inline; filename="Lab Report #4 Instructions.pdf"'), head.startsWith("%PDF")], [200, "application/pdf", true, true]);
@@ -419,7 +407,6 @@ console.log("\nthe sandbox itself");
   check("an encoded uid in the path still answers", (await out.json()).section.length, 6);
 }
 
-// Links are assignment?id=<id> (2026-10-07): the page asks which class it's in.
 {
   const found = await call(`/data/assignment/locate?id=${LAB4}`, { cookie });
   check("locate: finds the class and title", [found.res.status, found.data], [200, { section: CHEM, title: "Lab Report #4" }]);

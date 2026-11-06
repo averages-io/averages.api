@@ -1,72 +1,23 @@
-/**
- * Canva Connect integration (2026-10-05).
- *
- * Two halves, both free of Hono and of `cloudflare:workers` so the test suite
- * can import this file directly under `node --experimental-strip-types`:
- *
- *   1. `CanvaAccount` — everything stored for one student: the connect
- *      handshake (PKCE), their Canva tokens (encrypted), the short-lived
- *      "where was I" contexts for Canva's Return button, and their drafts.
- *      It runs INSIDE that student's CanvaStore Durable Object (canvaStore.ts),
- *      which lives in the "us" jurisdiction like Sync does. A Durable Object
- *      handles one student's requests one at a time, which is what makes token
- *      refresh safe: Canva refresh tokens are single use, and two refreshes
- *      racing each other would burn the token and force the student to
- *      reconnect. (The parked 2026-09-28 version kept tokens in KV and could
- *      only narrow that race with a lock key; this closes it.)
- *
- *   2. Plain functions that call Canva with an access token: importing a file,
- *      reading/listing designs, the account name, and checking the signed JWT
- *      Canva sends back when the student clicks Return.
- *
- * Reference: claude/canva-api-reference.md in the project.
- *
- * Scopes requested: design:content:write (import a file as a design),
- * design:meta:read (read/list designs) and profile:read (the "Connected as"
- * name). design:content:read (exporting a design as a PDF to turn it in) is
- * added only when CANVA_EXPORT_ENABLED is "1": see canvaScopes().
- */
+// Canva Connect integration.
 
 export const CANVA_API = "https://api.canva.com/rest/v1";
 const AUTHORIZE = "https://www.canva.com/api/oauth/authorize";
 
 export const CANVA_SCOPES = ["design:content:write", "design:meta:read", "profile:read"].join(" ");
 
-/** Needed to export a design (a PDF to turn in, 2026-10-06). */
 export const EXPORT_SCOPE = "design:content:read";
 
-/**
- * Exporting is switched on by the CANVA_EXPORT_ENABLED var (2026-10-06), and
- * only after design:content:read is ticked for the integration in Canva's
- * Developer Portal: asking for a scope the integration doesn't have makes
- * Canva refuse the whole connect, so it can't be requested ahead of time.
- */
 export function canvaExportEnabled(env: { CANVA_EXPORT_ENABLED?: string }): boolean {
   return env.CANVA_EXPORT_ENABLED === "1";
 }
 
-/** Canva folders on the Files page (2026-10-06): browse, and new / rename / move. */
 export const FOLDER_READ_SCOPE = "folder:read";
 export const FOLDER_WRITE_SCOPE = "folder:write";
 
-/**
- * Folders are switched on by CANVA_FOLDERS_ENABLED (2026-10-06), only after
- * folder:read and folder:write are ticked for the integration in Canva's
- * Developer Portal (and approved): same rule as exporting.
- */
 export function canvaFoldersEnabled(env: { CANVA_FOLDERS_ENABLED?: string }): boolean {
   return env.CANVA_FOLDERS_ENABLED === "1";
 }
 
-/**
- * Permission probe (temporary, 2026-10-10): Canva lists design:permission and
- * folder:permission scopes but its published OpenAPI spec has no request that
- * uses them. These are the extra scopes GET /canva/connect?probe=1 asks for so
- * the developer can test, from the live site with his own real connection,
- * whether anything responds to them (see probePermissions and POST /canva/probe
- * in index.ts). Only ever added when CANVA_PERMISSION_PROBE is "1"; developer
- * only, off otherwise.
- */
 export const PROBE_SCOPES = ["design:permission:read", "design:permission:write", "folder:permission:write"];
 
 export function canvaProbeEnabled(env: { CANVA_PERMISSION_PROBE?: string }): boolean {
@@ -448,12 +399,6 @@ export class CanvaAccount {
     return entry.returnTo;
   }
 
-  /**
-   * Where a connect came from, for when it doesn't finish (2026-11-03): a
-   * cancel or a failure used to always go to Settings, which threw students
-   * out of onboarding. `consume` also forgets the state (a cancel). Settings
-   * when the state isn't one of this student's.
-   */
   async connectReturn(state: string, consume = false): Promise<string> {
     if (!STATE_RE.test(state)) return "/settings";
     const pending = prune(await this.storage.get<Record<string, PendingConnect>>("connect"), 4);
@@ -472,15 +417,6 @@ export class CanvaAccount {
     return { connected: true, name: profile?.name ?? "" };
   }
 
-  /**
-   * Forget everything: tokens, drafts, pending contexts. With the student's uid
-   * (always, from the routes), the refresh token is revoked at Canva first
-   * (2026-10-26, Martin: force Canva to disconnect on its side, like Google
-   * Drive). Canva's /oauth/revoke on a refresh token ends its whole lineage and
-   * the student's consent, so Averages.io is gone from their Canva account too
-   * and connecting again shows Canva's permission screen. Best effort: a
-   * refusal or an outage still forgets everything here.
-   */
   async disconnect(uid?: string): Promise<void> {
     this.generation++;
     this.refreshing = null;
@@ -524,8 +460,6 @@ export class CanvaAccount {
           const fresh = await tokenRequest(this.env, { grant_type: "refresh_token", refresh_token: tokens.refresh_token });
           // Disconnected while this was on its way to Canva: don't bring the connection back.
           if (gen !== this.generation) throw new CanvaError("canva_not_connected", 409);
-          // A refresh keeps the scopes the student granted; if Canva leaves
-          // them out of the answer, keep the ones we knew (2026-10-06).
           if (!fresh.scope && tokens.scope) fresh.scope = tokens.scope;
           // Save BEFORE using it: the new refresh token is now the only valid one.
           await this.saveTokens(uid, fresh);
@@ -546,10 +480,6 @@ export class CanvaAccount {
     return this.refreshing;
   }
 
-  /**
-   * The scopes the student actually granted, from Canva's token answer
-   * (2026-10-06). Null when we don't know (Canva didn't say).
-   */
   async grantedScopes(uid: string): Promise<string[] | null> {
     const tokens = await this.loadTokens(uid);
     return tokens ? scopesOf(tokens) : null;
@@ -735,7 +665,6 @@ export interface DesignInfo {
   thumbnailUrl: string;
   /** Epoch ms. */
   updatedAt: number;
-  /** Canva's design_types ("doc", "presentation", ...; 2026-11-03). Empty when Canva doesn't say. */
   designTypes: string[];
 }
 
@@ -808,12 +737,6 @@ export async function getDesign(token: string, designId: string): Promise<Design
   return json?.design ? toDesign(json.design) : null;
 }
 
-/**
- * Which formats Canva can export this design as (2026-10-15, the type pill):
- * the keys of GET /designs/{id}/export-formats ("pdf", "pptx", "png"...). A
- * format only some pages support still counts. Null when the design is gone
- * or isn't theirs. Needs design:content:read.
- */
 export async function getExportFormats(token: string, designId: string): Promise<string[] | null> {
   const res = await canvaFetch(`${CANVA_API}/designs/${encodeURIComponent(designId)}/export-formats`, { headers: bearer(token) });
   if (res.status === 404) return null;
@@ -944,30 +867,6 @@ export async function verifyReturnJwt(
   return { designId: claims.design_id, correlationState: claims.correlation_state };
 }
 
-/* ── permission probe (temporary, 2026-10-10) ──────────────────────────
- *
- * Canva's published OpenAPI spec has no request that uses the
- * design:permission:* / folder:permission:write scopes. probePermissions()
- * tries the most likely addresses (modelled on how the rest of Canva's API is
- * laid out: comments and pages hang under …/designs/{id}, so permissions
- * probably do too) and returns what Canva answered, so POST /canva/probe can
- * hand it to the developer. Ported from the standalone reference script
- * (out/canva-permission-probe/canva-permission-probe.mjs), same guess lists
- * and behaviour.
- *
- * Safe by design:
- *   - Makes one throwaway test design and one test folder and ONLY ever tries
- *     to change those two ids. Nothing else is touched.
- *   - Read-only unless `write` is set, and even then only on the TEST design
- *     (and the TEST folder), stopping at the first write Canva accepts.
- *   - Each call gives up after PROBE_TIMEOUT_MS; a failed call is recorded as
- *     a row, never thrown, so one dead guess doesn't stop the rest.
- *   - Counts its Canva calls and stops before the Worker's 50-subrequest
- *     limit, noting in the results when it had to skip the remaining guesses.
- *   - The access token never appears in a result row (only Canva's response
- *     text, cut to 600 chars) and is never logged.
- */
-
 /** A little tighter than the 20 s on the rest of Canva: these are guesses, not real work. */
 const PROBE_TIMEOUT_MS = 9_000;
 
@@ -997,11 +896,6 @@ export async function probePermissions(
   let calls = 0;
   let skipped = 0;
 
-  /**
-   * One Canva call, recorded as a row. Counts a subrequest; never throws.
-   * `full` is Canva's whole answer: the row keeps only 600 characters, which cut
-   * the new design's JSON in half before its id could be read (2026-10-10 run).
-   */
   async function call(method: string, path: string, body?: any): Promise<ProbeResult & { full: string }> {
     calls++;
     const headers: Record<string, string> = { ...(bearer(token) as Record<string, string>) };
@@ -1129,21 +1023,6 @@ export async function probePermissions(
   return { designId, folderId, results };
 }
 
-/* ── the full sweep (2026-10-10, Martin: "try everything") ────────────────
- *
- * The first probe's 14 likely addresses all came back "Unknown endpoint". The
- * sweep tries every reasonable name, under the test design, under the test
- * folder and flat, with GET and with an EMPTY body for POST / PATCH / PUT
- * (plus DELETE under the test items). An empty body can't change anything on a
- * real endpoint: it would answer 400 for the missing fields, which is exactly
- * what shows it exists. Canva answers a missing address with 404
- * `endpoint_not_found`, so anything else is worth a look.
- *
- * Too many calls for one Worker request (50 subrequests on the Free plan), so
- * it runs in batches: batch 0 makes the test design and folder, later batches
- * get their ids back and first check (by title) that they really are the
- * probe's own test items before touching them.
- */
 export const SWEEP_SUFFIXES = [
   "permissions", "permissions/read", "permissions/write", "permissions/link", "permissions/public", "permissions/anyone",
   "permission", "access", "access/link", "access-list", "access_list", "access-requests", "access_requests",

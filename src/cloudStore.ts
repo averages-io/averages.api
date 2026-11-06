@@ -1,17 +1,4 @@
-/**
- * One Durable Object per student for their Google Drive and OneDrive
- * connections (2026-10-08).
- *
- * Opened in the "us" jurisdiction (see index.ts's cloudStore()), like Sync and
- * Canva, so the stored tokens stay in the United States. Separate from
- * SyncStore (turning Sync off deletes everything there) and from CanvaStore
- * (Disconnect in Canva wipes that object), so neither takes these with it.
- *
- * All of the logic lives in cloudConnect.ts's CloudAccount, which the tests
- * drive with an in-memory store; this class only hands it the real storage
- * and exposes its methods over RPC. One object serves one student's requests
- * one at a time, so a token refresh can't race itself.
- */
+// One Durable Object per student for their Google Drive and OneDrive connections.
 
 import { DurableObject } from "cloudflare:workers";
 import {

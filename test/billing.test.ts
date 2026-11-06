@@ -1,14 +1,5 @@
-/**
- * Averages Plus (2026-10-21): src/billing.ts and the /billing and
- * /stripe/webhook routes, through the real Worker with a sealed session.
- *
- * No Durable Object or network: BILLING is an in-memory stand-in that keeps
- * one BillingAccount per student, and globalThis.fetch plays Stripe's
- * /v1/prices, /v1/checkout/sessions and /v1/billing_portal/sessions. Anything
- * else leaving the Worker fails the test.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/billing.test.ts
- */
+// Averages Plus: src/billing.ts and the /billing and /stripe/webhook routes, through the real Worker with a sealed session.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/billing.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { DEMO_UID, SESSION_COOKIE, sealSession } from "../src/session.ts";
@@ -163,7 +154,6 @@ check("event: subscription without our uid ignored", updateFromEvent({ id: "e", 
 check("event: subscription deleted -> canceled", updateFromEvent({ id: "e", type: "customer.subscription.deleted", created: 5, data: { object: subscription("123", "active") } })?.status, "canceled");
 check("event: period end from the items (newer API versions)", updateFromEvent({ id: "e", type: "customer.subscription.updated", data: { object: subscription("123", "active") } })?.periodEnd, 1800000000);
 check("event: period end on the subscription (older versions)", updateFromEvent({ id: "e", type: "customer.subscription.updated", data: { object: subscription("123", "active", { current_period_end: 1700000000, items: { data: [] } }) } })?.periodEnd, 1700000000);
-// Plan price for Settings > Plus (2026-10-27).
 const PRICED = { items: { data: [{ id: "si_1", current_period_end: 1800000000, price: { unit_amount: 299, currency: "USD", recurring: { interval: "month", interval_count: 1 } } }] } };
 check("price: amount, currency (lowercased), interval", priceOf(PRICED), { amount: 299, currency: "usd", interval: "month", intervalCount: 1 });
 check("price: missing or odd prices are null", [priceOf({}), priceOf({ items: { data: [{ price: { unit_amount: "299", currency: "usd", recurring: { interval: "month" } } }] } }), priceOf({ items: { data: [{ price: { unit_amount: 299, currency: "dollars", recurring: { interval: "month" } } }] } }), priceOf({ items: { data: [{ price: { unit_amount: 299, currency: "usd" } }] } })], [null, null, null, null]);
@@ -268,8 +258,6 @@ console.log("\nwebhook");
   const s2 = (await call("/billing/status", { cookie: sam })).data;
   check("set to cancel: still Plus until the period ends, with the date", [s2.plus, s2.cancelAtPeriodEnd, s2.renewsAt], [true, true, 1800000000 * 1000]);
 
-  // Newer API versions (the account's 2026-09-30.endive): the Customer Portal sets cancel_at, a date,
-  // and leaves cancel_at_period_end false (found in the sandbox test, 2026-10-23).
   await webhook("customer.subscription.updated", subscription("4001", "active", { cancel_at_period_end: false, cancel_at: 1800000000 }));
   const s3 = (await call("/billing/status", { cookie: sam })).data;
   check("cancelled with cancel_at (newer API versions): won't renew, Plus until that date", [s3.plus, s3.cancelAtPeriodEnd, s3.renewsAt], [true, true, 1800000000 * 1000]);
@@ -293,7 +281,6 @@ console.log("\nwebhook");
   const nobody = await call("/billing/portal", { method: "POST", cookie: await cookieFor("4999"), json: {} });
   check("Manage plan without ever subscribing: 404", [nobody.res.status, nobody.data.error], [404, "billing_no_account"]);
 
-  // End early (2026-11-01): a plan that's set to end can end today
   const nosub = await call("/billing/end-now", { method: "POST", cookie: await cookieFor("4999"), json: {} });
   check("End early with no plan: 404", [nosub.res.status, nosub.data.error], [404, "billing_no_subscription"]);
   const foreignEnd = await call("/billing/end-now", { method: "POST", cookie: sam, json: {}, headers: { Origin: "https://evil.example" } });

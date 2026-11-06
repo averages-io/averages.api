@@ -1,32 +1,4 @@
-/**
- * Calendar sync, an Averages Plus perk (2026-10-21): a private link a
- * calendar app subscribes to (Google Calendar "From URL", Apple Calendar
- * "New Calendar Subscription"), showing the student's due dates. Mounted by
- * index.ts at /calendar.
- *
- *   GET    /calendar/status        { enabled, configured, eligible, plus, on, url, createdAt }
- *   POST   /calendar               {} -> { url, createdAt }: a new link (any old link stops working)
- *   POST   /calendar/touch         keep the stored sign-in in step with this session
- *   DELETE /calendar               the link and its stored sign-in, gone
- *   GET    /calendar/<token>.ics   the calendar itself (no cookie: calendar apps fetch it)
- *
- * What's stored, in the US (CalendarStore, one record per student and one per
- * link): the link's token sealed with PUSH_SECRET (so Settings can show it
- * again) and only its SHA-256 elsewhere; the student's sign-in sealed with
- * PUSH_SECRET, the same way notifications keep it, so the calendar can be read
- * while they're away; their time zone; and when the calendar was last read.
- * Never the calendar itself: schoolwork passes through and isn't stored, like
- * everywhere else (so calendar apps asking more than once every 10 minutes
- * get 429 with Retry-After, which keeps the school platform from being
- * hammered). Turning it off, signing out, switching to Incognito or Plus
- * ending deletes it all.
- *
- * The calendar: assignments, quizzes and tests with a due date from 14 days ago
- * to 90 days ahead, one all-day event each on the day they're due, with the
- * due time in the title. A sign-in that ran out, or Plus that ended, gives a
- * calendar with one event saying what to do, rather than an error a calendar
- * app would hide.
- */
+// Calendar sync, an Averages Plus perk: a private link a calendar app subscribes to.
 
 import { Hono } from "hono";
 import { DurableObject } from "cloudflare:workers";
@@ -345,11 +317,6 @@ export function calendarRoutes(deps: CalendarDeps) {
   const app = new Hono<{ Bindings: CalendarEnv; Variables: { session: SessionData } }>();
   const noStore = (c: any) => c.header("Cache-Control", "private, no-store");
 
-  /**
-   * Whether this student may use calendar sync: Plus, or anyone while billing
-   * is off (2026-10-21, Martin: with the billing switch off, "let the user use
-   * every single feature"). Null when the BillingStore couldn't be reached.
-   */
   const plusOf = async (c: any, uid: string): Promise<boolean | null> => {
     if (!plusRequired(c.env)) return true;
     try {
@@ -428,8 +395,6 @@ export function calendarRoutes(deps: CalendarDeps) {
       const feedStore = open(c.env, `f:${link.hash}`, c.req.url);
       const feed = (await feedStore.read()) as FeedRecord | null;
       if (!feed) return c.json({ ok: true, on: false });
-      // A new time zone (2026-10-28, Settings > Time Zone): the feed's due
-      // times follow it. Only a real zone the student sent; never the guess.
       let body: any = {};
       try { body = await c.req.json(); } catch { body = {}; }
       const asked = typeof body?.tz === "string" && body.tz && safeTimeZone(body.tz) === body.tz ? body.tz : "";

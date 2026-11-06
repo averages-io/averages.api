@@ -1,34 +1,4 @@
-/**
- * Google Drive and OneDrive that stay connected (2026-10-08).
- *
- * Martin: "why do google drive and onedrive need to be reauthed every time I
- * visit the page, why can't it be like canva". Until now the browser signed
- * in to Google and Microsoft itself and kept the tokens in the tab, so every
- * new tab or visit meant signing in again. Now the Worker does the sign-in
- * (the OAuth authorization-code flow, with PKCE), keeps each student's
- * refresh token, and hands the browser a short-lived access token when it
- * asks (POST /cloud/:app/token). The browser still talks to Drive and Graph
- * directly with that token: files never pass through the Worker.
- *
- * Built to mirror canva.ts: `CloudAccount` holds one student's connections
- * and runs INSIDE their CloudStore Durable Object (cloudStore.ts), in the "us"
- * jurisdiction. One object handles one student's requests one at a time, so
- * a refresh can't race itself (Microsoft rotates refresh tokens: two
- * refreshes at once could leave us holding the spent one). Free of Hono and
- * of `cloudflare:workers`, so the tests import it directly.
- *
- * What's kept, per app ("gdrive" / "onedrive"): the refresh token, the
- * current access token and when it expires, the scopes granted, the account's
- * email and name, and when it was connected. Sealed with a key derived from
- * SESSION_SECRET and tied to the student's uid and the app, like Canva's.
- * When Google or Microsoft refuses the grant and the connection is dropped,
- * a sealed "lost" marker (that account's email and name, and when; no
- * tokens) stays until the student connects again or presses Disconnect
- * (2026-10-09), so Settings can tell "got disconnected" from "never connected".
- *
- * Errors carry a short code as their message (statusForCloudCode maps it to
- * an HTTP status), never a token, a secret or a provider's error text.
- */
+// Google Drive and OneDrive that stay connected.
 
 import { b64url, b64urlDecode, codeChallenge, safeAppPath, STATE_RE, type CanvaStorage } from "./canva.ts";
 import { GOOGLE_CLIENT_ID_RE, MS_CLIENT_ID_RE, pick } from "./cloud.ts";
@@ -48,26 +18,12 @@ export const MS_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.
 
 /** Only files the app creates or the student picks: never their whole Drive. */
 export const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
-/**
- * drive.install (2026-10-09, replacing the Google Picker): puts "Averages.io" in
- * Google Drive's "Open with" menu. Opening a file that way grants drive.file
- * for it, so Averages.io can read the file the student chose and nothing else.
- * Non-sensitive, like drive.file. A Drive UI integration (Open URL
- * https://app.averages.io/files?drive=open) has to be set up in Google Cloud.
- */
 export const DRIVE_INSTALL_SCOPE = "https://www.googleapis.com/auth/drive.install";
 export const GOOGLE_SCOPES = ["openid", "email", "profile", DRIVE_FILE_SCOPE, DRIVE_INSTALL_SCOPE];
 /** offline_access is what makes Microsoft hand back a refresh token. */
 export const MS_SCOPES = ["openid", "profile", "email", "offline_access", "User.Read", "Files.ReadWrite.AppFolder"];
 /** Reading the student's own OneDrive files (adding one from OneDrive), asked for only when the app needs it. */
 export const MS_READ_SCOPE = "Files.Read";
-/**
- * Sharing a OneDrive file as a link when it's turned in (2026-10-12, Martin):
- * createLink needs Files.ReadWrite. Asked for only when a student picks Share
- * as a Link on a OneDrive file; the app never makes an edit link with it.
- * (Files.ReadWrite.Selected can't do this: Microsoft keeps it for Office file
- * handlers, work and school accounts only.) Must be added to the Entra app.
- */
 export const MS_WRITE_SCOPE = "Files.ReadWrite";
 
 /** Every call to Google or Microsoft gives up after 15 seconds. */
@@ -76,12 +32,6 @@ const TIMEOUT_MS = 15_000;
 const CONNECT_TTL_S = 10 * 60;
 /** A cached access token is handed out only while it has more than 5 minutes left. */
 const SKEW_S = 300;
-/**
- * A refresh the browser asks for (`{ refresh: true }`, after Drive or Graph
- * said 401) is skipped when this connection was refreshed less than 30
- * seconds ago: the current token is handed back instead, so a page that keeps
- * getting 401 can't make us hammer Google or Microsoft (2026-10-09).
- */
 export const FORCED_REFRESH_GAP_MS = 30_000;
 
 const nowS = () => Math.floor(Date.now() / 1000);
@@ -270,16 +220,9 @@ export interface Connection {
   name: string;
   /** Epoch ms. */
   connectedAt: number;
-  /** When the access token was last refreshed, epoch ms (2026-10-09; absent or 0 = not since connecting). */
   refreshedAt?: number;
 }
 
-/**
- * What's kept when a connection is dropped because Google or Microsoft
- * refused the grant (2026-10-09): who it was and when, never a token, so
- * Settings can say "Reconnect" instead of a plain "Connect". Sealed like a
- * connection.
- */
 export interface LostConnection {
   email: string;
   name: string;
@@ -426,7 +369,6 @@ export interface ConnectOptions {
   returnTo: string;
   /** OneDrive: also ask for Files.Read. */
   read?: boolean;
-  /** OneDrive: also ask for Files.ReadWrite (sharing links, 2026-10-12). */
   write?: boolean;
   loginHint?: string | null;
   /** This Worker's own /cloud/:app/callback, as the browser reached it. */
@@ -445,12 +387,6 @@ export interface FinishResult {
 
 export interface AppStatus {
   connected: boolean;
-  /**
-   * True when the connection was dropped because Google or Microsoft refused
-   * the grant (the student removed Averages.io from their account, say) and
-   * they haven't connected again or pressed Disconnect since (2026-10-09).
-   * email and name are then the account that was connected.
-   */
   lost: boolean;
   email: string;
   name: string;
@@ -691,15 +627,6 @@ export class CloudAccount {
 
   /* ── tokens ── */
 
-  /**
-   * A short-lived access token for the browser, refreshing first when under
-   * 5 minutes are left. With `refresh` (2026-10-09: the browser got a 401
-   * with the cached one, as happens for up to an hour after a student removes
-   * Averages.io from their account) it refreshes anyway, unless this
-   * connection was refreshed in the last FORCED_REFRESH_GAP_MS. A refused
-   * grant drops the connection and throws cloud_reconnect_needed, so the
-   * browser stops asking instead of being handed the same dead token.
-   */
   async accessToken(uid: string, app: CloudApp, opts: TokenOptions = {}): Promise<CloudToken> {
     if (!cloudConfigured(this.env, app)) throw new CloudError("cloud_not_configured", 503);
     const forced = opts?.refresh === true;
@@ -754,9 +681,6 @@ export class CloudAccount {
         await this.save(uid, app, next);
         return next;
       } catch (error) {
-        // A refused grant won't work next time either: drop the connection so
-        // the app shows Connect instead of failing forever, and remember
-        // whose it was (2026-10-09) so Settings can say it was lost.
         if (error instanceof CloudError && error.message === "cloud_reconnect_needed" && gen === this.generation[app]) {
           this.generation[app]++;
           await this.storage.delete(connKey(app));
@@ -773,24 +697,6 @@ export class CloudAccount {
 
   /* ── disconnect ── */
 
-  /**
-   * Forgets the connection. Google's refresh token is revoked first (best
-   * effort: a failure still forgets), which takes Averages.io off the
-   * student's Google account, unless that could end a Sign in with Google:
-   *
-   * - A Drive-only client (GOOGLE_DRIVE_CLIENT_ID): always revoked.
-   * - The sign-in client (one Google client for both, Martin's choice
-   *   2026-10-05): revoking ends everything that client was granted, Drive and
-   *   Sign in with Google alike. Revoked when `revokeShared` says that's safe
-   *   (2026-10-26, Martin: "force disconnect from drive"): the student didn't
-   *   sign in with Google (Schoology), or is signing out anyway. A Google
-   *   (Classroom) sign-in disconnecting Drive while staying signed in keeps
-   *   the grant.
-   *
-   * Microsoft has no way to revoke one refresh token, so it's just forgotten
-   * (the student can remove the app at account.live.com/consent or
-   * myapps.microsoft.com).
-   */
   async disconnect(uid: string, app: CloudApp, opts: { revokeShared?: boolean } = {}): Promise<void> {
     this.generation[app]++;
     this.refreshing[app] = null;
@@ -798,10 +704,6 @@ export class CloudAccount {
     const shared = !!conn && conn.client === pick(this.env.GOOGLE_CLIENT_ID, GOOGLE_CLIENT_ID_RE);
     if (conn && app === "gdrive" && (!shared || opts.revokeShared === true)) {
       try {
-        // Revoking either token ends the whole grant. Google refuses a refresh token it no
-        // longer honours (an app in Testing loses them after 7 days), so the current access
-        // token is tried too while it's still good (2026-10-26, Martin: "the drive disconnect
-        // ... doesn't work").
         const ok = await revokeGoogle(conn.refresh);
         if (!ok && conn.access && conn.accessExp > nowS()) await revokeGoogle(conn.access);
       } catch {
@@ -809,7 +711,6 @@ export class CloudAccount {
       }
     }
     await this.storage.delete(connKey(app));
-    // Disconnect also forgets a lost connection (2026-10-09): Settings goes back to plain "Connect".
     await this.storage.delete(lostKey(app));
     const other: CloudApp = app === "gdrive" ? "onedrive" : "gdrive";
     if ((await this.storage.get(connKey(other))) === undefined && (await this.storage.get(lostKey(other))) === undefined) {

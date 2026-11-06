@@ -1,11 +1,5 @@
-/**
- * The retry queue (src/retryQueue.ts, 2026-10-16): what goes on it, and how
- * the consumer settles each message. The two kinds are tested where their
- * senders are: push.test.ts (notifications) and canvaSave.test.ts (Canva
- * save-folder files).
- *
- * Run: node --experimental-strip-types test/retryQueue.test.ts
- */
+// The retry queue: what goes on it, and how the consumer settles each message.
+// Run: node --experimental-strip-types test/retryQueue.test.ts
 import {
   delayFor,
   endpointKey,

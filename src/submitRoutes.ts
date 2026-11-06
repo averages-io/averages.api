@@ -1,22 +1,4 @@
-/**
- * /submit: turning in work on Schoology (Wave 2, 2026-10-06).
- *
- * A Hono sub-app that index.ts mounts with `app.route("/submit", submitRoutes(deps))`.
- * It takes the pieces it needs from index.ts as `deps` instead of importing
- * them, so index.ts stays the one place that knows about cookies and origins:
- *
- *   requireSession  index.ts's middleware: puts the session on c.var.session, or answers 401.
- *   fromOurApp      index.ts's notFromOurApp: a 403/415 for a state-changing call
- *                   that isn't from our app (Origin, JSON body), else null.
- *
- * Middleware is attached per route, never with use("*"): a sub-app's "*"
- * becomes "/submit/*" on the parent, and keeping it per route means mounting
- * order can never matter.
- *
- * Schoology sessions only. Google Classroom work is turned in on Classroom
- * (404 turn_in_on_classroom); demo has nothing to turn in to (403). Incognito
- * is fine: nothing is stored, the file goes straight to Schoology.
- */
+// /submit: turning in work on Schoology.
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { isDemoSession, isGoogleSession, type SessionData } from "./session.ts";
@@ -122,7 +104,6 @@ export function submitRoutes(deps: SubmitDeps) {
     if (blocked) return blocked;
     const body = await readBody(c, MAX_JSON_BYTES);
     if (!body) return c.json({ error: "invalid_body" }, 400);
-    // A file for a message (2026-11-03): the same upload, not tied to an assignment ("0" stands in for both ids).
     const forMessage = body.purpose === "message";
     const section = forMessage ? "0" : String(body.section ?? "");
     const assignment = forMessage ? "0" : String(body.assignment ?? "");
@@ -190,11 +171,6 @@ export function submitRoutes(deps: SubmitDeps) {
     }
   });
 
-  /**
-   * Step 3: turn in the uploaded files, all in one revision. An optional
-   * `description` (2026-10-23) then goes on as a comment on the submission;
-   * the answer says `description: "added"` or `"failed"` (files still in).
-   */
   app.post("/file", deps.requireSession, async (c) => {
     const blocked = begin(c) ?? deps.fromOurApp(c);
     if (blocked) return blocked;
@@ -215,7 +191,6 @@ export function submitRoutes(deps: SubmitDeps) {
     try {
       answer = await attachFiles(session, section, assignment, fileIds);
     } catch (error) {
-      // Schoology's 403 here (2026-11-03): the assignment takes no turn-ins (allow_dropbox off, or closed).
       if (error instanceof SchoologyError && error.status === 403) return c.json({ error: "turn_in_not_allowed" }, 403);
       return schoologyFailure(c, error);
     }

@@ -343,7 +343,6 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   ], [false, false, false, false]);
 }
 
-// 2026-10-06 review: only the browsers' push services, never just any public host.
 check("a public host that isn't a push service: refused", ["https://evil.example/push/abc", "https://example.com/x", "https://fcm.googleapis.com.evil.example/x", "https://notfcm.googleapis.com/x"].map(isAllowedEndpoint), [false, false, false, false]);
 check("the push services, including their subdomains", ["https://fcm.googleapis.com/fcm/send/x", "https://updates.push.services.mozilla.com/wpush/v2/x", "https://web.push.apple.com/x", "https://wns2-by3p.notify.windows.com/w/?token=x"].map(isAllowedEndpoint), [true, true, true, true]);
 

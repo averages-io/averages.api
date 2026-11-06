@@ -1,23 +1,4 @@
-/**
- * Sign in with Google, for schools on Google Classroom (2026-10-05).
- *
- * A normal server-side OAuth sign-in: the browser is sent to Google's consent
- * screen, Google sends it back to GET /auth/google/callback with a one-time
- * code, and this Worker trades the code (with the client secret, which never
- * leaves the Worker) for the student's tokens. The tokens are then sealed into
- * the same encrypted, httpOnly session cookie as a Schoology sign-in. Nothing
- * about the student is stored on our servers (Privacy Policy, "Google").
- *
- * Read-only Classroom permissions only. Google lets the student untick
- * permissions on the consent screen, so the callback checks what was actually
- * granted: classes and coursework are required, the rest just switch their
- * feature off. A student who signed in before an optional permission was
- * added (rosters and topics, 2026-10-06) keeps the letters sealed at their
- * sign-in until they sign in again.
- *
- * The browser never sees a Google token: Classroom calls happen here, in
- * classroom.ts, the same way Schoology calls do.
- */
+// Sign in with Google, for schools on Google Classroom.
 
 import { GOOGLE_UID_PREFIX, type GoogleSession } from "./session.ts";
 
@@ -41,14 +22,7 @@ export const CLASSROOM_SCOPES = {
   m: SCOPE_BASE + "classroom.courseworkmaterials.readonly",
   /** Class announcements (Home's messages). */
   a: SCOPE_BASE + "classroom.announcements.readonly",
-  /**
-   * Class rosters, for the teachers' names (Contacts, the course cards,
-   * GET /data/people). Optional, added 2026-10-06: without it those just
-   * stay empty and the app says the permission is needed. Averages.io only
-   * reads each class's teachers, never the student list.
-   */
   r: SCOPE_BASE + "classroom.rosters.readonly",
-  /** Class topics, shown as folders in Materials (GET /data/folders). Optional, added 2026-10-06. */
   t: SCOPE_BASE + "classroom.topics.readonly",
 } as const;
 
@@ -300,13 +274,6 @@ export function clearStateCookie(secure: boolean): string {
   return [`${STATE_COOKIE}=`, "Path=/auth/google", "HttpOnly", ...(secure ? ["Secure"] : []), "SameSite=Lax", "Max-Age=0"].join("; ");
 }
 
-/**
- * A refreshed access token rides in its own short-lived cookie (sealed,
- * httpOnly, host-only on api.averages.io) instead of rewriting the session
- * cookie. So a data request still refreshing when the student signs out can't
- * put the session back: without the session cookie this one is useless, and
- * it's tied to the session it was made for (second-pass review, 2026-10-05).
- */
 export const ACCESS_COOKIE = "averages_google_access";
 export const ACCESS_PURPOSE = "google-access-token";
 

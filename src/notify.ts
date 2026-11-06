@@ -1,36 +1,4 @@
-/**
- * Browser notifications: what changed, worked out without keeping any of it
- * (2026-10-05). Pure functions only; src/pushStore.ts does the fetching,
- * storing and sending, and test/push.test.ts drives these directly.
- *
- * The student agreed to: "Browser notifications: only for opted-in students.
- * The server keeps an encrypted sign-in only for students who turn
- * notifications on, and deletes it when they turn them off or sign out." So:
- *
- *   - A snapshot holds short keyed hashes only, never a grade, title, name or
- *     message. Each hash covers an id plus whatever marks a change (a score, a
- *     last-updated time), so "is this new?" is a set lookup. The hash key comes
- *     from PUSH_SECRET and the student's id and is never stored, so the stored
- *     hashes can't be matched against guessed grades (a plain hash of "18|20"
- *     could be). HalfSipHash-2-4 rather than WebCrypto because a run hashes up
- *     to a few thousand short strings inside a ~10 ms CPU allowance, and every
- *     crypto.subtle call is an async round trip into the runtime.
- *   - A notification says what KIND of thing changed ("A new grade was
- *     posted."), never which one. The details stay in Averages.
- *
- * Types the student can switch on and off (Settings > Notifications):
- *   grades         a new or changed graded score
- *   assignments    new work posted
- *   due            due within the next 24 hours and (where Classroom can tell
- *                  us) not turned in; once per item and due date
- *   messages       Schoology only: a new unread inbox thread, or one whose
- *                  last_updated moved while it's unread
- *   announcements  Schoology section updates / Classroom announcements
- *
- * The first look at a type is a baseline: it is remembered and notifies
- * nothing, so turning notifications on (or a type back on) never announces
- * everything that was already there.
- */
+// Browser notifications: what changed, worked out without keeping any of it.
 
 import { dueMs, timeMs, type CourseRaw } from "./classroom.ts";
 import { schoologyLocalMs } from "./adapt.ts";
@@ -409,9 +377,6 @@ export function schoologyObservation(raw: SchoologyRaw, enabled: NotifyTypes, ha
         const id = sid(a?.id);
         if (!id) continue;
         posted.push({ key: `a|${sectionId}|${id}`, rank: idRank(id) });
-        // Schoology doesn't say whether it's turned in, so anything due in
-        // the next day counts (the app lists it the same way).
-        // Due times are the student's local time (2026-10-07).
         const at = schoologyLocalMs(a?.due, tz);
         if (at !== null && at > now && at <= now + DUE_WINDOW_MS) due.push({ key: `d|${sectionId}|${id}|${at}`, rank: at });
       }

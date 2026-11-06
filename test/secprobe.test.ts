@@ -1,10 +1,5 @@
-/**
- * Adversarial probe (2026-10-16): fires crafted hostile requests at the real
- * Worker in-process and asserts it refuses safely. No network. Guards the
- * auth, CSRF, injection and fail-closed properties against regressions.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/secprobe.test.ts
- */
+// Adversarial probe: fires crafted hostile requests at the real Worker in-process and asserts it refuses safely.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/secprobe.test.ts
 import app from "../src/index.ts";
 import { sealSession, sealValue, openSession, SESSION_COOKIE, DEMO_UID } from "../src/session.ts";
 

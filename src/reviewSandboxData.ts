@@ -1,31 +1,4 @@
-/**
- * The reviewer account's sample classes (2026-10-07), for reviewSandbox.ts.
- *
- * The same six classes the app's demo pages show (AP Chemistry, Algebra II,
- * English 10, U.S. History, Spanish III, PE), with invented teachers, so a
- * reviewer moving between demo mode and this account sees one consistent
- * student. Everything here is static description; reviewSandbox.ts turns it
- * into Schoology's JSON shapes at request time, with every date placed
- * relative to "now" so the account always looks current: some work overdue,
- * one thing due today, the rest this week and next, grades posted hours and
- * weeks ago.
- *
- * Due dates are wall-clock times in SANDBOX_ZONE, the way real Schoology
- * gives them in the student's own zone (its /users/me says which, tz_name).
- * The app sends its own zone with ?tz= and reads them in that; a reviewer in
- * another zone may see "due today" land on a neighbouring day, which is the
- * one thing a sandbox that can't see the zone can't get right everywhere.
- *
- * The attachment files (a one-page PDF per handout, one PNG diagram) are
- * built here in a few hundred bytes each, so nothing binary is checked in and
- * downloads, Edit in Canva and the Files page all have real bytes to work on.
- *
- * Every id is a digit string in its own range (sections 70000000xx,
- * assignments 71000xxxxx, documents 73..., files 74..., folders 75...,
- * updates 76..., events 77..., threads 78...), because the routes only pass
- * digits through to Schoology paths. Teachers' uids are digits too (81...),
- * as extras.ts and messages.ts drop any id that isn't.
- */
+// The reviewer account's sample classes, for reviewSandbox.ts.
 
 export const SANDBOX_ZONE = "America/Los_Angeles";
 
@@ -607,11 +580,6 @@ export function titrationPng(): Uint8Array {
   });
 }
 
-/**
- * Invented classmates (2026-10-28, for the Fullscreen Members tab and
- * Contacts): uids 82000000xx, each in a few of the sample classes by index
- * into SECTIONS. No pictures (the sandbox has no Schoology CDN).
- */
 export const CLASSMATES: { uid: string; first: string; last: string; sections: number[] }[] = [
   { uid: "8200000001", first: "Maya", last: "Chen", sections: [0, 1, 2] },
   { uid: "8200000002", first: "Jordan", last: "Brooks", sections: [0, 3, 5] },

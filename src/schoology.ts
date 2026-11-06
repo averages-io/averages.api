@@ -75,21 +75,6 @@ async function failure(response: Response, path: string): Promise<SchoologyError
   return new SchoologyError(`Schoology returned ${response.status} for ${path}`, response.status, body.slice(0, 500));
 }
 
-/**
- * Reads shared for a moment (2026-11-03, Martin: pages took 2, then 5 seconds).
- * One page open asks our API for the bundle, people, files, events, updates
- * and submissions at once, and each of those reads some of the same things
- * from Schoology (the class list, each class's assignments). A read's answer
- * is kept for READS.shareMs in this Worker's memory (never stored anywhere),
- * so the same read for the same student shortly after, from any of those
- * requests, doesn't go to Schoology again; that also helps a call that waited
- * out Schoology's limit. Only finished answers are shared: a Worker request
- * can't wait on another request's call in progress. Anything that changes
- * Schoology (a turn-in, a message) forgets that student's reads.
- *
- * On in the Workers runtime only: the tests swap Schoology's answers between
- * calls, so they read fresh unless a test turns this on.
- */
 export const READS = {
   on: typeof navigator !== "undefined" && (navigator as any).userAgent === "Cloudflare-Workers",
   shareMs: 30_000,
@@ -132,20 +117,6 @@ async function schoologyGetFresh<T = unknown>(
 ): Promise<T> {
   const url = schoologyUrl(path, query);
 
-  /**
-   * A ceiling on how long one upstream call may hang (2026-09-17).
-   *
-   * Without it a Schoology request that never answers leaves the student's
-   * page spinning indefinitely — the Worker is not burning CPU while it
-   * waits, so nothing on our side ever cuts it off. 20 seconds is deliberately
-   * generous: it is not a performance knob, it is the line past which
-   * Schoology is effectively down, and a student on a slow connection must
-   * never trip it.
-   *
-   * Aborting is safe here in a way it was NOT for sign-out (see signOut in the
-   * app's lib/averages.ts, where tearing down the request meant the clearing
-   * Set-Cookie never arrived). These are GETs: nothing is left half-done.
-   */
   const response = await signedGet(url, path, creds);
 
   if (!response.ok) throw await failure(response, path);
@@ -153,24 +124,6 @@ async function schoologyGetFresh<T = unknown>(
   return (await response.json()) as T;
 }
 
-/**
- * A signed GET that follows Schoology's redirects itself, signing each new
- * address afresh (2026-11-03). /users/me answers 303 to /users/<id>; letting
- * fetch follow it sent the same Authorization header (same nonce and
- * timestamp) twice, and Schoology now refuses the second with 401 "Duplicate
- * timestamp/nonce combination, possible replay attack", so every API-key
- * sign-in said the key "didn't work". Only redirects within api.schoology.com
- * are followed (never our signature to anywhere else), at most 3.
- */
-/**
- * Schoology's limit (2026-11-03, found with the sandbox): 50 calls per 5
- * seconds per key. A first page load asks for the bundle, people, files,
- * events, updates and submissions at once, each a call per class, so a
- * student with 5+ classes goes over it, and the calls that lost the race came
- * back 429 and were quietly treated as empty. That's why new grades, due work
- * and the bell were missing on first open and fine after a reload. A 429 now
- * waits for the window to pass and tries again (each try signed fresh).
- */
 export const RATE_LIMIT_WAITS_MS = [1200, 2500, 4500];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -200,24 +153,6 @@ async function signedGetOnce(url: URL, path: string, creds: Credentials): Promis
   }
 }
 
-/**
- * A signed Schoology call that changes something, with a JSON body
- * (2026-10-06: sending messages; turning in work uses it too). Same timeout
- * and errors as schoologyGet.
- *
- * Signing: OAuth 1.0a only folds the body into the signature for
- * form-encoded requests, so a JSON body is sent as-is and the signature
- * covers the method, URL and query string, exactly as buildAuthHeader builds
- * it for GETs.
- *
- * Redirects are NOT followed: a 303 after a POST would turn into a GET with a
- * signature made for the POST (a 401), and the change has already happened by
- * then. A 3xx counts as done. Answers with the parsed JSON body, or null when
- * there's none (204, a redirect, or a body that isn't JSON).
- *
- * `path` must be one of our own paths with ids already checked by the route
- * (digits only); nothing from the browser goes into it unchecked.
- */
 export async function schoologyRequest<T = unknown>(
   method: "POST" | "PUT" | "DELETE",
   path: string,
@@ -307,16 +242,9 @@ export async function getGrades(uid: string, creds: Credentials) {
 }
 
 export async function getAssignments(sectionId: string, creds: Credentials) {
-  // The same read as getAssignmentsWithAttachments (2026-11-03): one answer serves the bundle and
-  // the Files list (see READS), instead of each class's assignments being read twice per page open.
   return getAssignmentsWithAttachments(sectionId, creds);
 }
 
-/**
- * A message folder's threads. `limit` is optional: without it Schoology's own
- * default page applies (what the bundle and notifications have always read);
- * the Messages page asks for more (2026-10-06).
- */
 export async function getMessages(
   folder: "inbox" | "sent",
   creds: Credentials,
@@ -338,11 +266,6 @@ export async function getAssignment(sectionId: string, assignmentId: string, cre
   });
 }
 
-/**
- * Course files for the Files page (2026-10-05): a section's documents (files
- * the teacher posted in Materials) and its assignments, both with their
- * attachments. Read-only, and only the signed-in student's own sections.
- */
 export const COURSE_FILE_PAGE = 200;
 
 /** A section's Materials documents; exactly COURSE_FILE_PAGE back means there may be more. */
@@ -362,7 +285,6 @@ export async function getAssignmentsWithAttachments(sectionId: string, creds: Cr
   return listOf(payload, "assignment");
 }
 
-/** A class's discussions (2026-11-06): the graded ones and those with a due date count as work (discussionsAsWork). */
 export async function getDiscussions(sectionId: string, creds: Credentials) {
   const payload = await schoologyGet(`/sections/${sectionId}/discussions`, creds, { limit: COURSE_FILE_PAGE });
   return listOf(payload, "discussion");
@@ -390,18 +312,6 @@ export function isSchoologyApiUrl(raw: string): boolean {
   }
 }
 
-/**
- * A URL an attachment download may be redirected to (2026-10-16 hardening).
- * Schoology serves file bodies off a public CDN, so a redirect to a public
- * https host is expected. This refuses the rest, matching the guard the Canva
- * export (isExportUrl) and the upload (isUploadLocation) already use: https
- * only, no embedded credentials, the default port, a real dotted hostname,
- * and never an IP literal or localhost. It closes any chance of a redirect
- * (which Schoology, not the student, controls) steering the Worker's fetch at
- * an internal or metadata address. The OAuth header is already withheld from
- * non-Schoology hosts, so this is defence in depth, brought in line with the
- * rest of the codebase.
- */
 export function isSafeAttachmentTarget(u: URL): boolean {
   const host = u.hostname.toLowerCase();
   if (u.protocol !== "https:" || u.username || u.password || u.port !== "") return false;
@@ -478,10 +388,6 @@ export async function openAttachment(downloadPath: string, creds: Credentials): 
     if (isSandboxCreds(creds)) return sandboxFetch("GET", url);
     const headers: Record<string, string> = {};
     if (isSchoologyApiUrl(url)) headers.Authorization = await buildAuthHeader("GET", url, creds);
-    // The 20 s limit is for Schoology to START answering, not for the whole
-    // file: AbortSignal.timeout would also cut off the body while a big file
-    // is still streaming to the student (2026-10-06). So the timer is cleared
-    // as soon as the response headers arrive.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
     try {

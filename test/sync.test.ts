@@ -1,16 +1,5 @@
-/**
- * Tests for the Sync Across Devices storage layer. (The Projected-GPA
- * snapshot for the weekly email lived here too until 2026-10-06; the tests
- * below now check that an old record's snapshot is ignored and dropped.)
- *
- * Run: node --experimental-strip-types test/sync.test.ts
- *
- * No real Cloudflare KV binding is available in this sandbox (same
- * npm-install constraint noted elsewhere in this repo), so these run against
- * a tiny in-memory stand-in that satisfies the same get/put/delete shape a
- * real KV namespace does — sync.ts is written against that minimal interface
- * for exactly this reason.
- */
+// Tests for the Sync Across Devices storage layer.
+// Run: node --experimental-strip-types test/sync.test.ts
 
 import {
   cleanSeen,
@@ -115,21 +104,16 @@ console.log("\nan old record's GPA snapshot (weekly email, removed 2026-10-06) i
     })
   );
   const loaded = await loadSyncRecord(kv, "u4");
-  check("loads only settings and the two timestamps", Object.keys(loaded), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]); // + the seen notifications (2026-11-03)
+  check("loads only settings and the two timestamps", Object.keys(loaded), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]);
   check("the timestamps come through as they were", [loaded.updatedAt, loaded.settingsUpdatedAt], ["2026-10-01T00:00:00.000Z", "2026-09-30T00:00:00.000Z"]);
   await saveSyncRecord(kv, "u4", { ...loaded, updatedAt: "2026-10-06T00:00:00.000Z" });
   const stored = JSON.parse(kv.store.get("sync:u4")!);
-  check("the next save writes the record without gpaSnapshot or gpaHistory", Object.keys(stored), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]); // + the seen notifications (2026-11-03)
+  check("the next save writes the record without gpaSnapshot or gpaHistory", Object.keys(stored), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]);
   // Even when something passes a record that still has one (a caller spreading an old object).
   await saveSyncRecord(kv, "u4", { ...(loaded as any), gpaSnapshot: { current: 1 } });
   check("saveSyncRecord writes exactly the three fields, whatever it's given", Object.keys(JSON.parse(kv.store.get("sync:u4")!)), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]); // + the seen notifications (2026-11-03)
 }
 
-// ---------------------------------------------------------------------------
-// kvFromSyncStore (2026-10-04): the per-student Durable Object (syncStore.ts),
-// wrapped as KVLike. A plain in-memory stand-in for the Durable Object, with
-// the same three methods syncStore.ts has.
-// ---------------------------------------------------------------------------
 function fakeStore(): SyncStoreLike & { data: Map<string, string> } {
   const data = new Map<string, string>();
   return {

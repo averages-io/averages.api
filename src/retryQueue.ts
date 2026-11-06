@@ -1,34 +1,4 @@
-/**
- * Retries through Cloudflare Queues (2026-10-16, cloudflare-compute-plan.md
- * item 2): a send that failed for a passing reason is tried again a little
- * later, instead of being lost.
- *
- * Two kinds today:
- *   - "push": a browser notification the push service refused for now (429,
- *     5xx, or no answer). The message carries the student's PushStore id (an
- *     opaque id, not their Schoology id), a short hash of the browser's
- *     subscription address and the notification's generic text ("A new grade
- *     was posted."). The PushStore sends it again to that one browser.
- *
- *   - "canva_save" (2026-10-16, src/canvaSave.ts): one file of a "Save folder
- *     to Canva" job. Not a retry: every file goes through the queue, spaced
- *     out so Canva's 20-imports-a-minute limit is never reached. The message
- *     carries the student's CanvaStore id (opaque), the job id and the file's
- *     number; the job itself is in the CanvaStore.
- *
- * So nothing in a queue message is student data: no names, grades, titles,
- * email addresses or subscription keys.
- *
- * Flow: the first try happens as before. Only a failure that may pass is put
- * on the queue (`enqueueRetry`), with a delay. The consumer (`handleRetryBatch`,
- * the Worker's `queue` handler) tries again; on another passing failure it
- * asks the queue for a later retry (RETRY_DELAYS), up to MAX_ATTEMPTS, then
- * gives up with a log line. A failure that won't pass (application deleted,
- * browser unsubscribed, notification too old) is dropped at once.
- *
- * Without the RETRY binding (local tests, or before the queue is created)
- * enqueueRetry does nothing and returns false: everything works as before.
- */
+// Retries through Cloudflare Queues: a send that failed for a passing reason is tried again a little later, instead of being lost.
 
 /** The queue's messages. Short keys: each delivery counts per 64 KB, but small is cheaper to log and read. */
 export interface RetryNote {

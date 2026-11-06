@@ -1,13 +1,5 @@
-/**
- * Route tests for the 2026-10-06 additions, through the real Worker
- * (src/index.ts) with Schoology, Google and the PUSH Durable Object faked:
- * the bundle's new fields, the per-page extras, Schoology messages, sign-out
- * forgetting notifications, schoologyPost, and the rate limits.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/routes.test.ts
- *
- * Every id, name, key and token below is made up.
- */
+// Route tests for the additions, through the real Worker (src/index.ts) with Schoology.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/routes.test.ts
 
 import app from "../src/index.ts";
 import { buildBaseString, hmacSha1, percentEncode } from "../src/oauth.ts";
@@ -271,7 +263,6 @@ freshCalls();
   check("GRADEBOOK rows", b.GRADEBOOK["101"].categories.map((c: any) => [c.name, c.weight, c.assignments.map((a: any) => [a.title, a.graded])]), [["All work", 100, [["Titration Lab", true], ["Unit 2 Test", false]]]]);
   check("no GPA snapshot any more (weekly email removed)", ["gpaVsLastWeek" in b, typeof b.projectedGPA], [false, "number"]);
   const paths = schoologyCalls().map((x) => x.path).sort();
-  // + each class's discussions (2026-11-06): graded discussions are work too
   check("one recipients call; no grading-category or other extra calls", paths, ["/messages/inbox", "/messages/recipients", "/sections/101/assignments", "/sections/101/discussions", "/sections/102/assignments", "/sections/102/discussions", `/users/${ME}/grades`, `/users/${ME}/sections`]);
   world.recipients = 403;
   const refusedNames = await json(await call("/data/bundle", { cookie: schoologySession }));
@@ -508,7 +499,6 @@ resetRateLimits();
   check("someone not in the student's recipients: 403, nothing sent", [stranger.status, (await json(stranger)).error, world.posted.length], [403, "recipient_not_allowed", 0]);
   world.recipients = 403;
   const unlisted = await call("/messages", { method: "POST", cookie: schoologySession, json: { recipientIds: ["5001"], subject: "Hi", message: "x" } });
-  // 2026-11-03: Schoology's list can be empty or unreadable; a teacher of the student's own classes is still allowed.
   check("recipients can't be read: their class's teacher still gets it", [unlisted.status, world.posted.length], [200, 1]);
   world.posted = [];
   const unlistedStranger = await call("/messages", { method: "POST", cookie: schoologySession, json: { recipientIds: ["9999"], subject: "Hi", message: "x" } });
@@ -597,8 +587,6 @@ resetRateLimits();
   check("without the PUSH binding sign-out still works", res.status, 200);
   check("push routes are mounted", (await call("/push/config")).status, 200);
 }
-
-/* ── Login CSRF (2026-10-06 review) ───────────────────────────────────── */
 
 console.log("\nsign-in only from our app");
 {

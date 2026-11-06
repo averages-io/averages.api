@@ -1,40 +1,4 @@
-/**
- * Exporting a Canva design as a PDF, so a draft can be turned in (Submit from
- * Drafts, Add from Canva; 2026-10-06).
- *
- * The type pill (2026-10-15): the student picks what their teacher gets.
- * PDF, PowerPoint, PNG and JPG, all straight from Canva. A PNG is one image of
- * the whole design (Canva's as_single_image; 2026-11-03, was one per page); a
- * JPG is one image per page. GET /designs/:id/formats says which of these a
- * design can be (Canva's export-formats answer) and what kind of design it is.
- *
- * No Word (2026-11-03, Martin: "we don't need a container for canva exports"):
- * Canva's API has no Word export, and the converter container that turned the
- * PDF into a .docx (src/convert.ts) is gone. A Canva Doc goes as a PDF.
- *
- * A Hono sub-app that index.ts mounts with
- * `app.route("/canva", canvaExportRoutes(deps))`, next to the other /canva
- * routes. Its `deps` come from index.ts:
- *
- *   requireSession  puts the session on c.var.session, or answers 401.
- *   canvaGuard      index.ts's canvaGuard: demo, Incognito and "Canva isn't
- *                   set up" answers, else null.
- *   fromOurApp      index.ts's notFromOurApp (Origin and JSON checks), else null.
- *   storeFor        (c, uid) => this student's CanvaStore (index.ts's canvaStore()).
- *
- * Middleware is attached per route, never with use("*"): on the parent that
- * would become "/canva/*" and could reach the redirect-only Canva routes.
- *
- * Exporting needs the design:content:read scope. Until Martin turns it on in
- * Canva's Developer Portal and sets CANVA_EXPORT_ENABLED="1", and for any
- * connection made before then, every route here answers 409
- * canva_reconnect_needed and the app says "Reconnect Canva to turn in
- * designs".
- *
- * Canva Connect: POST /v1/exports {design_id, format: {type: "pdf"}} starts a
- * job; GET /v1/exports/{id} says in_progress, success (with download URLs,
- * good for 24 hours) or failed.
- */
+// Exporting a Canva design as a PDF, so a draft can be turned in.
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import {
@@ -110,7 +74,6 @@ export interface ExportClaim {
   t: string;
   /** The student. */
   u: string;
-  /** What it's turned in as (2026-10-15); missing on older tokens means PDF. */
   f?: TurnInFormat;
 }
 
@@ -144,7 +107,6 @@ async function readJson(res: Response): Promise<any> {
  */
 function exportFailure(res: Response, json: any): CanvaError {
   const code = String(json?.code ?? "");
-  // What Canva said, for `wrangler tail` (2026-10-12: "canva is not exporting the files"). No tokens in it.
   console.error("canva_export_call_failed", res.status, code, String(json?.message ?? "").slice(0, 200));
   if (code === "too_many_requests" || code.endsWith("_throttled") || res.status === 429) return new CanvaError("canva_rate_limited", 429);
   if (res.status === 401 || res.status === 403) return new CanvaError("canva_reconnect_needed", 409);
@@ -350,13 +312,6 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
     return claim && claim.u === c.get("session").uid ? claim : null;
   };
 
-  /**
-   * What this design can be turned in as (the type pill), from Canva's
-   * export-formats: PDF, PowerPoint, PNG and JPG as Canva offers them. `kind`
-   * is the design's type from Canva's own design_types (2026-11-03: "doc",
-   * "presentation", "whiteboard", "sheet", "email", "custom"), for the app to
-   * label it; null when Canva doesn't say.
-   */
   app.get("/designs/:id/formats", deps.requireSession, async (c) => {
     const blocked = begin(c, false);
     if (blocked) return blocked;
@@ -399,8 +354,6 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
       return c.json({ error: "bad_request" }, 400);
     }
     const format = body?.format === undefined ? "pdf" : body.format;
-    // Word was made by the converter container, gone since 2026-11-03: an app from before then hears the same
-    // "not available, turn it in as a PDF" it already knows
     if (format === "docx") return c.json({ error: "convert_unavailable" }, 503);
     if (!isTurnInFormat(format)) return c.json({ error: "bad_request" }, 400);
     const session = c.get("session");

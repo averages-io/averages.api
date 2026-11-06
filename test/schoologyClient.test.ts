@@ -1,5 +1,4 @@
-// The Schoology client's reads (2026-11-03): redirects are re-signed, and the
-// 50-calls-per-5-seconds limit (429) waits and tries again.
+// The Schoology client's reads: redirects are re-signed, and the 50-calls-per-5-seconds limit (429) waits and tries again.
 import { getMe, getAssignments, RATE_LIMIT_WAITS_MS } from "../src/schoology.ts";
 import { sendNewMessage, deleteThread } from "../src/messages.ts";
 

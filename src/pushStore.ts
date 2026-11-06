@@ -1,33 +1,4 @@
-/**
- * Browser notifications: one PushStore Durable Object per student who turned
- * them on (2026-10-05). Opened in the "us" jurisdiction (pushStoreFor below),
- * like SyncStore and CanvaStore, so the stored sign-in and the code that uses
- * it stay in the United States (PowerSchool developer terms §3.2.1). Separate
- * from both: turning notifications off deletes everything in here and nothing
- * else, and turning Sync or Canva off never touches this.
- *
- * What it keeps (Durable Object key-value storage), and nothing more:
- *   subs   up to 5 push subscriptions, one per browser (same endpoint replaces)
- *   types  which kinds of notification are on
- *   cred   the student's session, sealed with PUSH_SECRET (sealValue purpose
- *          "push-credential", expiring with the session itself). PUSH_SECRET
- *          is a separate Worker secret from SESSION_SECRET, so the stored
- *          sign-in can't be opened with the session key alone.
- *   snap   the last snapshot: short keyed hashes only (see notify.ts)
- *   meta   timestamps, a failure count, and a random generation id
- *
- * Every ~20 minutes (plus jitter) alarm() opens the sign-in, reads only what
- * the enabled types need, compares with the snapshot, and sends at most one
- * notification per browser. A sign-in that no longer works (expired, Google
- * access removed, Schoology key revoked) deletes everything: notifications
- * stop for good until the student turns them on again. Anything else that
- * goes wrong keeps the old snapshot and tries again next time.
- *
- * Free plan limits: 50 subrequests and ~10 ms CPU per invocation, alarms
- * included. A Schoology check makes at most 27 calls (3 at a time), a
- * Classroom one at most 43 (CALL_BUDGET plus the token refresh), and sending
- * adds one per browser (at most 5).
- */
+// Browser notifications: one PushStore Durable Object per student who turned them on.
 
 import { notificationsPlus } from "./plus.ts";
 import { DurableObject } from "cloudflare:workers";
@@ -152,7 +123,6 @@ interface Meta {
   lastSentAt?: number;
   lastTestAt?: number;
   failures?: number;
-  /** The student's time zone, from their browser when they turned notifications on (2026-10-07). */
   tz?: string;
 }
 
@@ -388,8 +358,6 @@ export class PushStore extends DurableObject<PushEnv> {
     if (!meta || !got.get("cred")) return false;
     if (typeof input?.sealed !== "string" || !input.sealed || typeof input.exp !== "number") return false;
     await s.put("cred", this.newerCredential(got.get("cred"), input));
-    // The time zone too (2026-10-07), so students who turned notifications on
-    // before it was kept get "due within a day" in their own zone.
     if (typeof input.tz === "string" && input.tz.length <= 64 && input.tz !== meta.tz) await s.put("meta", { ...meta, tz: input.tz });
     return true;
   }
@@ -412,11 +380,6 @@ export class PushStore extends DurableObject<PushEnv> {
       return { ok: false, code: "subscription_gone" };
     }
     if (res.ok) return { ok: true };
-    // 2026-10-12 (Martin: "the test notis dont work"): say which kind of failure it was.
-    // A VAPID key we can't sign with (the private JWK doesn't match the public key, or
-    // isn't a JWK at all) never reaches the push service; a 401/403 from the push
-    // service means it didn't accept our signature for this subscription (usually a
-    // subscription made with an older public key: turning notifications off and on fixes it).
     if ("misconfigured" in res && res.misconfigured) return { ok: false, code: "push_misconfigured" };
     if (res.status === 401 || res.status === 403) return { ok: false, code: "push_rejected", status: res.status };
     return { ok: false, code: "push_failed", status: res.status };
@@ -483,10 +446,6 @@ export class PushStore extends DurableObject<PushEnv> {
         return;
       }
 
-      // Averages Plus (2026-10-21): while billing is on, notifications are a
-      // Plus perk. Without Plus they're turned off (everything deleted, as
-      // turning them off does). The BillingStore not answering just waits for
-      // the next check: an outage never turns anyone's notifications off.
       let plusOk = true;
       try {
         plusOk = (await notificationsPlus(this.env as any, session.uid, API_ORIGIN, { billingSwitch: features.billing })).allowed;
@@ -551,8 +510,6 @@ export class PushStore extends DurableObject<PushEnv> {
       const results = await Promise.all(targets.map((sub) => this.sendOne(sub, note, vapid, PUSH_TTL_SECONDS)));
       const gone = targets.filter((_, i) => results[i].gone).map((sub) => sub.endpoint);
       if (gone.length) await this.dropEndpoints(gone);
-      // A push service that's busy or down for now (2026-10-16): tried again from the queue (src/retryQueue.ts).
-      // Never the reason a check counts as failed: the change is already saved, and enqueueRetry logs its own problems.
       const later = targets.filter((_, i) => worthRetrying(results[i]));
       if (later.length && this.env.RETRY) {
         try {
@@ -574,12 +531,6 @@ export class PushStore extends DurableObject<PushEnv> {
     }
   }
 
-  /**
-   * A notification the push service refused for now, tried again from the
-   * retry queue (2026-10-16) to the one browser `ep` names (endpointKey).
-   * "drop" when notifications were turned off, that browser is gone, or the
-   * notification is too old; "retry" when the push service is still busy.
-   */
   async resend(ep: string, note: RetryNote, at: number): Promise<RetryOutcome> {
     if (Date.now() - at > PUSH_RETRY_MAX_AGE_MS) return "drop";
     const vapid = vapidFrom(this.env);
@@ -677,11 +628,6 @@ export class PushStore extends DurableObject<PushEnv> {
   }
 }
 
-/**
- * A send that may work later (2026-10-16): the push service was busy (429),
- * broken (5xx) or didn't answer (status 0, not a bad VAPID key). Gone, refused
- * (401/403) and other 4xx won't get better by waiting.
- */
 export function worthRetrying(res: { ok: boolean; status: number; gone: boolean; misconfigured?: boolean }): boolean {
   if (res.ok || res.gone || res.misconfigured) return false;
   return res.status === 0 || res.status === 429 || res.status >= 500;

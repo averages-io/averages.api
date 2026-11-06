@@ -1,14 +1,5 @@
-/**
- * Google Drive and OneDrive that stay connected (2026-10-08): src/cloudConnect.ts
- * through the real Worker routes (/cloud/*), with a sealed session cookie.
- *
- * No Durable Object or network: CLOUD is an in-memory stand-in that keeps one
- * CloudAccount per student (as a Durable Object would), and globalThis.fetch
- * plays Google's and Microsoft's token and revoke endpoints. Anything else
- * leaving the Worker fails the test.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/cloudConnect.test.ts
- */
+// Google Drive and OneDrive that stay connected: src/cloudConnect.ts through the real Worker routes (/cloud/*).
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/cloudConnect.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { DEMO_UID, SESSION_COOKIE, sealSession } from "../src/session.ts";
@@ -445,7 +436,6 @@ console.log("\nOneDrive");
   check("the next refresh spends the new one", [tokenCalls(MS_TOKEN_URL)[0]?.form.refresh_token, (await stored(SAM, "onedrive"))?.refresh], ["ms-rt-2", "ms-rt-3"]);
   check("scopes after refreshes: still with Files.Read", (await stored(SAM, "onedrive"))?.scopes, ["openid", "profile", "email", "User.Read", "Files.ReadWrite.AppFolder", "Files.Read"]);
 
-  // Share as a Link (2026-10-12): write=1 adds Files.ReadWrite, and nothing later drops it.
   const w = await connect("onedrive", sam, "?return_to=/assignment&write=1");
   check("write=1: connected and asked for Files.ReadWrite", [w.back.location, w.start.params.scope.split(" ").includes("Files.ReadWrite")], [`${APP}/assignment?cloud=connected&app=onedrive`, true]);
   check("status: Files.ReadWrite granted", (await status(sam)).data.onedrive.scopes.includes("Files.ReadWrite"), true);
@@ -541,7 +531,6 @@ console.log("\ndisconnect");
   defaultAnswers();
 }
 
-/* ── reconnecting: forced refresh and lost connections (2026-10-09) ──── */
 console.log("\nforced refresh and lost connections");
 {
   const R = "6500";

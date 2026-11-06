@@ -162,7 +162,6 @@ console.log("connect");
   checkTrue("tokens are stored sealed, not as JSON", typeof (await store.get("tokens")) === "string" && !String(await store.get("tokens")).includes("AT1"));
   await rejects("a state only works once", acct.finishConnect(UID, state, "the-code"), "canva_state_not_found");
 
-  // Inherited property names must never count as a stored state (security review 2026-10-05).
   let tokenCalls = 0;
   handler = (u) => { if (u.endsWith("/oauth/token")) tokenCalls++; return json({ access_token: "X", refresh_token: "Y" }); };
   const fresh = new CanvaAccount(new MemoryStorage(), ENV);
@@ -172,7 +171,6 @@ console.log("connect");
   }
   check("...without ever calling Canva", tokenCalls, 0);
 
-  // Not finished (2026-11-03): a cancel or failure goes back where it started (onboarding), not Settings.
   {
     const st2 = new MemoryStorage();
     const a2 = new CanvaAccount(st2, ENV);
@@ -278,7 +276,6 @@ console.log("returns and drafts");
   check("disconnect forgets everything", store.data.size, 0);
 }
 
-/* ── Disconnect revokes at Canva (2026-10-26) ── */
 console.log("disconnect revokes at Canva");
 {
   const store = new MemoryStorage();
@@ -448,7 +445,6 @@ console.log("download");
   handler = (u) => new Response(null, { status: 302, headers: { Location: "http://insecure.example.com/x" } });
   await rejects("an http redirect is refused", downloadAttachment("https://api.schoology.com/v1/attachment/1/source/y.pdf", creds, 100), "Attachment redirect is not allowed");
 
-  // SSRF hardening (2026-10-16): a redirect may only land on a public https host.
   check("isSafeAttachmentTarget: a public CDN host is fine", [
     isSafeAttachmentTarget(new URL("https://files.schoologycdn.com/a.pdf")),
     isSafeAttachmentTarget(new URL("https://s3.amazonaws.com/bucket/a.pdf")),

@@ -1,26 +1,4 @@
-/**
- * The reviewer account's pretend Schoology (2026-10-07, Martin: "an API key
- * log in with all integrations on").
- *
- * Signing in with the REVIEW_KEY / REVIEW_SECRET dashboard secrets makes a
- * session whose Schoology credentials are the sandbox's own (SANDBOX_KEY /
- * SANDBOX_SECRET below) and whose uid is REVIEW_UID. Every place that would
- * call api.schoology.com asks isSandboxCreds first and, for this account,
- * gets its answer from sandboxFetch instead: the same JSON shapes Schoology
- * returns, built from sample classes. Nothing about the account ever leaves
- * the Worker, and the whole app runs in its normal live mode, so Canva,
- * Google Drive, OneDrive, notifications and Sync all work for it.
- *
- * The sign-in route refuses SANDBOX_KEY typed in as an ordinary API key, so
- * the only way in is the two secrets.
- *
- * The classes themselves are in reviewSandboxData.ts. What the reviewer does
- * here (messages sent, replies, files and text turned in) is kept in this
- * module's memory, per Worker isolate, so the sent folder and a submission's
- * history show it straight away. It's gone on the next deploy or when
- * Cloudflare recycles the isolate, which is fine for a sample account, and
- * each kind is capped (MAX_KEPT) so nobody can grow it without end.
- */
+// The reviewer account's pretend Schoology.
 import type { Credentials } from "./oauth.ts";
 import { schoologyLocalMs } from "./adapt.ts";
 import {
@@ -60,11 +38,6 @@ const ATTACHMENT_BASE = `https://${API_HOST}/v1/attachment/sandbox/`;
 const UPLOAD_BASE = `https://${API_HOST}/v1/upload/sandbox/`;
 /** Most sent messages, uploads and revisions remembered, each. */
 export const MAX_KEPT = 50;
-/**
- * Turned-in files' bytes are kept (so the Files page's "Turned in" list can
- * download them, 2026-10-09) only up to 1 MB each and 8 MB in all, oldest
- * dropped first; anything else downloads as a one-page PDF that says so.
- */
 export const MAX_KEPT_FILE_BYTES = 1024 * 1024;
 export const MAX_KEPT_BYTES_TOTAL = 8 * 1024 * 1024;
 
@@ -456,7 +429,6 @@ const extOf = (name: string) => /\.([a-z0-9]{1,8})$/i.exec(name)?.[1].toLowerCas
 
 function revisionFile(id: string, filename: string, filesize: number, at: number): Raw {
   const ext = extOf(filename);
-  // download_path (2026-10-09): Schoology's revision files carry one, and GET /data/submission-file uses it.
   return { id, type: "file", title: filename, filename, filesize, extension: ext, filemime: EXT_MIME[ext] ?? "application/octet-stream", timestamp: unix(at), download_path: `${ATTACHMENT_BASE}${id}` };
 }
 
@@ -520,7 +492,6 @@ function seededRevisions(section: string, assignment: string, now: number): Raw[
     const at = now - r.daysAgo * DAY;
     const raw: Raw = { revision_id: r.revisionId, uid: REVIEW_UID, created: unix(at), late: 0, draft: 0, num_items: r.file ? 1 : 0 };
     if (r.body) raw.body = r.body;
-    // Its size is the PDF it downloads as (2026-10-09).
     if (r.file) raw.attachments = { files: { file: [revisionFile(r.file.id, r.file.filename, seededFileBytes(r.file.id)?.byteLength ?? r.file.filesize, at)] } };
     return raw;
   });
@@ -695,7 +666,6 @@ function get(path: string[], url: URL, now: number): Response {
 
   if (realm === "attachment" && id === "sandbox" && path.length === 3) {
     const bytes = bytesOf(sub);
-    // Not a teacher's file: maybe one the reviewer turned in (2026-10-09).
     if (!bytes) return turnedInDownload(sub) ?? notFound();
     return new Response(bytes.slice(), {
       status: 200,
@@ -710,8 +680,6 @@ function post(path: string[], body: unknown, now: number): Response {
   const parsed = bodyJson(body);
   if (path[0] === "messages" && (path.length === 1 || (path.length === 2 && /^\d+$/.test(path[1])))) return sendMessage(path, parsed, now);
   if (path[0] === "upload" && path.length === 1) return startUpload(parsed, now);
-  // Joining with a class code (2026-10-28): "SAMPLE-JOIN" is accepted (nothing changes: the sample classes are
-  // fixed), "SAMPLE-CLOSED" is refused like a closed class, any other code is unknown.
   if (path[0] === "sections" && path[1] === "accesscode" && path.length === 2) {
     const code = String((parsed as any)?.access_code ?? "").toUpperCase();
     if (code === "SAMPLE-JOIN") return json(200, { id: "54179017", uid: REVIEW_UID, section_id: SECTIONS[0].id, admin: 0, status: "1" });
@@ -724,7 +692,6 @@ function post(path: string[], body: unknown, now: number): Response {
     if (!s || !a) return notFound();
     return submit(s, a, path[4], parsed, now);
   }
-  // A description on a file turn-in (2026-10-23): a comment on the reviewer's own submission.
   if (path[0] === "sections" && path[2] === "submissions" && path.length === 6 && path[5] === "comments") {
     const s = sectionById(path[1]);
     const a = s ? assignmentIn(s, path[3]) : null;

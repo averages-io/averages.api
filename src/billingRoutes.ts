@@ -1,23 +1,4 @@
-/**
- * Averages Plus routes (2026-10-21), mounted by index.ts. The Stripe calls
- * and the per-student record are in billing.ts; see there for the blueprint.
- *
- *   GET  /billing/status    { enabled, configured, eligible, plus, status, renewsAt, cancelAtPeriodEnd, manageable, price }
- *   POST /billing/checkout  {} -> { url }: Stripe's hosted checkout (Managed Payments)
- *   POST /billing/portal    {} -> { url }: Stripe's page to cancel or change the card
- *   POST /billing/end-now   {} -> { ok, status }: a plan already set to end (cancelled in the portal) ends today
- *   POST /stripe/webhook    Stripe's events, signed with STRIPE_WEBHOOK_SECRET
- *
- * Checkout and the portal are behind the "billing" feature switch (off by
- * default; see flags.ts). Status and the webhook never are: a subscriber
- * keeps Plus while the switch is off, and Stripe's events are always recorded.
- *
- * Who can subscribe: a signed-in student, not the demo and not Incognito
- * (under-13 sessions are always Incognito, and Incognito stores nothing on
- * our servers, which a subscription needs). Managing an existing
- * subscription (the portal) is always allowed, Incognito included, so nobody
- * is ever stuck paying.
- */
+// Averages Plus routes, mounted by index.ts.
 
 import { Hono } from "hono";
 import { isDemoSession, isIncognitoSession, type SessionData } from "./session.ts";
@@ -126,8 +107,6 @@ export function billingRoutes(deps: BillingDeps) {
     }
   });
 
-  // End early (2026-11-01): only for a plan that's already set to end, so it never surprises anyone who's renewing.
-  // Allowed in Incognito too, like the portal, so nobody is stuck paying.
   app.post("/end-now", deps.requireSession, async (c) => {
     const foreign = deps.fromOurApp(c);
     if (foreign) return foreign;
@@ -162,11 +141,6 @@ export function billingRoutes(deps: BillingDeps) {
  * them) and 500 when storing fails (Stripe tries again later).
  */
 export function stripeWebhookRoutes(deps: Pick<BillingDeps, "storeFor"> & {
-  /**
-   * Plus just ended for this student (2026-10-21): their Plus perks that keep
-   * something on our servers (notifications, the calendar link) are deleted.
-   * Run after the response; must not throw.
-   */
   onPlusEnded?: (env: any, uid: string, requestUrl: string) => Promise<void>;
 }) {
   const app = new Hono<{ Bindings: BillingRouteEnv }>();

@@ -1,29 +1,4 @@
-/**
- * Per-page extras (2026-10-06): what some pages need beyond GET /data/bundle,
- * loaded by the app in parallel with it and cached in the browser for a few
- * minutes (see WAVES-CONTRACT "Extras endpoints"). Each one reads only what
- * its page shows, maps it into the page's existing sample-data shape, and
- * stores nothing.
- *
- *   people    the student's teachers (Contacts, course cards, Messages)
- *   updates   teachers' posts in each class (Home, course home)
- *   events    the calendar
- *   folders   a class's folders, for Materials
- *   gradebook one class's grading categories with exact weights
- *
- * Fetching follows the same limits as the bundle: at most 12 classes, and
- * never more than 3 Schoology calls in flight (Schoology's rate limit is
- * unpublished). A class that fails is left out and the answer says
- * `partial: true`.
- *
- * Personal Schoology API keys are often refused (401/403) when reading other
- * people's data, such as a class's enrollments. A refused call is treated as
- * "nothing to show" (no names), never as a failure.
- *
- * Privacy: enrollments are read with `type=admin` (the teachers) and every
- * row that isn't an admin is dropped again here, so a classmate's name never
- * comes from this module's roster reads.
- */
+// Per-page extras: what some pages need beyond GET /data/bundle.
 
 import { adaptCourses, adaptSchoologyGradebook, clip, discussionsAsWork, colorForCourse, relativeTime, schoologyTime, toPlainText } from "./adapt.ts";
 import { CallBudget, CLASSROOM_ID_RE, ClassroomError, classroomList, dueMs, itemType, listCourses, plain, type GradebookCategory } from "./classroom.ts";
@@ -196,16 +171,6 @@ export async function fetchClassroomPeople(accessToken: string, letters: string,
   return adaptPeople("classroom", courses, byCourse);
 }
 
-/* ── Classmates (2026-10-28, Martin: the Fullscreen Contacts page and each
- * class's Members tab show who's in the class) ──────────────────────────
- *
- * Only what Schoology itself shows a student on a course's Members page:
- * each classmate's name and Schoology profile picture. No grades, emails
- * or anything else, and never the student themself or the teachers (those
- * come from /data/people). Classroom needs the optional rosters permission,
- * the same one its teachers use.
- */
-
 export interface Classmate {
   id: string;
   name: string;
@@ -336,7 +301,6 @@ export function adaptUpdates(
   updates: Record<string, Raw[] | null>,
   admins: Record<string, Teacher[] | null>,
   now: number = Date.now(),
-  /** The student's own id: their own posts say "You", not "Classmate" (2026-10-06 review). */
   me = ""
 ): { COURSE_UPDATES: CourseUpdate[]; partial: boolean } {
   const out: CourseUpdate[] = [];
@@ -560,10 +524,6 @@ export async function fetchSchoologyEvents(uid: string, creds: Credentials, rang
     }
   });
   if (!course) {
-    // The student's own calendar first (2026-11-03, Martin: pages loading slowly): it already has their classes'
-    // events (each with its section_id), so when it does, the per-class reads (one call per class, against
-    // Schoology's 50 calls per 5 seconds) are skipped. A calendar with no class events in it, or one that
-    // can't be read, falls back to asking each class as before.
     try {
       user = await getUserEvents(uid, creds, range);
     } catch (error) {
@@ -896,7 +856,7 @@ export async function fetchSchoologyGradebook(uid: string, sectionId: string, cr
     soft(getGradingCategories(sectionId, creds)),
     soft(getSectionGrades(uid, sectionId, creds)),
     getAssignments(sectionId, creds),
-    getDiscussions(sectionId, creds).catch(() => []),   // graded discussions are in the gradebook too (2026-11-06)
+    getDiscussions(sectionId, creds).catch(() => []),
   ]);
   const assignments = list.concat(discussionsAsWork(discussions));
   const gradeEntry = (grades ?? []).find((g) => String(g?.section_id ?? g?.id ?? "") === sectionId);

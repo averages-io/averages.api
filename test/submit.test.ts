@@ -1,16 +1,5 @@
-/**
- * Tests for turning in work (src/submit.ts, src/submitRoutes.ts) and the
- * Canva PDF export (src/canvaExport.ts, plus the scope handling in
- * src/canva.ts), 2026-10-06.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/submit.test.ts
- *
- * The two sub-apps are mounted on a bare Hono app with stand-ins for
- * index.ts's middleware (the same session cookie, the same Origin/JSON rule),
- * and `fetch` is replaced with a fake that plays Schoology and Canva, so every
- * upstream request can be checked: method, URL, headers, body. Every id, key
- * and token below is made up.
- */
+// Tests for turning in work (src/submit.ts, src/submitRoutes.ts) and the Canva PDF export (src/canvaExport.ts.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/submit.test.ts
 
 import { Hono } from "hono";
 import {
@@ -760,7 +749,6 @@ const startExport = (id: string, opts: Init = {}, env = ENV) => call(`/canva/des
   check("an expired download link: 502", await errorOf(call(`/canva/exports/${job}/file?design=DES1`, { cookie: student })), [502, "canva_export_unavailable"]);
 }
 
-/* ── The type pill: PowerPoint, one PNG, JPG pages; no Word (2026-11-03) ─ */
 {
   console.log("\ntype pill: what a design can be");
   const formats = (id = "DES1", env = ENV) => call(`/canva/designs/${id}/formats`, { cookie: student }, env);
@@ -831,7 +819,6 @@ const startExport = (id: string, opts: Init = {}, env = ENV) => call(`/canva/des
   check("a token with a made-up type: 404", await errorOf(call(`/canva/exports/${forged}/file?design=DES1`, { cookie: student })), [404, "canva_export_not_found"]);
 }
 
-/* ── Real editor output (2026-10-06 review) ───────────────────────────── */
 {
   console.log("\nsanitizer: what a browser's editor really sends");
   check("one line, no tags: decoded once, never double-escaped", sanitizeSubmission("Tom &amp; Jerry&nbsp; x &lt; y").html, "<p>Tom &amp; Jerry\u00a0 x &lt; y</p>");

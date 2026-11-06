@@ -1,13 +1,5 @@
-/**
- * Tests for browser notifications (2026-10-05): src/notify.ts (what changed),
- * src/pushStore.ts (the per-student Durable Object, on a Map-backed fake
- * storage with Schoology, Google and a push service faked behind fetch) and
- * src/push.ts (the routes, mounted on a bare Hono app with stub deps).
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/push.test.ts
- *
- * Every id, key, token and secret below is made up.
- */
+// Tests for browser notifications: src/notify.ts (what changed), src/pushStore.ts (the per-student Durable Object.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/push.test.ts
 
 import { Hono } from "hono";
 import {
@@ -937,7 +929,6 @@ section("PushStore: touch, test, status, unsubscribe");
   check("expired subscription: gone, and forgotten", [await store.test(phone.subscription.endpoint), storage.data.size], [{ ok: false, code: "subscription_gone" }, 0]);
   world.pushStatus = {};
 
-  // 2026-10-12: which kind of failure, so Settings can say so.
   await store.subscribe({ subscription: phone.subscription, types: ALL, ...(await credentialFor(SCHOOLOGY_SESSION)) });
   world.pushStatus = { phone: 403 };
   check("push service turns down our signature: push_rejected with its status, subscription kept", [await store.test(phone.subscription.endpoint), (storage.data.get("subs") as any[]).length], [{ ok: false, code: "push_rejected", status: 403 }, 1]);

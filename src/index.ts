@@ -1,14 +1,4 @@
-/**
- * api.averages.io — Averages.io's Schoology proxy (was api.schoolagy.io until 2026-10-05).
- *
- * Exists for one non-negotiable reason: OAuth-signed Schoology calls must
- * happen server-side. The user's consumer secret can never be exposed to
- * browser JS, so the browser talks to this Worker, and only this Worker talks
- * to Schoology.
- *
- * Deployed separately from the app (app.averages.io) so the two can be
- * redeployed, scaled and reasoned about independently.
- */
+// api.averages.io — Averages.io's Schoology proxy.
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -209,157 +199,46 @@ export { CalendarStore } from "./calendar.ts";
 type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
   SESSION_SECRET: string;
-  /**
-   * Backs "Sync Across Devices": one SyncStore Durable Object per student,
-   * always opened in the "us" jurisdiction (see syncKV below). Replaced the
-   * SYNC_KV namespace on 2026-10-04; KV copied data outside the US. (It also
-   * held a Projected-GPA snapshot for the weekly email until 2026-10-06; see
-   * sync.ts.)
-   */
   SYNC: DurableObjectNamespace<SyncStore>;
-  /**
-   * Profile photos and uploaded backgrounds (src/media.ts), 2026-10-13. A
-   * private R2 bucket in the "us" jurisdiction. Optional: without it /media
-   * answers 503 and the app keeps pictures inside the Sync record as before.
-   */
   MEDIA?: R2Bucket;
-  /**
-   * "Verify your email" codes (2026-11-06, src/emailCode.ts): Cloudflare Email Service's send binding
-   * (wrangler.jsonc "send_email"), sending from EMAIL_FROM (a var; no-reply@averages.io when unset) on the
-   * onboarded averages.io domain. Unset: POST /email/code answers 503 email_not_configured.
-   */
   EMAIL?: SendEmailBinding;
   EMAIL_FROM?: string;
-  /**
-   * Canva connections and drafts: one CanvaStore Durable Object per student,
-   * also in the "us" jurisdiction (see canvaStore below). Added 2026-10-05.
-   */
   CANVA: DurableObjectNamespace<CanvaStore>;
   /** Canva Connect app credentials (dashboard secrets) and the callback URL (wrangler.jsonc var). */
   CANVA_CLIENT_ID?: string;
   CANVA_CLIENT_SECRET?: string;
   CANVA_REDIRECT_URI?: string;
-  /**
-   * "1" once design:content:read is enabled for the Canva integration in
-   * Canva's Developer Portal (2026-10-06). Until then Connect doesn't ask for
-   * it and turning in Canva designs answers canva_reconnect_needed. See
-   * canvaScopes() in canva.ts.
-   */
   CANVA_EXPORT_ENABLED?: string;
-  /**
-   * "1" once folder:read and folder:write are enabled for the Canva
-   * integration (2026-10-06): Connect asks for them and the Files page shows
-   * Canva folders. Until then it lists designs without folders.
-   */
   CANVA_FOLDERS_ENABLED?: string;
-  /**
-   * "1" only while testing whether Canva's undocumented design:permission:* /
-   * folder:permission:write scopes do anything (2026-10-10, developer only).
-   * While "1", GET /canva/connect?probe=1 also asks for them and POST
-   * /canva/probe is reachable (it still needs REVIEW_SECRET). See
-   * canvaProbeEnabled() / probePermissions() in canva.ts.
-   */
   CANVA_PERMISSION_PROBE?: string;
-  /**
-   * Google Drive and OneDrive run in the browser (2026-10-05); these are the
-   * PUBLIC values the app needs for that, served by GET /config/cloud.
-   * Since 2026-10-08 the Worker also signs students in to both with these
-   * client IDs and keeps them connected (/cloud/*, src/cloudConnect.ts).
-   * GOOGLE_CLIENT_ID is the same OAuth client the Worker already has; the
-   * Picker API key is restricted in Google Cloud to the websites
-   * app.averages.io/* AND docs.google.com/* (the Picker runs in a docs.google.com
-   * frame; without it Google says "The API developer key is invalid") and to
-   * the Google Picker API.
-   */
   GOOGLE_CLIENT_ID?: string;
-  /**
-   * Sign in with Google, for Google Classroom (2026-10-05): the same OAuth
-   * client's secret (dashboard secret, never in this repo) and the callback
-   * URL (wrangler.jsonc var; .dev.vars for local testing).
-   */
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_REDIRECT_URI?: string;
   GOOGLE_DRIVE_CLIENT_ID?: string;
   GOOGLE_PICKER_API_KEY?: string;
   GOOGLE_PROJECT_NUMBER?: string;
   MS_CLIENT_ID?: string;
-  /**
-   * Google Drive and OneDrive that stay connected (2026-10-08): one
-   * CloudStore Durable Object per student, in the "us" jurisdiction (see
-   * cloudStore below), holding their refresh tokens. See src/cloudConnect.ts.
-   */
   CLOUD: DurableObjectNamespace<CloudStore>;
-  /**
-   * Averages Plus (2026-10-21, src/billing.ts): one BillingStore Durable
-   * Object per student who has subscribed, in the "us" jurisdiction, holding
-   * their Stripe customer / subscription ids and status. STRIPE_SECRET_KEY and
-   * STRIPE_WEBHOOK_SECRET are dashboard secrets (sandbox keys while
-   * testing); STRIPE_PRICE_LOOKUP_KEY is optional (default plus_monthly).
-   */
   BILLING?: DurableObjectNamespace<BillingStore>;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
   STRIPE_PRICE_LOOKUP_KEY?: string;
-  /**
-   * OneDrive's client secret (dashboard secret, 2026-10-08), from a Web
-   * platform on the Entra app. With MS_CLIENT_ID it lets the Worker sign
-   * students in to OneDrive and keep them connected. Unset = OneDrive
-   * reports configured: false.
-   */
   MS_CLIENT_SECRET?: string;
-  /**
-   * Optional (dashboard secret, 2026-10-08): GOOGLE_DRIVE_CLIENT_ID's own
-   * secret. With both set, Drive connects with that client; otherwise with
-   * GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
-   */
   GOOGLE_DRIVE_CLIENT_SECRET?: string;
-  /**
-   * Browser notifications (2026-10-05, wired in 2026-10-06): one PushStore
-   * Durable Object per student who turned them on, in the "us" jurisdiction
-   * (src/pushStore.ts). PUSH_SECRET and VAPID_PRIVATE_JWK are dashboard
-   * secrets; VAPID_PUBLIC_KEY is a var in wrangler.jsonc (the browser needs it).
-   * Until all three are set, GET /push/config says null and the app shows
-   * "Coming soon".
-   */
   PUSH: DurableObjectNamespace<PushStore>;
-  /** The retry queue (2026-10-16, src/retryQueue.ts): failed push notifications and queued Canva-save files, tried again later. */
   RETRY?: Queue<RetryMessage>;
-  /**
-   * Feature switches (src/flags.ts, 2026-10-09). FEATURES is filled in per
-   * request (Flagship, else the vars). FEATURES_OFF / FEATURES_ON: optional
-   * comma-separated keys to flip without Flagship. MAINTENANCE_MESSAGE: the
-   * banner's text while maintenance-banner is on (300 characters at most).
-   */
   FEATURES?: Features;
   FEATURES_OFF?: string;
   FEATURES_ON?: string;
-  /** Early access (2026-10-21): switch keys on for Plus members first (comma-separated); EARLY is this request's list. */
   FEATURES_EARLY?: string;
   EARLY?: FeatureKey[];
-  /** Calendar sync (2026-10-21, src/calendar.ts): one CalendarStore per student link and per feed, in the US. */
   CALENDAR?: DurableObjectNamespace;
   MAINTENANCE_MESSAGE?: string;
-  /**
-   * The reviewer account (2026-10-07, dashboard SECRETS, 16+ characters
-   * each): typed into the hidden API-key sign-in, they open sample classes
-   * (reviewSandbox.ts) with every integration working. Unset = off.
-   */
   REVIEW_KEY?: string;
-  /** Cloudflare Flagship (2026-10-08, optional): see src/flags.ts. */
   FLAGS?: { getBooleanValue(key: string, defaultValue: boolean, context?: Record<string, unknown>): Promise<boolean> };
   REVIEW_SECRET?: string;
-  /**
-   * Sign in with Schoology (2026-10-29, src/schoologySignin.ts): the consumer
-   * key and secret PowerSchool issues for the app. Runtime SECRETS. Unset = the
-   * sign-in page keeps saying it's coming soon.
-   */
   SCHOOLOGY_CONSUMER_KEY?: string;
   SCHOOLOGY_CONSUMER_SECRET?: string;
-  /**
-   * Optional developer secret (16+ characters). The schools admin endpoint it
-   * was made for is gone (2026-10-17); it now only also unlocks the temporary
-   * Canva permission probe, alongside REVIEW_SECRET. Unset = off.
-   */
   SCHOOLS_ADMIN_KEY?: string;
   PUSH_SECRET?: string;
   VAPID_PUBLIC_KEY?: string;
@@ -382,21 +261,6 @@ function isLocalRequest(requestUrl: string): boolean {
   }
 }
 
-/**
- * This student's sync storage: their own SyncStore Durable Object, created in
- * the "us" jurisdiction so the stored record and the code that reads it stay
- * in the United States (PowerSchool developer terms §3.2.1).
- *
- * Local exception: Cloudflare's local runtime (workerd, every Wrangler
- * version as of 2026-10-04) refuses jurisdictions outright ("Jurisdiction
- * restrictions are not implemented in workerd"), so under `wrangler dev` on
- * localhost the object is opened without one. That's decided from the
- * request's own URL, the same way allowedOrigins() does it, so a deployed
- * Worker can never take this path: it is never reached on localhost.
- *
- * The cast is only because the installed @cloudflare/workers-types predates
- * the "us" jurisdiction (added June 2026); the runtime accepts it.
- */
 function syncKV(env: Bindings, uid: string, requestUrl: string): KVLike {
   return kvFromSyncStore(() => {
     const ns = isLocalRequest(requestUrl) ? env.SYNC : env.SYNC.jurisdiction("us" as DurableObjectJurisdiction);
@@ -410,14 +274,12 @@ function canvaStore(env: Bindings, uid: string, requestUrl: string) {
   return ns.get(ns.idFromName(uid));
 }
 
-/** This student's BillingStore (Averages Plus, 2026-10-21), in the US (same local-dev exception). */
 function billingStore(env: BillingRouteEnv, uid: string, requestUrl: string): BillingStoreApi {
   const billing = env.BILLING!;
   const ns = isLocalRequest(requestUrl) ? billing : billing.jurisdiction("us" as DurableObjectJurisdiction);
   return ns.get(ns.idFromName(uid)) as unknown as BillingStoreApi;
 }
 
-/** This student's CloudStore (Google Drive and OneDrive, 2026-10-08), in the US (same local-dev exception). */
 function cloudStore(env: Bindings, uid: string, requestUrl: string) {
   const ns = isLocalRequest(requestUrl) ? env.CLOUD : env.CLOUD.jurisdiction("us" as DurableObjectJurisdiction);
   return ns.get(ns.idFromName(uid));
@@ -436,26 +298,6 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
  * existed, and rejected every one of them.
  */
 
-/**
- * averages.io only, as of 2026-10-05 (schoolagy.io before that: it carries a
- * greyware tag on school filters and reads as a Schoology lookalike).
- *
- * Earlier, schoolagy.io only, as of 2026-09-08.
- *
- * A `sch00lagy.com` fallback domain briefly existed (for when a school
- * network blocked schoolagy.io outright) behind a `src/domains.ts` module
- * that matched the incoming request's Host/Origin to the right domain
- * family at runtime. Removed per Martin: it also turned out to be the
- * actual cause of a real deploy failure — that file never made it into the
- * live repo when the change was applied, so every build since then failed
- * with "Cannot find module './domains.ts'" the moment something else
- * triggered a rebuild. Back to one fixed domain, one fixed cookie domain,
- * nothing to keep in sync across two files. If a second domain is wanted
- * again later, `src/domains.ts` from that point in history is the pattern
- * to bring back — deliberately not resurrected here as a "just in case"
- * middle ground, since an unused abstraction is exactly the kind of thing
- * that quietly drifts out of sync with what's actually deployed.
- */
 const ALLOWED_ORIGINS = ["https://app.averages.io", "https://averages.io"];
 
 /** Only honoured when this Worker is itself being reached on localhost — see allowedOrigins(). */
@@ -497,19 +339,10 @@ app.use("*", async (c, next) => {
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type"],
-    // So the app can read how long to wait after a 429 (rate limits, below).
-    // Content-Disposition: the Canva PDF's file name when turning a design in (2026-10-06 review).
     exposeHeaders: ["Retry-After", "Content-Disposition", "X-Media-Version"],
   })(c, next);
 });
 
-/**
- * The session cookie opened once per request (2026-10-06): the rate limiter
- * needs the student's uid before the route's own requireSession runs, and
- * opening the cookie is an AES decrypt, so the result is kept for the rest of
- * the request. Null when there's no cookie, no SESSION_SECRET, or the cookie
- * isn't a valid session.
- */
 const openedSessions = new WeakMap<Request, Promise<SessionData | null>>();
 function openedSession(c: any): Promise<SessionData | null> {
   const raw: Request = c.req.raw;
@@ -522,30 +355,14 @@ function openedSession(c: any): Promise<SessionData | null> {
   return opened;
 }
 
-/**
- * HTTPS only, remembered by the browser for a year (2026-10-31): the app's pages already send this
- * (public/_headers); the API didn't, so a browser could still be sent to http://api.averages.io first.
- * Not on a local `wrangler dev` (plain http://localhost).
- */
 app.use("*", async (c, next) => {
   await next();
   if (isLocalRequest(c.req.url)) return;
   try { c.res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains"); } catch { /* headers fixed: skip */ }
 });
 
-/**
- * Rate limits on our own routes (2026-10-06): per IP for sign-in, per
- * student for everything that reaches Schoology, Google or our storage.
- * After CORS, so a 429 still carries the CORS headers the app needs to read
- * it. See src/rateLimit.ts for the numbers and the optional binding.
- */
 app.use("*", rateLimit({ studentOf: async (c) => (await openedSession(c))?.uid ?? null }));
 
-/**
- * The cookie rename (2026-10-31): a signed-in request that still only carries the old `schoolagy_session` cookie
- * gets the same session under `averages_session`, and the old cookie is cleared. Nobody has to sign in again.
- * Not on a response that already sets the session (sign-in, sign-out).
- */
 app.use("*", async (c, next) => {
   await next();
   const header = c.req.header("Cookie") ?? null;
@@ -561,25 +378,14 @@ app.use("*", async (c, next) => {
   }
 });
 
-/**
- * Feature switches (src/flags.ts, 2026-10-09). A route whose feature is off
- * answers 503 { error: "feature_off", feature }. Pages the browser navigates
- * to (connect, callback, return, Google sign-in) go back to the app instead,
- * (Settings with ?feature_off=<key>, or the sign-in page for Google), so
- * nobody lands on a JSON page.
- */
 const NAVIGATED = /^\/(canva\/(connect|callback|return)|cloud\/[^/]+\/(connect|callback))$/;
 app.use("*", async (c, next) => {
   if (c.req.method === "OPTIONS") return next();
   const path = new URL(c.req.url).pathname;
   const offs = featureForRoute(c.req.method, path).filter((k) => !featureOn(c.env, k));
-  // Early access (2026-10-21): a switch that's off but in the early list is
-  // open to Plus members. Only asked when it matters, so other requests never
-  // wait on a BillingStore.
   let off = offs[0];
   if (off && offs.every((k) => earlyKey(c.env, k))) {
     const session = await openedSession(c);
-    // Billing off (2026-10-21): every Plus perk is free, early features included.
     let plus = !plusRequired(c.env as any);
     if (!plus && session && !isDemo(session)) {
       try { plus = await hasPlusNow(c.env as any, session.uid, c.req.url); } catch { plus = false; }
@@ -611,22 +417,6 @@ async function requireSession(c: any, next: any) {
   await next();
 }
 
-/**
- * Health check — and, deliberately, a configuration check.
- *
- * `configured` reports whether SESSION_SECRET is actually visible to the
- * RUNNING Worker. That distinction matters and is easy to get wrong: a value
- * entered as a "build variable" in the Workers Builds settings is available
- * while the project builds and is simply absent at runtime, which produces a
- * confusing 500 on sign-in with nothing in the dashboard obviously wrong.
- *
- * Opening this URL in a browser answers the question in one second. It reports
- * only WHETHER the secret exists — never any part of the value, and (since
- * 2026-09-15) not its length either. This endpoint is public and unauthenticated,
- * and publishing the exact length of the key that seals every session cookie
- * tells an attacker how much work a brute-force is, for no diagnostic benefit:
- * "is it set or not" is the entire question this is here to answer.
- */
 app.get("/", (c) => {
   const secret = c.env.SESSION_SECRET ?? "";
   return c.json({
@@ -657,7 +447,6 @@ app.get("/", (c) => {
 async function forgetConnections(env: Bindings, uid: string, requestUrl: string): Promise<void> {
   const jobs: Promise<unknown>[] = [];
   if (env.CANVA) jobs.push(Promise.resolve().then(() => canvaStore(env, uid, requestUrl).disconnect(uid)));
-  // Signing out: Google's grant is always revoked (2026-10-26); a Google sign-in is ending anyway.
   if (env.CLOUD) for (const app of CLOUD_APPS) jobs.push(Promise.resolve().then(() => cloudStore(env, uid, requestUrl).disconnect(uid, app, { revokeShared: true })));
   const results = await Promise.allSettled(jobs);
   for (const r of results) if (r.status === "rejected") console.error("signout_forget_failed", r.reason);
@@ -680,9 +469,6 @@ function reviewSecretsMatch(env: Bindings, key: string, secret: string): boolean
 }
 
 app.post("/auth/session", async (c) => {
-  // Only from our own app, as JSON (2026-10-06 review): a form on another
-  // site could otherwise sign a student into someone else's account (login
-  // CSRF), and with turning in live their work would go to that account.
   const blocked = notFromOurApp(c);
   if (blocked) return blocked;
   let body: { key?: string; secret?: string; under13?: unknown };
@@ -703,13 +489,6 @@ app.post("/auth/session", async (c) => {
     return c.json({ error: "server_misconfigured" }, 500);
   }
 
-  /**
-   * The reviewer account (2026-10-07): the REVIEW_KEY / REVIEW_SECRET
-   * dashboard secrets sign into sample classes served by reviewSandbox.ts,
-   * in the app's normal live mode, so every integration works. The sandbox's
-   * own key typed in as an ordinary key is refused, so the secrets are the
-   * only way in.
-   */
   if (key === SANDBOX_KEY || secret === SANDBOX_SECRET) return c.json({ error: "invalid_credentials" }, 401);
   const reviewer = reviewSecretsMatch(c.env, key, secret);
   // Sign-in switches (src/flags.ts): the reviewer account and Schoology keys each have their own.
@@ -781,11 +560,7 @@ app.post("/auth/session", async (c) => {
     });
   } catch (error) {
     if (error instanceof SchoologyError) {
-      // What Schoology said, for the Worker's logs (2026-11-03: a sandbox key that "won't work"). Never the key or
-      // secret; Schoology's answer doesn't carry them.
       console.error("signin_schoology_refused", error.status, String(error.body ?? "").slice(0, 300));
-      // 401: the key/secret pair is wrong or was reset. 403: Schoology knows the key but won't let it read the
-      // account (API access off for that user or school). Said apart so the student knows which (2026-11-03).
       if (error.status === 401) return c.json({ error: "invalid_credentials" }, 401);
       if (error.status === 403) return c.json({ error: "schoology_forbidden" }, 401);
       return c.json({ error: "schoology_error", status: error.status }, 502);
@@ -795,23 +570,13 @@ app.post("/auth/session", async (c) => {
 });
 
 app.delete("/auth/session", async (c) => {
-  // Signing out also deletes the stored sign-in browser notifications use,
-  // and every browser's subscription (2026-10-06). After the answer, and
-  // never in the way: forgetPush never throws, and does nothing without the
-  // PUSH binding.
   const session = await sessionFrom(c);
-  // ?forget=1 (2026-10-13): the app sends it on every sign-out since
-  // 2026-10-26 (before, only with Sync Across Devices off). Besides this device's
-  // data (which the app deletes itself), that's the connected apps kept here
-  // for this student: Canva (and its Edit in Canva drafts), Google Drive and
-  // OneDrive. Our own app only: a page on another site can't ask for it.
   const forget = c.req.query("forget") === "1";
   if (forget) {
     const foreign = notFromOurApp(c);
     if (foreign) return foreign;
   }
   if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetPush(c.env, session.uid, c.req.url));
-  // The calendar link keeps a sign-in too (2026-10-21): signing out deletes it, like notifications.
   if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetCalendar(c.env as any, session.uid, c.req.url));
   if (forget && session && !isDemo(session)) c.executionCtx.waitUntil(forgetConnections(c.env, session.uid, c.req.url));
   c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
@@ -823,13 +588,6 @@ app.delete("/auth/session", async (c) => {
   return c.json({ ok: true });
 });
 
-/* ────────────────────────────────────────────────────────────────────
- * Sign in with Schoology (2026-10-29): three-legged OAuth, see
- * src/schoologySignin.ts. The browser navigates to these, so every answer is
- * a redirect: to the school's Schoology, or back to the sign-in page (with
- * ?signin_error=<code>#schoology when something went wrong).
- * ──────────────────────────────────────────────────────────────────── */
-
 /** Is Sign in with Schoology ready? The sign-in page asks before showing it. */
 app.get("/auth/schoology/status", (c) => {
   const consumer = consumerFrom(c.env);
@@ -840,8 +598,6 @@ app.get("/auth/schoology/status", (c) => {
 });
 
 function signinBack(c: any, code: string, detail?: unknown) {
-  // Which step said no, in the Worker's logs (npx wrangler tail), so a failed sign-in can be told apart (2026-11-03).
-  // Codes and Schoology's status only, never tokens.
   const status = detail instanceof SchoologyError || detail instanceof OAuthError ? detail.status : undefined;
   const body = detail instanceof SchoologyError ? String(detail.body ?? "").replace(/oauth_[a-z_]+=[^&\s"]+/gi, "oauth_…").slice(0, 160) : undefined;
   console.log(JSON.stringify({ event: "schoology_signin_back", code, ...(status ? { status } : {}), ...(body ? { body } : {}) }));
@@ -869,9 +625,6 @@ app.get("/auth/schoology/start", async (c) => {
     const sealed = await sealValue({ t: req.token, s: req.secret, d: domain, u13: c.req.query("under13") === "1" }, c.env.SESSION_SECRET, OAUTH_PURPOSE, OAUTH_TTL_SECONDS);
     c.header("Set-Cookie", pendingCookie(sealed, secure));
     c.header("Cache-Control", "no-store");
-    // Schoology only returns to an address on the app's own site (its App URL, https://app.averages.io): elsewhere
-    // it stops with "no valid return URL found" (2026-11-03, Martin). So it comes back to app.averages.io, whose
-    // /auth/schoology/callback page hands the answer straight to this API (public/auth/schoology/callback.html).
     const callback = sandbox ? `${new URL(c.req.url).origin}/auth/schoology/callback` : `${appOrigin(c.req.url)}/auth/schoology/callback`;
     // The sandbox approves on a page of our own (no real Schoology to go to).
     const to = sandbox ? `${new URL(c.req.url).origin}/auth/schoology/sandbox-authorize?oauth_token=${encodeURIComponent(req.token)}&oauth_callback=${encodeURIComponent(callback)}` : authorizeUrl(domain, req.token, callback);
@@ -929,14 +682,6 @@ app.get("/auth/schoology/callback", async (c) => {
     return signinBack(c, "schoology_error");
   }
 });
-
-/* ────────────────────────────────────────────────────────────────────
- * Sign in with Google (Google Classroom) was removed on 2026-10-19: the public
- * beta is Schoology only. With /auth/google/start and /auth/google/callback
- * gone there is no way to get a Google session, so the Classroom branches
- * below (isGoogle, googleAccess, src/classroom.ts, src/google.ts) are dormant.
- * classroom.ts also holds helpers the Schoology side uses, so it stays.
- * ──────────────────────────────────────────────────────────────────── */
 
 /**
  * A working Google access token for this request. The one sealed at sign-in
@@ -1019,22 +764,6 @@ app.get("/auth/me", requireSession, async (c) => {
     });
   }
 
-  /**
-   * Schoology (2026-10-13): answered from the profile sealed into the cookie
-   * at sign-in. This used to call Schoology's /users/me on every page load
-   * just for the name, ~3 s that the login page and every page's first load
-   * waited on. Opening the cookie (requireSession, above) is what proves the
-   * session; the Schoology call never did, since a refusal there came back
-   * as a 502, not a 401.
-   *
-   * A cookie from before this has no profile: ask Schoology once, the old
-   * way, and keep the answer in a small side cookie (PROFILE_COOKIE, see
-   * session.ts) until the session ends. Not by rewriting the session cookie,
-   * which a sign-out racing this slow call could otherwise undo. No one has
-   * to sign in again; their next visit takes the fast path.
-   *
-   * Server-Timing shows which way it went in the browser's Network tab.
-   */
   const started = Date.now();
   const answer = (p: NonNullable<SessionData["p"]>, how: string) => {
     c.header("Server-Timing", `auth;desc="${how}";dur=${Date.now() - started}`);
@@ -1095,11 +824,6 @@ app.get("/sync/settings", requireSession, async (c) => {
 
 app.put("/sync/settings", requireSession, async (c) => {
   const session = c.get("session");
-  // Same cross-origin guard every other mutating route carries (2026-10-28
-  // sweep): SameSite=Lax and the CORS preflight already stop a browser CSRF to
-  // this JSON PUT, but the explicit Origin check is the third layer the rest of
-  // the API has, so a misconfig in either of the other two can't open a hole
-  // in the one route that writes the synced settings blob.
   const foreign = notFromOurApp(c);
   if (foreign) return foreign;
   if (isDemo(session)) {
@@ -1142,9 +866,6 @@ app.put("/sync/settings", requireSession, async (c) => {
     return c.json({ error: "settings_too_large", maxBytes: MAX_SETTINGS_BYTES }, 413);
   }
 
-  // The whole record is just the settings and two timestamps (2026-10-06:
-  // the GPA snapshot the weekly email used is gone, and a record that still
-  // carries one loses it here, on its next save; see sync.ts).
   const now = new Date().toISOString();
   // The seen notifications live beside the settings (sync.ts): a settings save keeps them as they are.
   const kv = syncKV(c.env, session.uid, c.req.url);
@@ -1161,12 +882,6 @@ app.put("/sync/settings", requireSession, async (c) => {
   return c.json(record);
 });
 
-/**
- * The notifications this student has opened, on every device (2026-11-03, Martin: "New" stickers came back in a
- * private tab). GET answers the account's lists; POST adds this device's (merged here, never replaced, so two
- * devices can't undo each other) and answers the result. Same rules as the settings: signed in, not demo, not
- * Incognito (it stores nothing), and only from our app. Turning Sync Across Devices off deletes it with the rest.
- */
 app.get("/sync/seen", requireSession, async (c) => {
   const session = c.get("session");
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
@@ -1195,25 +910,8 @@ app.post("/sync/seen", requireSession, async (c) => {
   return c.json({ seen });
 });
 
-/**
- * Turning Sync Across Devices off is a real "forget me," not just "stop
- * asking" — added 2026-09-09 per Martin. Before this, the toggle only ever
- * flipped a local flag (`schoolagy_settings_options.syncAcrossDevices`) off;
- * `deleteSyncRecord` already existed in sync.ts but nothing ever called it,
- * so whatever had last been pushed just sat in KV under the user's uid
- * indefinitely. Turning sync back on later would have silently pulled that
- * stale record back down.
- *
- * settings.html calls this the moment the user confirms turning sync off
- * (see its own comment there). Deletes the WHOLE record (including, on an
- * old record, the GPA snapshots the weekly email kept until 2026-10-06),
- * since "delete my data" means all of it.
- */
 app.delete("/sync/settings", requireSession, async (c) => {
   const session = c.get("session");
-  // The same Origin guard as the PUT above (2026-10-28 sweep): deleting the
-  // synced settings and the R2 pictures is a state change, so it gets the
-  // explicit cross-origin check too.
   const foreign = notFromOurApp(c);
   if (foreign) return foreign;
   if (isDemo(session)) {
@@ -1225,23 +923,6 @@ app.delete("/sync/settings", requireSession, async (c) => {
   return c.json({ ok: true });
 });
 
-/* ────────────────────────────────────────────────────────────────────
- * Your data (2026-10-28, Martin: Settings > Privacy's "Download your data"
- * and "Delete your account", from the Fullscreen pages).
- *
- * GET /account/export: one JSON file of everything Averages.io keeps about
- * this student, put together from the same answers the app already reads
- * (each asked inside this Worker with the student's own cookie, so it shows
- * exactly what those routes would): synced settings, which pictures are
- * stored, notifications, the calendar link, Plus, connected apps. Pictures
- * themselves aren't inlined (the synced settings name them); grades and files
- * aren't ours, they stay in Schoology.
- *
- * DELETE /account: deletes all of that and signs out. Refused while Plus is
- * active or ending (cancel in Manage payment first): the payment record has to
- * stay while a subscription can still charge or refund. After Plus ends, the
- * record left is the receipts Stripe keeps for the law, not ours to delete.
- * ──────────────────────────────────────────────────────────────────── */
 async function askSelf(c: any, method: string, path: string): Promise<any> {
   try {
     const headers: Record<string, string> = { cookie: c.req.header("cookie") ?? "" };
@@ -1338,27 +1019,6 @@ app.get("/data/bundle", requireSession, async (c) => {
   if (isGoogle(session)) return classroomBundle(c, session);
 
   try {
-    /**
-     * One wave for everything that depends on nothing (2026-09-17).
-     *
-     * This used to be three separate waits, and two of them didn't need to
-     * be: the inbox fetch sat at the bottom of the handler, behind the twelve
-     * assignment calls. Now there are exactly two waits, and the second one
-     * is the only one that has to be second: assignments are per-section, so
-     * they can't be asked for until wave 1 says which sections exist.
-     *
-     * The recipients list (2026-10-06) names the senders on Home's Messages
-     * widget: Schoology's inbox has author ids but no names. (The sync record
-     * read that used to sit here went with the weekly email's GPA snapshot,
-     * 2026-10-06.)
-     *
-     * The `.catch` handlers are load-bearing. `Promise.all` rejects on the
-     * FIRST rejection, so an unguarded inbox fetch — messaging can be turned
-     * off district-wide — would take sections and grades down with it and turn
-     * a working grades page into a 502. Same for the recipients list, which
-     * some districts and personal keys refuse. Sections and grades are
-     * deliberately left unguarded: without them there is no bundle to return.
-     */
     const [sections, grades, inbox, recipients] = await Promise.all([
       getSections(session.uid, session),
       getGrades(session.uid, session),
@@ -1375,7 +1035,6 @@ app.get("/data/bundle", requireSession, async (c) => {
     await Promise.all(
       COURSES.slice(0, 12).map(async (course) => {
         try {
-          // Graded discussions are work too (2026-11-06): read alongside, never the reason a class's list is empty.
           const [list, discussions] = await Promise.all([
             getAssignments(course.id, session),
             getDiscussions(course.id, session).catch(() => []),
@@ -1394,9 +1053,6 @@ app.get("/data/bundle", requireSession, async (c) => {
     } catch {
       /* the grade time stays */
     }
-    // Which assignment_type values real districts send (2026-10-16), to check
-    // how Google Assignments and Turnitin show up (see isOutsideTool). Plain
-    // words only, never titles or grades. Remove once confirmed.
     try {
       console.log("assignment_types", assignmentTypesSeen(assignmentsBySection).join(","));
     } catch {
@@ -1420,14 +1076,6 @@ app.get("/data/bundle", requireSession, async (c) => {
       MESSAGES = [];
     }
 
-    /**
-     * Recent Grades and each class's Grades tab (2026-10-06), the same shapes
-     * Classroom's bundle sends, from the grades and assignments already in
-     * hand: no extra Schoology calls. Category weights here come from the
-     * grades payload, which doesn't always carry them; GET /data/gradebook
-     * reads the exact ones for the course the gradebook page opens. Guarded
-     * like the messages: never the reason grades don't load.
-     */
     const now = Date.now();
     let RECENT_GRADES: any[] = [];
     const GRADEBOOK: Record<string, unknown> = {};
@@ -1461,12 +1109,6 @@ app.get("/data/bundle", requireSession, async (c) => {
   }
 });
 
-/**
- * Live grades (2026-10-27, src/liveGrades.ts): each class's grade from one
- * Schoology call, for the app's open pages to roll changed numbers. `next` is
- * how many seconds to wait before asking again (Plus: sooner). Demo and
- * Google Classroom sign-ins get `COURSES: null`, which tells the app to stop.
- */
 app.get("/data/grades", requireSession, async (c) => {
   const session = c.get("session");
   c.header("Cache-Control", "private, no-store");
@@ -1511,10 +1153,6 @@ async function classroomBundle(c: any, session: SessionData) {
     return classroomFailure(c, error);
   }
 }
-
-/* ────────────────────────────────────────────────────────────────────
- * Assignment detail and Canva (2026-10-05)
- * ──────────────────────────────────────────────────────────────────── */
 
 /** Schoology ids are plain numbers; anything else never reaches a Schoology URL. */
 const ID_RE = /^\d{1,20}$/;
@@ -1601,12 +1239,6 @@ function publicDraft(d: Draft, design?: { title: string; updatedAt: number; thum
  * page. Files come back with an id and name only; the download path stays on
  * the server.
  */
-/**
- * Which class an assignment belongs to (2026-10-07, Martin: links are just
- * assignment?id=<Schoology/Classroom id>). The assignment page asks this when
- * the id isn't in the bundle (older, graded work): every class is asked at
- * once and the one that has it answers. `{ section, title }`, or 404.
- */
 app.get("/data/assignment/locate", requireSession, async (c) => {
   const session = c.get("session");
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
@@ -1676,11 +1308,6 @@ app.get("/data/assignment", requireSession, async (c) => {
     return c.json({ error: "bad_request" }, 400);
   }
   try {
-    // The student's score comes from their grades in this class, asked for at
-    // the same time (2026-10-15, the Submissions box's "18/20 A-"). It never
-    // fails the page: without it the box shows just the points.
-    // A discussion (2026-11-06, type=discussion from the lists): its own Schoology read, shown like an assignment
-    // that's answered on Schoology.
     const discussion = c.req.query("type") === "discussion";
     const [raw, gradeSections] = await Promise.all([
       discussion ? getDiscussion(section, id, session).then((d) => discussionsAsWork([d])[0] ?? { ...d, type: "discussion" }) : getAssignment(section, id, session),
@@ -1717,7 +1344,6 @@ app.get("/data/attachment", async (c) => {
   const section = c.req.query("section") ?? "";
   const assignment = c.req.query("assignment") ?? "";
   const fileId = c.req.query("file") ?? "";
-  // A file can also hang off a Materials document (Files page, 2026-10-05): exactly one of the two.
   const documentId = c.req.query("document") ?? "";
   const parentOk = (ID_RE.test(assignment) && documentId === "") || (ID_RE.test(documentId) && assignment === "");
   if (!ID_RE.test(section) || !ID_RE.test(fileId) || !parentOk) {
@@ -1728,8 +1354,6 @@ app.get("/data/attachment", async (c) => {
     const file = findAttachment(parent, fileId);
     if (!file || !file.downloadPath) return c.json({ error: "file_not_found" }, 404);
     const upstream = await openAttachment(file.downloadPath, session);
-    // ?view=1 (2026-10-21): open it in the browser's own viewer (PDF, picture,
-    // text, audio, video) instead of downloading. Anything else still downloads.
     if (c.req.query("view") === "1") {
       const viewed = viewResponse(upstream, file.name);
       if (viewed) return viewed;
@@ -1741,12 +1365,6 @@ app.get("/data/attachment", async (c) => {
   }
 });
 
-/**
- * A file someone sent in a message (2026-11-03): looked up again in the
- * student's own copy of that conversation (ids only from the browser), then
- * streamed through from Schoology the same safe way as GET /data/attachment.
- * ?view=1 opens it in the browser's own viewer when it's a safe type.
- */
 app.get("/messages/file", async (c) => {
   const session = await sessionFrom(c);
   if (!session) return c.json({ error: "not_authenticated" }, 401);
@@ -1756,7 +1374,7 @@ app.get("/messages/file", async (c) => {
   const fileId = c.req.query("file") ?? "";
   if (!ID_RE.test(thread) || !ID_RE.test(fileId)) return c.json({ error: "bad_request" }, 400);
   try {
-    const rows = await getThread(thread, session);
+    const rows = await getThread(thread, session, { keepUnread: true });
     const file = rows ? findMessageFile(rows, fileId) : null;
     if (!file) return c.json({ error: "file_not_found" }, 404);
     const upstream = await openAttachment(file.downloadPath, session);
@@ -1799,12 +1417,6 @@ export function viewableType(name: string): string | null {
   return Object.prototype.hasOwnProperty.call(VIEWABLE_TYPES, ext) ? VIEWABLE_TYPES[ext] : null;
 }
 
-/**
- * A file from Schoology shown in the browser (Course Materials double-click,
- * 2026-10-21), or null when its type isn't one the browser shows safely. The
- * type comes from our list, never from upstream; nothing on the page can run
- * (CSP), it can't be framed, and nosniff stops it being read as anything else.
- */
 function viewResponse(upstream: Response, name: string): Response | null {
   const type = viewableType(name);
   if (!type) return null;
@@ -1834,11 +1446,6 @@ function dispositionNames(name: string): { ascii: string; utf8Name: string } {
   return { ascii, utf8Name };
 }
 
-/**
- * A file from Schoology streamed on to the browser as a download named
- * `name` (moved out of GET /data/attachment on 2026-10-09 so
- * GET /data/submission-file sends exactly the same headers).
- */
 function downloadResponse(upstream: Response, name: string): Response {
   // RFC 5987 filename*, plus a plain ASCII fallback, so any name downloads under its real title.
   const { ascii, utf8Name } = dispositionNames(name);
@@ -1853,15 +1460,6 @@ function downloadResponse(upstream: Response, name: string): Response {
   return new Response(upstream.body, { status: 200, headers });
 }
 
-/**
- * Every file in the signed-in student's courses, for the Files page
- * (2026-10-05): the files teachers posted in Materials (documents) and the
- * files attached to assignments. Ids and names only, never download paths;
- * GET /data/attachment looks a file up again to download it. Nothing is
- * stored. Four sections at a time, so a student with many classes doesn't
- * fire two dozen Schoology calls at once; a section that fails is skipped and
- * the answer says `partial: true`.
- */
 app.get("/data/files", async (c) => {
   const session = await sessionFrom(c);
   if (!session) return c.json({ error: "not_authenticated" }, 401);
@@ -1895,7 +1493,6 @@ app.get("/data/files", async (c) => {
         const [documents, assignments, root] = await Promise.all([
           getDocuments(course.id, session).catch(() => null),
           getAssignmentsWithAttachments(course.id, session).catch(() => null),
-          // the class's top-level folders, for Files (2026-11-06): one read per class
           getFolder(course.id, "0", session).catch(() => null),
         ]);
         bySection[course.id] = { documents, assignments };
@@ -1921,35 +1518,12 @@ async function eachAtMost<T>(items: T[], limit: number, fn: (item: T) => Promise
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
-/**
- * The files the signed-in student turned in on Schoology, for the Files page
- * (2026-10-09): every file in their own submission revisions (drafts left
- * out), newest first, at most 500. Ids and names only, never download paths;
- * GET /data/submission-file looks a file up again to download it. Nothing is
- * stored.
- *
- * The same classes as GET /data/files (12 at most, 4 at a time). Only
- * assignments that take files are asked about (see turnInAssignments in
- * submit.ts: no quizzes, tests or discussions, nothing with allow_dropbox
- * "0"), most relevant first, at most 60 and never more than the Free plan's
- * subrequest limit leaves room for (SUBMISSION_CALL_BUDGET), 6 histories at
- * a time. A 404 from a history is "nothing turned in"; any other failure, or
- * assignments left unread, makes the answer `partial: true`.
- *
- * Google Classroom: nothing to list here (work is turned in on Classroom and
- * the files are in the student's own Drive).
- */
 app.get("/data/submissions", async (c) => {
   const session = await sessionFrom(c);
   if (!session) return c.json({ error: "not_authenticated" }, 401);
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
   c.header("Cache-Control", "private, no-store");
   if (isGoogle(session)) return c.json({ platform: "classroom", courses: [], files: [], partial: false });
-  // ?for=<section>:<assignment>,... (2026-11-03, Martin: pages took 5 seconds): the Fullscreen pages
-  // already have the assignments from the bundle and only need what's turned in for the work they
-  // show, so they name it (at most 15). That skips re-reading every class's list (6 calls) and the
-  // 30-60 other histories, keeping a page open under Schoology's 50 calls per 5 seconds. Only digits
-  // get through, and Schoology answers each history for this student only.
   const forList = c.req.query("for");
   if (typeof forList === "string") {
     const pairs = [...new Set(forList.split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 15)
@@ -1999,14 +1573,6 @@ app.get("/data/submissions", async (c) => {
   }
 });
 
-/**
- * Downloads one file the student turned in (the Files page's "Turned in"
- * list, 2026-10-09). The browser navigates here with ids only; the file is
- * looked up again in the student's own submission history (their revisions
- * only, as /submit/history shows them) and streamed straight through from
- * Schoology with the same safe download code as GET /data/attachment, never
- * stored. 404 not_found when that revision or file isn't the student's.
- */
 app.get("/data/submission-file", async (c) => {
   const session = await sessionFrom(c);
   if (!session) return c.json({ error: "not_authenticated" }, 401);
@@ -2032,7 +1598,6 @@ app.get("/data/submission-file", async (c) => {
     const file = findSubmittedFile(history, session.uid, revision, fileId);
     if (!file || !file.downloadPath) return c.json({ error: "not_found" }, 404);
     const upstream = await openAttachment(file.downloadPath, session);
-    // ?view=1 (2026-11-03): open it in the browser's own viewer (PDF, picture, text...) instead of downloading.
     if (c.req.query("view") === "1") {
       const viewed = viewResponse(upstream, file.name);
       if (viewed) return viewed;
@@ -2044,20 +1609,6 @@ app.get("/data/submission-file", async (c) => {
   }
 });
 
-/**
- * Public app values for Google Drive and OneDrive. Until 2026-10-08 they
- * connected entirely in the browser; now the Worker keeps them connected
- * (/cloud/* below) and the app still needs the Picker's key and project
- * number from here. Everything here is
- * already visible to anyone who opens the app: OAuth client IDs, and a Picker
- * API key that Google Cloud restricts to app.averages.io. No secrets, so no
- * sign-in needed. A missing value comes back as null and the app shows that
- * app as "Coming soon".
- */
-/**
- * The schools the sign-in page can search (2026-10-06): public, no sign-in
- * needed (the page asks before anyone is signed in). See src/schools.ts.
- */
 app.get("/config/schools", (c) => {
   const schools = schoolsFor(c.req.query("lms"));
   if (!schools) return c.json({ error: "bad_request" }, 400);
@@ -2066,7 +1617,6 @@ app.get("/config/schools", (c) => {
 });
 
 app.get("/config/cloud", (c) => {
-  // A minute (was 5, 2026-10-07): a new Picker key reaches browsers quickly.
   c.header("Cache-Control", "public, max-age=60");
   const cfg = cloudConfig(c.env);
   // A switched-off integration looks unconfigured to older pages too.
@@ -2075,21 +1625,14 @@ app.get("/config/cloud", (c) => {
   return c.json(cfg);
 });
 
-/**
- * GET /config/features (2026-10-09): every switch, for the app to hide what's
- * off (public/js/averages-features.js), and the maintenance banner's text.
- * Thirty seconds, so a flip reaches everyone within a minute.
- */
 app.get("/config/features", (c) => {
   const features = Object.fromEntries(FEATURE_KEYS.map((k) => [k, featureOn(c.env, k)])) as Features;
-  // Billing off (2026-10-21): early-access features are on for everyone, not just Plus members.
   const everyone = !plusRequired(c.env as any);
   if (everyone) for (const k of FEATURE_KEYS) if (!features[k] && earlyKey(c.env, k)) features[k] = true;
   const msg = typeof c.env.MAINTENANCE_MESSAGE === "string" ? c.env.MAINTENANCE_MESSAGE.trim().slice(0, 300) : "";
   c.header("Cache-Control", "public, max-age=30");
   return c.json({
     features,
-    // Early access (2026-10-21): switches that are off for everyone but on for Plus members.
     early: FEATURE_KEYS.filter((k) => !features[k] && earlyKey(c.env, k)),
     maintenance: featureOn(c.env, "maintenance-banner") ? { message: msg || "Averages.io is having some trouble right now. Some things may not work." } : null,
   });
@@ -2107,12 +1650,7 @@ app.get("/canva/status", requireSession, async (c) => {
   try {
     const store = canvaStore(c.env, c.get("session").uid, c.req.url);
     const status = await store.status(c.get("session").uid);
-    // Can this connection turn in designs as PDFs (2026-10-06)? "off" until
-    // CANVA_EXPORT_ENABLED; "reconnect" for a connection made before the
-    // export scope was asked for (Canva didn't grant it), so Settings can
-    // offer Reconnect. Unknown scopes count as ready: Canva decides then.
     let turnIn: "off" | "ready" | "reconnect" = "off";
-    // Canva folders on the Files page (2026-10-06): the same three answers.
     let folders: "off" | "ready" | "reconnect" = "off";
     const exportOn = canvaExportEnabled(c.env);
     const foldersOn = canvaFoldersEnabled(c.env);
@@ -2135,9 +1673,6 @@ app.get("/canva/connect", async (c) => {
   if (!session || isDemo(session)) return c.redirect(`${origin}/`);
   if (isIncognito(session)) return c.redirect(`${origin}/settings?canva=incognito`);
   const returnTo = safeAppPath(c.req.query("return_to"), "/settings");
-  // Developer only (2026-10-10): also ask for the undocumented permission
-  // scopes, but only while CANVA_PERMISSION_PROBE is "1" (canvaScopes ignores
-  // it otherwise, so a normal Connect is never affected). See POST /canva/probe.
   const probe = c.req.query("probe") === "1";
   try {
     // The scopes depend on switches that can come from Flagship (src/flags.ts): pass them in.
@@ -2154,8 +1689,6 @@ app.get("/canva/callback", async (c) => {
   const session = await sessionFrom(c);
   if (!session || isDemo(session)) return c.redirect(`${origin}/`);
   if (isIncognito(session)) return c.redirect(`${origin}/settings?canva=incognito`);
-  // Not finished (cancelled or failed): back to the page it started from, not
-  // always Settings (2026-11-03, Martin: onboarding lost everything picked).
   const store = canvaStore(c.env, session.uid, c.req.url);
   const state = c.req.query("state") ?? "";
   const startedFrom = (consume = false) => store.connectReturn(state, consume).catch(() => "/settings");
@@ -2176,7 +1709,6 @@ app.delete("/canva/connection", requireSession, async (c) => {
   const foreign = notFromOurApp(c);
   if (foreign) return foreign;
   try {
-    // Revoked at Canva too (2026-10-26): Averages.io leaves the student's Canva account.
     await canvaStore(c.env, c.get("session").uid, c.req.url).disconnect(c.get("session").uid);
     return c.json({ ok: true });
   } catch (error) {
@@ -2184,27 +1716,8 @@ app.delete("/canva/connection", requireSession, async (c) => {
   }
 });
 
-/**
- * Permission probe (temporary, developer only, 2026-10-10). Lets Martin test,
- * from the live site with his own real Canva connection, whether Canva's
- * undocumented design:permission:* / folder:permission:write scopes do
- * anything: it makes one throwaway test design and folder and tries the most
- * likely (undocumented) addresses against ONLY those, returning what Canva
- * answered (see probePermissions in canva.ts). Off unless CANVA_PERMISSION_PROBE
- * is "1" AND the REVIEW_SECRET (or SCHOOLS_ADMIN_KEY) secret is set, and then only for a caller
- * who presents that key. Tokens never appear in the answer or the logs.
- *
- * Only the general /canva rule (30/min) and Flagship's canva-integration
- * switch apply. The extra 3-runs-per-10-minutes cap was removed (2026-10-10,
- * Martin); the key and CANVA_PERMISSION_PROBE still keep it to the developer.
- */
-
 app.post("/canva/probe", requireSession, async (c) => {
   c.header("Cache-Control", "no-store");
-  // Doesn't exist unless switched on and a key is configured: a wrong flag or a
-  // missing key is indistinguishable from an unknown route. The key is the
-  // REVIEW_SECRET dashboard secret (2026-10-10, Martin: he has no
-  // SCHOOLS_ADMIN_KEY); SCHOOLS_ADMIN_KEY also works if it's ever set.
   const keys = [c.env.REVIEW_SECRET ?? "", c.env.SCHOOLS_ADMIN_KEY ?? ""].filter((k) => k.length >= 16);
   if (!canvaProbeEnabled(c.env) || !keys.length) return c.json({ error: "not_found" }, 404);
 
@@ -2226,14 +1739,12 @@ app.post("/canva/probe", requireSession, async (c) => {
   const matches = keys.map((k) => sameString(given, k));
   if (!matches.some(Boolean)) return c.json({ error: "forbidden" }, 403);
 
-
   const write = body?.write === true;
   try {
     const store = canvaStore(c.env, session.uid, c.req.url);
     // The student's own token through the normal refresh path (409 if not connected).
     const token = await store.accessToken(session.uid);
     const scopes = await store.grantedScopes(session.uid).catch(() => null);
-    // The full sweep (2026-10-10): one batch per request, see probeSweep in canva.ts.
     if (body?.sweep === true) {
       const out = await probeSweep(token, { batch: Number(body.batch) || 0, designId: typeof body.designId === "string" ? body.designId : "", folderId: typeof body.folderId === "string" ? body.folderId : "" });
       if (out.error) return c.json({ ok: false, error: out.error, results: out.results }, 400);
@@ -2333,13 +1844,6 @@ app.post("/canva/edit", requireSession, async (c) => {
   }
 });
 
-/**
- * Save a folder to Canva (2026-10-16, src/canvaSave.ts): every file in one of
- * the teacher's folders (or a single file) becomes a design in the student's
- * Canva, in a new Canva folder with the folder's name. The files go through
- * the queue one at a time, spaced out under Canva's limit; this answers at
- * once with the job, and GET /canva/save-folder/:job shows how it's going.
- */
 const SAVE_PURPOSE = "canva-save";
 app.post("/canva/save-folder", requireSession, async (c) => {
   const blocked = canvaGuard(c) ?? notFromOurApp(c);
@@ -2547,18 +2051,6 @@ app.get("/canva/designs", requireSession, async (c) => {
   }
 });
 
-/* ────────────────────────────────────────────────────────────────────
- * Google Drive and OneDrive that stay connected (2026-10-08)
- *
- * Martin: "why do google drive and onedrive need to be reauthed every time I
- * visit the page, why can't it be like canva". Same shape as the Canva
- * routes above: the browser navigates to /cloud/:app/connect, the provider
- * sends it back to /cloud/:app/callback, and the student's refresh token
- * stays in their CloudStore (src/cloudConnect.ts). The app then asks
- * POST /cloud/:app/token for a short-lived access token whenever it needs
- * one, and calls Drive or Graph itself: no file passes through here.
- * ──────────────────────────────────────────────────────────────────── */
-
 /** The cloud_* code in an error from the CloudStore; anything unexpected is logged and becomes `fallback`. */
 function cloudCode(error: unknown, fallback: string): string {
   // Like errorCode above: over RPC the message may arrive prefixed with the class name.
@@ -2579,13 +2071,6 @@ function cloudBack(origin: string, returnTo: string, outcome: string, cloudApp: 
   return `${origin}${withQuery(withQuery(safeAppPath(returnTo, "/settings"), "cloud", outcome), "app", cloudApp)}`;
 }
 
-/**
- * Settings' "Connected as ..." lines for both apps, and whether each is set up
- * on this Worker. `lost: true` (2026-10-09, with `connected: false`) when the
- * connection was dropped because Google or Microsoft refused it; `email` and
- * `name` are then the account that was connected, so Settings can offer to
- * reconnect it.
- */
 app.get("/cloud/status", requireSession, async (c) => {
   const session = c.get("session");
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
@@ -2688,19 +2173,6 @@ async function tokenRequestBody(c: any): Promise<Record<string, unknown> | null>
   }
 }
 
-/**
- * A short-lived access token for the browser: `{access_token, expires_in,
- * email, scopes}`. The cached one while it has more than 5 minutes left,
- * otherwise a fresh one (refreshed inside the student's CloudStore, one at a
- * time). JSON POST from our own app only, so another site can't fetch it.
- *
- * `{ "refresh": true }` (2026-10-09): the browser just got a 401 from Drive or
- * Graph with the token it has. A student who removes Averages.io from their
- * account leaves us a cached token that looks good for up to an hour, and
- * handing it out again made a loop; this refreshes even so (at most once per
- * 30 seconds per connection: within that the current token comes back). A
- * refused grant answers 409 cloud_reconnect_needed and forgets the connection.
- */
 app.post("/cloud/:app/token", requireSession, async (c) => {
   const cloudApp = c.req.param("app");
   if (!isCloudApp(cloudApp)) return c.json({ error: "not_found" }, 404);
@@ -2721,12 +2193,6 @@ app.post("/cloud/:app/token", requireSession, async (c) => {
   }
 });
 
-/**
- * Disconnect: revokes Google's grant where that's safe (see
- * CloudAccount.disconnect) and forgets the tokens, and a lost connection's
- * marker (2026-10-09). Allowed in Incognito, so a student can always remove a
- * connection. Files stay in their Drive.
- */
 app.delete("/cloud/:app/connection", requireSession, async (c) => {
   const cloudApp = c.req.param("app");
   if (!isCloudApp(cloudApp)) return c.json({ error: "not_found" }, 404);
@@ -2744,31 +2210,6 @@ app.delete("/cloud/:app/connection", requireSession, async (c) => {
   }
 });
 
-/**
- * REMOVED 2026-09-15: `GET /schoology/*`, a signed passthrough to any
- * read-only Schoology endpoint.
- *
- * It was built as an escape hatch so the app could reach parts of Schoology
- * with no dedicated adapter yet without a Worker redeploy. Nothing ever used
- * it — a search across the whole app (pages-src, app/, scripts/) found zero
- * callers — so what it actually provided was a single authenticated URL that
- * would relay ANY read from a signed-in student's Schoology account back to
- * whatever asked. That's a large amplifier for any other bug: one XSS, one
- * malicious extension, one leaked session and the reachable blast radius is
- * everything Schoology will show that student, rather than the specific
- * fields /data/bundle chooses to return.
- *
- * Deleting it is not a loss of capability — the typed helpers in
- * schoology.ts (getMe/getSections/getGrades/getAssignments/getMessages) are
- * how every real call is made, and a new endpoint is a few lines there plus a
- * route here. If it's ever wanted back, bring it back deliberately, with an
- * allow-list of the exact paths the app needs rather than a wildcard.
- */
-
-/* ────────────────────────────────────────────────────────────────────
- * Per-page extras, Schoology messages and browser notifications (2026-10-06)
- * ──────────────────────────────────────────────────────────────────── */
-
 const extrasDeps = { requireSession, fromOurApp: notFromOurApp, googleAccess, classroomFailure, studentTimeZone };
 
 /** GET /data/people, /data/updates, /data/events, /data/folders, /data/gradebook (src/extrasRoutes.ts). */
@@ -2777,9 +2218,6 @@ app.route("/data", dataExtrasRoutes(extrasDeps));
 /** GET /messages, /messages/thread, /messages/recipients; POST /messages, /messages/reply. Schoology only. */
 app.route("/messages", messagesRoutes(extrasDeps));
 
-// Link previews in messages (2026-11-03, src/linkPreview.ts): the page's title, site and picture; the picture comes
-// through here so a student's browser never contacts the site. Signed-in only.
-/* ── Verify your email (2026-11-06, src/emailCode.ts) ─────────────────────── */
 app.post("/email/code", requireSession, async (c) => {
   const session = c.get("session");
   c.header("Cache-Control", "no-store");
@@ -2836,13 +2274,8 @@ app.get("/links/image", requireSession, async (c) => {
 /** Browser notifications (src/push.ts). */
 app.route("/push", pushRoutes({ requireSession, fromOurApp: notFromOurApp }));
 
-/**
- * Averages Plus (2026-10-21): checkout, status and the customer page
- * (src/billingRoutes.ts), and Stripe's signed webhook at /stripe/webhook.
- */
 // Plus ended: notifications and the calendar link are deleted (src/plus.ts).
 async function onPlusEnded(env: any, uid: string, requestUrl: string): Promise<void> {
-  // Only while billing is on: with it off, both are free for everyone (2026-10-21).
   if (!plusRequired(env)) return;
   await forgetPush(env, uid, requestUrl);
   await forgetCalendar(env, uid, requestUrl);
@@ -2856,12 +2289,6 @@ app.route("/calendar", calendarRoutes({ requireSession, fromOurApp: notFromOurAp
 /** Profile photo and background for Sync Across Devices, in R2 (src/media.ts). */
 app.route("/media", mediaRoutes({ requireSession, fromOurApp: notFromOurApp }) as any);
 
-/**
- * Turning in work on Schoology (2026-10-06): file uploads (streamed straight
- * through to Schoology), typed answers and the student's submission history.
- * And Canva designs exported as PDFs to turn in. Both sub-apps attach their
- * own middleware per route; mounted after the CORS middleware so it applies.
- */
 app.route("/submit", submitRoutes({ requireSession, fromOurApp: notFromOurApp }));
 app.route(
   "/canva",
@@ -2886,11 +2313,6 @@ app.route(
 /**
  * The Worker: HTTP through Hono. Tests call `app.fetch` on this object
  * exactly as they did on the Hono app.
- */
-/**
- * The retry queue's tries (2026-10-16, src/retryQueue.ts). Each says "done",
- * "retry" (a passing failure: the queue tries again later) or "drop" (it
- * can't work: the browser is gone).
  */
 export function retryHandlers(env: Bindings): RetryHandlers {
   return {
@@ -2940,7 +2362,6 @@ export function retryHandlers(env: Bindings): RetryHandlers {
 export default {
   // Flagship switches (src/flags.ts) are read once per request, before the app sees env.
   fetch: async (request: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(request, await withFlags(env), ctx),
-  // The retry queue (2026-10-16): see src/retryQueue.ts.
   queue: async (batch: MessageBatch<unknown>, env: Bindings) => handleRetryBatch(batch, retryHandlers(env)),
 };
 

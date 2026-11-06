@@ -1,40 +1,4 @@
-/**
- * Sign in with Schoology (2026-10-29): Schoology's three-legged OAuth 1.0a,
- * ready for the day PowerSchool hands over a consumer key and secret.
- *
- *   1. GET /auth/schoology/start?domain=<school's Schoology>&under13=0|1
- *      asks Schoology for a request token (signed with our consumer key and
- *      secret only), keeps the token and its secret in a short-lived sealed
- *      cookie on this browser, and sends the student to their school's own
- *      Schoology at https://<domain>/oauth/authorize. (Schoology's docs: the
- *      student must go back to the domain they use, which "might not
- *      necessarily be app.schoology.com".)
- *   2. Schoology sends them back to GET /auth/schoology/callback?oauth_token=...
- *      The token must match the one in this browser's cookie (so nobody can
- *      finish someone else's sign-in), then it's swapped for an access token
- *      and secret (signed with the request token's secret).
- *   3. /users/me with the access token says who they are, and the usual
- *      session cookie is set, carrying the access token. Every Schoology call
- *      after that is signed exactly as before (oauth.ts already sends
- *      oauth_token and signs with the token secret when they're there).
- *
- * Endpoints (developers.schoology.com/api-documentation/authentication, and
- * the same ones schoolopy uses):
- *   GET https://api.schoology.com/v1/oauth/request_token
- *   https://<school domain>/oauth/authorize?oauth_token=...&oauth_callback=...
- *   GET https://api.schoology.com/v1/oauth/access_token
- * Both token answers are form-encoded: oauth_token=...&oauth_token_secret=...
- *
- * Setup (Martin): the consumer key and secret go in as Cloudflare runtime
- * secrets SCHOOLOGY_CONSUMER_KEY and SCHOOLOGY_CONSUMER_SECRET. Until both are
- * there, /auth/schoology/status says off and the sign-in page keeps showing
- * "coming soon". The switch is "schoology-oauth" (src/flags.ts).
- *
- * Testing without keys: set both secrets to the review sandbox's own key and
- * secret (reviewSandbox.ts). Then the token calls are answered by the sandbox,
- * and "authorize" is a page on this API that approves straight away, signing
- * in as the reviewer account. Only while the test-signin switch is on.
- */
+// Sign in with Schoology: Schoology's three-legged OAuth 1.0a, ready for the day PowerSchool hands over a consumer key and secret.
 
 import { buildAuthHeader, type Credentials } from "./oauth.ts";
 import { SCHOOLOGY_BASE, UPSTREAM_TIMEOUT_MS } from "./schoology.ts";

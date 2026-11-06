@@ -1,13 +1,5 @@
-/**
- * Security sweep (2026-10-28): adversarial pass over the surfaces added since
- * the Sept/Oct audits — the Stripe webhook, the calendar .ics feed, R2 media
- * (profile photos / backgrounds), live grades, and sign-out — plus a fresh
- * cross-user-isolation check. Fires hostile requests at the real Worker
- * in-process (no network) and seeds two fake students to prove one can never
- * reach the other's data. Every id, token and secret here is invented.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/secsweep.test.ts
- */
+// Security sweep: adversarial pass over the surfaces added since the Sept/Oct audits — the Stripe webhook.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/secsweep.test.ts
 import app from "../src/index.ts";
 import { sealSession, sealValue, SESSION_COOKIE, DEMO_UID } from "../src/session.ts";
 import { BillingAccount, verifyStripeSignature, type BillingUpdate } from "../src/billing.ts";

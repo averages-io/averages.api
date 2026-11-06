@@ -1,9 +1,5 @@
-/**
- * "Verify your email" codes (2026-11-06, src/emailCode.ts): POST /email/code sends a 6-digit code through the EMAIL
- * binding (a fake here that keeps what it was given) and answers a sealed token; POST /email/verify checks the code.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/emailCode.test.ts
- */
+// "Verify your email" codes: POST /email/code sends a 6-digit code through the EMAIL binding (faked here), POST /email/verify checks it.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/emailCode.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { cleanEmail, codeHash, codeMessage, newCode, sameHash, sendFailure } from "../src/emailCode.ts";

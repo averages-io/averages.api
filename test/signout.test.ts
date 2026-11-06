@@ -1,10 +1,5 @@
-/**
- * Signing out with ?forget=1 (2026-10-13): the app sends it when Sync Across
- * Devices is off, and the API then disconnects Canva, Google Drive and
- * OneDrive for that student too. Plain sign-out leaves them alone.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/signout.test.ts
- */
+// Signing out with ?forget=1: the app sends it when Sync Across Devices is off, and the API then disconnects Canva.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/signout.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { DEMO_UID, sealSession, SESSION_COOKIE } from "../src/session.ts";

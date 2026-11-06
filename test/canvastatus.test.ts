@@ -1,8 +1,4 @@
-/**
- * GET /canva/status's `turnIn` (2026-10-06): can this Canva connection turn
- * in designs as PDFs? Run:
- * node --experimental-strip-types --import ./test/cf-loader.mjs test/canvastatus.test.ts
- */
+// GET /canva/status's `turnIn`: can this Canva connection turn in designs as PDFs?
 import app from "../src/index.ts";
 import { sealSession } from "../src/session.ts";
 

@@ -1,23 +1,4 @@
-/**
- * Profile photos and uploaded backgrounds in R2 (2026-10-13).
- *
- * Until now both lived inside the Sync Across Devices record as data URLs:
- * a few hundred KB each, re-uploaded with every settings change, and able to
- * push the whole record past its 2 MB cap (a 413 the app never showed, so
- * nothing synced at all). Now each picture is its own object in a private R2
- * bucket, and the Sync record keeps a short reference to it.
- *
- * - One object per student per kind, at u/<uid>/<kind>: a new picture
- *   replaces the old one, so nothing is left behind.
- * - Private: the bucket has no public URL. The only way to read a picture is
- *   GET /media/:kind with that student's own session; there is no uid in the
- *   address, so no one can ask for someone else's.
- * - In the "us" jurisdiction, like the Durable Objects.
- * - Incognito (under 13) and demo sessions store nothing.
- * - Turning Sync off (DELETE /sync/settings) deletes every picture too.
- * - The app keeps its own copy on the device, so pages show pictures instantly
- *   and only another device ever downloads them.
- */
+// Profile photos and uploaded backgrounds in R2.
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { isDemoSession, isIncognitoSession, type SessionData } from "./session.ts";

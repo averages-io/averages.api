@@ -1,19 +1,4 @@
-/**
- * Link previews (2026-11-03, Martin: "can you add link previews here"): a link in a message shows the page's title,
- * site and picture, like Messages does.
- *
- * GET /links/preview?url=   → { url, title, site, description, image, icon } read from the page's own tags
- *                              (og:/twitter: tags, else <title> and the site's icon). Nothing personal is sent: no
- *                              cookies, no Schoology credentials, a plain user agent.
- * GET /links/image?url=     → the picture itself, through here, so a student's browser never contacts the site
- *                              (their address stays private and school web filters see only averages.io).
- *
- * Both need a signed-in session (not an open proxy) and the usual per-student rate limit applies. Every address,
- * including each redirect hop (at most 4), must be a public web address: http(s) on the default port, a real dotted
- * host name, no IP literal, no localhost/.local/.internal, no user:password. Pages are read up to 512 KB (the tags
- * are at the top) with a 5-second limit; pictures must be PNG, JPEG, GIF, WebP or an icon (never SVG) and at most 3 MB.
- * Answers are kept in the Worker's cache for a day.
- */
+// Link previews: a link in a message shows the page's title, site and picture, like Messages does.
 
 const UA = "Mozilla/5.0 (compatible; AveragesLinkPreview/1.0; +https://averages.io)";
 const PAGE_MAX = 512 * 1024;

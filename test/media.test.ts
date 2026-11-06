@@ -1,9 +1,5 @@
-/**
- * Profile photo and background in R2 (2026-10-13), through the real Worker
- * routes with an in-memory bucket.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/media.test.ts
- */
+// Profile photo and background in R2, through the real Worker routes with an in-memory bucket.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/media.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { DEMO_UID, sealSession, SESSION_COOKIE } from "../src/session.ts";

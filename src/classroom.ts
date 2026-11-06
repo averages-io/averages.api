@@ -1,22 +1,4 @@
-/**
- * Google Classroom data for a Google sign-in (2026-10-05): the same shapes the
- * pages already render for Schoology (see adapt.ts), so the app needs no
- * second set of pages. Read-only, nothing stored: each request reads
- * Classroom with the student's own token and maps the answer.
- *
- * Two Cloudflare limits shape the fetching:
- *   - A Worker request on the Free plan may make at most 50 subrequests, so
- *     every Classroom call is counted against a budget (CALL_BUDGET). The
- *     first page of everything fits; extra pages only while budget is left,
- *     and the answer says `partial` when something was cut.
- *   - CPU time is short, so every call asks Classroom for only the fields it
- *     needs (`fields=`); descriptions and materials only come with the one
- *     assignment that's opened.
- *
- * Dates: Classroom gives due dates in UTC. They're shown in the student's
- * time zone (the app sends it; Cloudflare's guess from the connection
- * otherwise), so 11:59 PM homework doesn't show as due the next day.
- */
+// Google Classroom data for a Google sign-in: the same shapes the pages already render for Schoology (see adapt.ts).
 
 import { colorForCourse, computeProjectedGPA, letterFromPct, parsePeriod, predict, sectionLabel, type AdaptedCourse } from "./adapt.ts";
 
@@ -102,7 +84,6 @@ export async function classroomList(path: string, key: string, params: Record<st
   return { items, next: token };
 }
 
-// `section` and `room` (2026-10-06): the course cards' period and section line.
 const COURSE_FIELDS = "courses(id,name,section,room,alternateLink,updateTime,gradebookSettings),nextPageToken";
 const WORK_FIELDS = "courseWork(id,title,workType,maxPoints,dueDate,dueTime,alternateLink,gradeCategory(id),updateTime,creationTime),nextPageToken";
 const SUB_FIELDS = "studentSubmissions(id,courseWorkId,state,late,assignedGrade,alternateLink,updateTime),nextPageToken";
@@ -216,11 +197,6 @@ export function timeMs(value: unknown): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-/**
- * One formatter per zone and shape, reused: building an Intl.DateTimeFormat
- * is slow, and a bundle formats a few hundred dates inside the Worker's short
- * CPU allowance (second-pass review, 2026-10-05).
- */
 const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 function formatter(tz: string, kind: "day" | "key"): Intl.DateTimeFormat {
   const id = `${kind}|${tz}`;
@@ -487,7 +463,6 @@ export function adaptClassroomBundle(raw: CourseRaw[], now: number, tz: string) 
       if (due < now) {
         if (sub || subsKnown) overdue.push({ at: due, item: listed() });
       } else upcoming.push({ at: due, item: listed() });
-      // With its id (2026-10-07): Home links to it as assignment?id=<id>.
       if (dayKey(due, tz) === today && (sub || subsKnown)) TODAY.push({ title, courseId, id });
     }
 
@@ -515,7 +490,6 @@ export function adaptClassroomBundle(raw: CourseRaw[], now: number, tz: string) 
     HISTORY[courseId] = {
       points: recent.map((g) => Math.round((g.earned / g.possible) * 100)),
       dates: recent.map((g) => (g.at ? formatShortIn(g.at, tz) : "")),
-      // Each point's assignment, for the trend chart's hover labels (2026-10-15).
       titles: recent.map((g) => [String(g.title ?? ""), "assignment"] as [string, string]),
     };
 
@@ -600,7 +574,6 @@ export interface GradebookCategory {
   weight: number;
   assignments: ({
     title: string; score?: number; points: number; graded: boolean; id: string;
-    /** Added 2026-10-28 for the Fullscreen pages (optional, Schoology only for now): when it was graded and due (ms), */
     gradedAt?: number; due?: number;
     /** the teacher's comment on the grade (plain text, at most 400 characters), */
     comment?: string;
@@ -644,11 +617,6 @@ export function gradebookCategories(rows: GradebookRow[], settings: Raw | undefi
   return [{ name: "All work", weight: 100, assignments: list(rows) }];
 }
 
-/**
- * A Classroom class's section line (2026-10-06): its "Section" text when that
- * says more than the period, else its room ("Room 214" when the room is just
- * a number).
- */
 export function classroomSection(section: unknown, room: unknown, name: string): string {
   const label = sectionLabel(plain(section, 120), name);
   if (label) return label;

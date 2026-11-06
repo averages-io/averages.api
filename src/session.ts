@@ -1,29 +1,8 @@
-/**
- * Stateless encrypted sessions.
- *
- * The user's Schoology key + secret are sealed with AES-GCM using a
- * Worker-side secret (`SESSION_SECRET`) and handed back as an opaque token in
- * an httpOnly cookie. That means:
- *
- *   - the browser holds the session but cannot read the credentials out of it
- *     (httpOnly blocks JS access; encryption blocks reading it even if it leaks)
- *   - this Worker keeps no database — nothing to breach, nothing to sync, and
- *     no KV namespace for Martin to provision before the thing runs
- *   - revocation is by expiry (and by the user rotating their key in Schoology)
- *
- * The tradeoff of statelessness is that a token can't be individually revoked
- * server-side before it expires. For a personal-key beta that's an acceptable
- * trade; if this ever needs true revocation, swap the sealed blob for a KV
- * lookup key and delete the KV entry on logout.
- */
+// Stateless encrypted sessions.
 
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
 import type { Credentials } from "./oauth.ts";
 
-/**
- * How long a sign-in lasts: 15 days (Martin, 2026-10-30; was 30). Fixed from
- * sign-in, never extended by using the app.
- */
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 15; // 15 days
 /** Sessions sealed while sign-ins lasted 30 days carry no `v`. */
 const OLD_SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
@@ -37,29 +16,8 @@ export interface SessionData extends Credentials {
   exp: number;
   /** 2 = sealed with the 15-day lifetime. Missing on older (30-day) sessions. */
   v?: number;
-  /**
-   * Incognito (2026-10-05): set when the student signed in saying they're
-   * under 13. Such a session can't use anything that stores data on our
-   * servers (Sync Across Devices, Canva). Sealed in, so it can't be changed
-   * without signing in again.
-   */
   inc?: true;
-  /**
-   * Google Classroom sign-in (2026-10-05). Present only on a Google session,
-   * whose `uid` is "g:" + the Google account id and whose Schoology `key` and
-   * `secret` are always blank (openSession blanks them), so a Google session
-   * can never make a Schoology call. Sealed like everything else in here: the
-   * browser can't read it, and nothing about it is stored on our servers.
-   */
   g?: GoogleSession;
-  /**
-   * Who this is, for /auth/me (2026-10-13). Saved from the /users/me call the
-   * Schoology sign-in already makes, so /auth/me can answer from the cookie
-   * instead of asking Schoology again on every page load (that call was
-   * ~3 s of the login page's wait). Only on Schoology and reviewer sessions;
-   * Google keeps its own in `g`. Optional: sessions sealed before this have
-   * none, and /auth/me adds it the first time it sees one (resealSession).
-   */
   p?: SessionProfile;
 }
 
@@ -202,11 +160,6 @@ async function seal(payload: SessionData, secret: string): Promise<string> {
   return `${b64urlEncode(iv)}.${b64urlEncode(new Uint8Array(ciphertext))}`;
 }
 
-/**
- * A short-lived sealed value that isn't a session (the Google sign-in's
- * state, 2026-10-05). Same AES-GCM sealing, but under a different key derived
- * from the same secret, so one can never be opened as the other.
- */
 async function purposeKey(secret: string, purpose: string): Promise<CryptoKey> {
   return aesKey(`${purpose}\u0000${secret}`);
 }
@@ -302,11 +255,6 @@ export async function openSession(
   }
 }
 
-/**
- * The session cookie. Renamed from the old brand's `schoolagy_session` on 2026-10-31 (Martin: "the cookies r still
- * called schoolagy"). The old name is still read, so nobody is signed out by the rename: a request that comes in with
- * only the old cookie gets the new one set and the old one cleared (index.ts, moveLegacyCookie).
- */
 export const SESSION_COOKIE = "averages_session";
 export const LEGACY_SESSION_COOKIE = "schoolagy_session";
 
@@ -350,17 +298,6 @@ export function readCookie(header: string | null, name: string): string | null {
   return null;
 }
 
-/**
- * The profile for a session sealed before 2026-10-13, which has none inside it.
- *
- * Its own cookie, never a rewrite of the session cookie: /auth/me fetches it
- * from Schoology (the slow way, once), and if a student signed out while that
- * was still running, a rewritten session cookie arriving afterwards would sign
- * them straight back in. This one is useless on its own. It is sealed under
- * its own purpose, tied to the session's uid AND expiry (so it can't be
- * carried over to a later sign-in), host-only on the API, and cleared on
- * sign-out like the Google access cookie.
- */
 export const PROFILE_COOKIE = "averages_profile";
 export const PROFILE_PURPOSE = "session-profile";
 

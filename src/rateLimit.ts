@@ -1,54 +1,4 @@
-/**
- * Rate limits on the API's own routes (2026-10-06), as Hono middleware.
- *
- * Why: every route here fans out to Schoology or Google with the student's
- * own credentials, and Schoology's rate limit is unpublished. A runaway page
- * (or a script holding a session cookie) could otherwise get a student's key
- * throttled by Schoology for everyone at their school, and sign-in could be
- * used to hammer Schoology with guesses.
- *
- * Limits, per minute (a sliding 60-second window):
- *
- *   sign-in   POST /auth/session, GET /auth/schoology/start and /callback   30 per IP
- *   data      /data/*, GET /messages*, /auth/me, /sync     90 per student
- *   send      POST /messages*                              10 per student
- *   submit    /submit/*                                    90 per student
- *   push      /push/* (not GET /push/config)               20 per student
- *   canva     /canva/*                                     30 per student
- *   canvaPoll GET /canva/exports/:job                     120 per student
- *   canvaBrowse GET /canva/folders/:id/items               90 per student
- *   cloud     /cloud/* (Google Drive, OneDrive)            60 per student
- *   apply     POST /schools/apply                  5 per 10 min per IP
- *   applyCode POST /schools/apply/code             5 per 10 min per IP
- *   applyVerify POST /schools/apply/verify        20 per 10 min per IP
- *
- * Sign-in is per IP because there's no student yet. It's 30 rather than 10
- * because a whole class usually signs in from one school IP at the start of
- * a period. "Per student" is the session's uid; requests without a valid
- * session (which those routes refuse anyway) count against their IP instead,
- * and so do demo sessions, which all share one uid. Never limited: CORS
- * preflights, GET /, and the public config reads (GET /config/cloud,
- * GET /push/config), which are cacheable and carry nothing personal.
- *
- * Over the limit: 429 `{ "error": "rate_limited" }` with Retry-After (seconds).
- *
- * Counting: an in-memory sliding window per Worker isolate, always on. That's
- * approximate (Cloudflare runs many isolates, each with its own count) but it
- * works today with nothing to set up, and it's what stops a single runaway
- * client, which tends to stay on one isolate. The Map is bounded
- * (MAX_KEYS, least recently used dropped first), so it can't grow without end.
- *
- * Counts shared across isolates (2026-10-07): Workers Rate Limiting
- * bindings, one per rule, declared in wrangler.jsonc under "ratelimits"
- * (Wrangler 4 since 2026-10-08; "unsafe" before): RATE_LIMIT_SIGNIN,
- * _DATA, _SEND, _SUBMIT, _PUSH, _CANVA, _CANVA_POLL, _CANVA_BROWSE, _APPLY,
- * _APPLY_CODE, _APPLY_VERIFY, _CLOUD, _MEDIA, _BILLING,
- * then a shared RATE_LIMITER if one is ever added. Each is asked after the
- * in-memory count and a request over either limit is refused. A binding has
- * one fixed limit and a 10 or 60 second period, counted per Cloudflare
- * location; applications keep their 10-minute window in memory. A binding
- * that errors is ignored (the in-memory count still applies).
- */
+// Rate limits on the API's own routes, as Hono middleware.
 
 import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
@@ -66,37 +16,19 @@ const MINUTE = 60 * 1000;
 
 export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   signin: { name: "signin", limit: 30, windowMs: MINUTE, by: "ip", binding: "RATE_LIMIT_SIGNIN" },
-  // Every page asks /auth/me, the bundle and up to three extras (2026-10-06 review: 90).
   data: { name: "data", limit: 90, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_DATA" },
   send: { name: "send", limit: 10, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_SEND" },
-  // Two calls per file plus one to attach them all, plus history: 20 files is 42 (2026-10-06 review: 90).
   submit: { name: "submit", limit: 90, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_SUBMIT" },
   push: { name: "push", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_PUSH" },
   canva: { name: "canva", limit: 30, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CANVA" },
-  // Checking on a PDF export: the app asks every 1.5 s for up to 2 minutes
-  // (2026-10-06 review). Its own rule, so it can't use up the Canva one.
   canvaPoll: { name: "canvaPoll", limit: 120, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CANVA_POLL" },
-  // Opening Canva folders on the Files page (2026-10-06): one call per folder
-  // opened. Canva allows 100 a minute; this stays under it.
   canvaBrowse: { name: "canvaBrowse", limit: 90, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CANVA_BROWSE" },
-  // Google Drive and OneDrive staying connected (2026-10-08): mostly a token
-  // every ~55 minutes per tab, plus Settings' status; 60 leaves room for many
-  // tabs and a few reconnects without letting a loop hammer Google or Microsoft.
   cloud: { name: "cloud", limit: 60, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CLOUD" },
-  // Profile photo and background for Sync (2026-10-13): a picture changes a
-  // few times at most; this stops a loop from filling the bucket.
   media: { name: "media", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_MEDIA" },
-  // Averages Plus (2026-10-21): Settings' status, a checkout or two, the customer page.
-  // Stripe's webhook isn't limited here: it's signed, and Stripe sends bursts.
   billing: { name: "billing", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_BILLING" },
-  // School applications (2026-10-06): a few per school network per 10 minutes is plenty.
   apply: { name: "apply", limit: 5, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY" },
-  // "Verify your email" (2026-10-07): each code is an email we send, so few;
-  // checking codes allows typos. Each address also has its own limits (SchoolsStore).
   applyCode: { name: "applyCode", limit: 5, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY_CODE" },
   applyVerify: { name: "applyVerify", limit: 20, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY_VERIFY" },
-  // "Verify your email" in onboarding and Settings (2026-11-06, src/emailCode.ts): each code is an email we send, so
-  // 5 per 10 minutes per student; checking allows typos, 20 per 10 minutes (a million codes: guessing gets nowhere).
   emailCode: { name: "emailCode", limit: 5, windowMs: 10 * MINUTE, by: "student", binding: "RATE_LIMIT_APPLY_CODE" },
   emailVerify: { name: "emailVerify", limit: 20, windowMs: 10 * MINUTE, by: "student", binding: "RATE_LIMIT_APPLY_VERIFY" },
 };
@@ -114,30 +46,21 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (method === "POST" && path === "/schools/apply/verify") return RATE_RULES.applyVerify;
   if (method === "POST" && path === "/email/code") return RATE_RULES.emailCode;
   if (method === "POST" && path === "/email/verify") return RATE_RULES.emailVerify;
-  // Martin's list: per IP like sign-in, so its key can't be guessed quickly.
   if (path === "/schools/applications") return RATE_RULES.signin;
-  // Who's signed in, and Sync Across Devices: per student like the data (2026-10-06 review).
   if (path === "/auth/me" || under(path, "/sync")) return RATE_RULES.data;
   if (under(path, "/messages")) return method === "POST" ? RATE_RULES.send : RATE_RULES.data;
-  // Joining a class with a code (2026-10-28): each try is a write on Schoology, so the "send" limit.
   if (method === "POST" && path === "/data/join") return RATE_RULES.send;
   if (under(path, "/data")) return RATE_RULES.data;
-  // Your data (2026-10-28): the export is a read; deleting the account counts like sending.
   if (under(path, "/account")) return method === "GET" ? RATE_RULES.data : RATE_RULES.send;
   if (under(path, "/submit")) return RATE_RULES.submit;
   if (under(path, "/push")) return method === "GET" && path === "/push/config" ? null : RATE_RULES.push;
   if (method === "GET" && /^\/canva\/exports\/[^/]+$/.test(path)) return RATE_RULES.canvaPoll;
-  // Save folder to Canva progress (2026-10-16): polled every few seconds, like an export.
   if (method === "GET" && /^\/canva\/save-folder\/[^/]+$/.test(path)) return RATE_RULES.canvaPoll;
   if (method === "GET" && /^\/canva\/folders\/[^/]+\/items$/.test(path)) return RATE_RULES.canvaBrowse;
   if (under(path, "/canva")) return RATE_RULES.canva;
   if (under(path, "/cloud")) return RATE_RULES.cloud;
   if (under(path, "/media")) return RATE_RULES.media;
   if (under(path, "/billing")) return RATE_RULES.billing;
-  // Calendar sync (2026-10-21) counts with the other Plus calls. The .ics itself
-  // isn't limited: calendar apps fetch it from shared servers (Google's, Apple's),
-  // and each link's calendar is kept for 30 minutes, so the school platform is
-  // asked at most twice an hour per link however often it's fetched.
   if (under(path, "/calendar")) return method === "GET" && path.endsWith(".ics") ? null : RATE_RULES.billing;
   return null;
 }

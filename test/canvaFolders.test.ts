@@ -1,9 +1,4 @@
-/**
- * Canva folders on the Files page (2026-10-06): the routes in
- * src/canvaFolders.ts, the switch, the scope check and GET /canva/status's
- * `folders`. Canva itself is a fake fetch. Run:
- * node --experimental-strip-types --import ./test/cf-loader.mjs test/canvaFolders.test.ts
- */
+// Canva folders on the Files page: the routes in src/canvaFolders.ts, the switch, the scope check and GET /canva/status's `folders`.
 import app from "../src/index.ts";
 import { sealSession } from "../src/session.ts";
 import { adaptFolderItems, cleanFolderName, folderFailure } from "../src/canvaFolders.ts";

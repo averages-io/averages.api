@@ -1,10 +1,5 @@
-/**
- * Sign in with Schoology (2026-10-29, src/schoologySignin.ts): three-legged
- * OAuth, start to callback, against a fake Schoology. Also the helpers, the
- * open-redirect guard, the sealed in-between cookie, and the sandbox test mode.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/schoologySignin.test.ts
- */
+// Sign in with Schoology: three-legged OAuth, start to callback, against a fake Schoology.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/schoologySignin.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "../src/reviewSandbox.ts";

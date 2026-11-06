@@ -1,28 +1,4 @@
-/**
- * Turning in work on Schoology (Wave 2, 2026-10-06): the calls, the checks
- * and the shapes. The routes are in submitRoutes.ts; this file has no Hono in
- * it so the tests can import it directly.
- *
- * A file goes in three steps, as Schoology's docs describe them:
- *   1. POST /v1/upload {filename, filesize, md5_checksum} → a file id and an
- *      upload_location (a URL that accepts exactly that file from exactly
- *      this student).
- *   2. PUT the bytes to upload_location.
- *   3. POST /v1/sections/{section}/submissions/{grade_item}/file with the ids.
- * Step 1 and 3 are small JSON calls. Step 2 is the file itself, which the
- * Worker passes straight through (never buffered, never hashed: the Free plan
- * has about 10 ms of CPU per request, and the browser already worked out the
- * MD5 Schoology checks). The upload_location never reaches the browser: it's
- * sealed into the token the browser sends back with the PUT.
- *
- * Text answers are one call (…/create), after the HTML has been cut down to a
- * short allow-list (sanitizeSubmissionHtml).
- *
- * A description on a file turn-in (2026-10-23, Martin): Schoology's file
- * turn-in takes only the file ids, so the description goes on as a comment on
- * the student's own submission right after (commentOnSubmission), the way
- * students add a note to a turn-in in Schoology itself.
- */
+// Turning in work on Schoology: the calls, the checks and the shapes.
 
 import { buildAuthHeader, type Credentials } from "./oauth.ts";
 import { forgetReads, isSchoologyApiUrl, listOf, schoologyGet, SchoologyError, SCHOOLOGY_BASE, UPSTREAM_TIMEOUT_MS } from "./schoology.ts";
@@ -169,16 +145,6 @@ export async function openUpload(token: string, secret: string): Promise<UploadC
 
 /* ── calls to Schoology ────────────────────────────────────────────── */
 
-/**
- * A signed JSON POST. OAuth 1.0a doesn't sign a JSON body, only the method,
- * URL and oauth_* values. Redirects are not followed: following one would
- * resend the signature to wherever it points (or, for a POST, turn into a
- * GET that was never signed). Returns the status and the parsed body (null
- * when there's none).
- *
- * The api agent is adding a shared schoologyPost to schoology.ts at the same
- * time (2026-10-06); this one can go once that lands.
- */
 export async function schoologyPostJson(path: string, creds: Credentials, body: unknown): Promise<{ status: number; json: any }> {
   const url = `${SCHOOLOGY_BASE}${path}`;
   forgetReads(creds); // a turn-in: this student's reads (their turn-ins) are out of date
@@ -368,11 +334,6 @@ function rawRevisionFiles(rev: Raw): Raw[] {
   return Array.isArray(files) ? asList(files) : files && typeof files === "object" && "file" in files ? asList(files.file) : asList(files);
 }
 
-/**
- * A written answer comes back from Schoology as an HTML file it names itself, "dropbox_<uid>_r<n>.html"
- * (2026-11-03, Martin: "the files are not named as they were"). It's shown and downloaded as
- * "Written answer.html" instead; every other file keeps its own name.
- */
 export function shownSubmissionName(name: string): string {
   return /^dropbox_\d+_r\d+\.html?$/i.test(name) ? "Written answer.html" : name;
 }
@@ -445,13 +406,6 @@ function isTheirs(raw: Raw, uid: string): boolean {
   return raw?.uid === undefined || raw?.uid === null || String(raw.uid) === uid;
 }
 
-/**
- * One file the student turned in, with its Schoology download path (Worker
- * only, never sent to the browser), for GET /data/submission-file
- * (2026-10-09). Looked up in the student's own history payload: the revision
- * must be theirs (adaptHistory's uid rule) and have that file. Named exactly
- * as the history and the Files page name it. Null when it isn't there.
- */
 export function findSubmittedFile(
   payload: unknown,
   uid: string,
@@ -470,8 +424,6 @@ export function findSubmittedFile(
   }
   return null;
 }
-
-/* ── what the student turned in, for the Files page (2026-10-09) ──── */
 
 /** Most assignments whose history GET /data/submissions reads. */
 export const MAX_SUBMISSION_ASSIGNMENTS = 60;
@@ -535,7 +487,6 @@ export function turnInAssignments(bySection: Record<string, Raw[] | null>, now: 
       if (!ID_RE.test(id)) continue;
       if (NO_DROPBOX_TYPES.has(String(raw.type ?? "").toLowerCase())) continue;
       if (saysNo(raw.allow_dropbox)) continue;
-      // Google Assignments, Turnitin and other outside tools are turned in there, not to a dropbox (2026-10-16).
       if (isOutsideTool(raw)) continue;
       const at = orderMs(raw.due) || orderMs(raw.last_updated);
       const title = toPlainText(raw.title ?? "").slice(0, 255) || "Assignment";
@@ -808,9 +759,6 @@ const TAG_START = /<[A-Za-z!?\/]/g;
 export function sanitizeSubmission(input: unknown): { html: string; hasText: boolean } {
   const html = String(input ?? "").replace(/\u0000/g, "");
   if (html.indexOf("<") === -1) {
-    // No tags, but it's still HTML (the editor's one-line answer is
-    // "Tom &amp; Jerry&nbsp;"): decode once, then escape, never twice
-    // (2026-10-06 review).
     const text = decodeEntities(html);
     return { html: plainTextToHtml(text), hasText: NOT_SPACE.test(text) };
   }
@@ -868,9 +816,6 @@ export function sanitizeSubmission(input: unknown): { html: string; hasText: boo
     i = textFrom = end;
     const name = tagName;
 
-    // A browser's editor starts each new line with a <div> (Enter makes one),
-    // and other block tags read as new lines too. They aren't kept, but the
-    // line break is, so the words don't run together (2026-10-06 review).
     if (BREAK_TAGS.has(name)) {
       if (!closing && out && !ENDS_WITH_BREAK.test(out.slice(-6))) out += "<br>";
       continue;

@@ -1,14 +1,5 @@
-/**
- * The fast /auth/me (2026-10-13): Schoology sessions answer from the name
- * sealed into the cookie at sign-in, with no call to Schoology. Sessions from
- * before that ask Schoology once and keep the answer in a side cookie, never
- * by rewriting the session cookie (a sign-out racing that call must stay
- * signed out).
- *
- * globalThis.fetch is a fake Schoology that counts every call.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/authme.test.ts
- */
+// The fast /auth/me: Schoology sessions answer from the name sealed into the cookie at sign-in, with no call to Schoology.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/authme.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { REVIEW_UID } from "../src/reviewSandbox.ts";
@@ -128,7 +119,6 @@ console.log("\n/auth/me on a new session");
   check("under 13: Incognito still reported, from the cookie", [data.incognito, data.name, calls.length], [true, "Martin Volkov", 0]);
 }
 
-/* ── A session from before 2026-10-13 ──────────────────────────────────── */
 console.log("\nan older session (no name inside)");
 const oldToken = await sealSession({ key: "abcdef0123456789abcdef0123456789", secret: "0123456789abcdef0123456789abcdef", uid: "4242" }, SECRET);
 const oldSession = (await openSession(oldToken, SECRET))!;
@@ -216,7 +206,6 @@ console.log("\nthe reviewer account");
   check("still nothing left the Worker for the reviewer", calls, []);
 }
 
-/* ── The cookie rename (2026-10-31) ────────────────────────────────────── */
 console.log("\nthe cookie rename: schoolagy_session -> averages_session");
 {
   check("the cookie is called averages_session", SESSION_COOKIE, "averages_session");

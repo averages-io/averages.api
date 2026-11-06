@@ -1,11 +1,5 @@
-/**
- * Sign in with Google (Google Classroom) was removed on 2026-10-19: the public
- * beta is Schoology only. These checks keep it removed. The old end-to-end
- * tests for the Google sign-in and Classroom routes are in git history
- * (before 2026-10-19) if Classroom comes back.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/google.test.ts
- */
+// Sign in with Google (Google Classroom): removed for the beta, which is Schoology only. These tests check it stays off.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/google.test.ts
 import app from "../src/index.ts";
 
 let passed = 0;

@@ -1,12 +1,5 @@
-/**
- * Tests for Schoology messages (src/messages.ts, 2026-10-06): the
- * recipients list, the thread list, one thread, message text both ways, and
- * checking what the browser sends.
- *
- * Run: node --experimental-strip-types test/messages.test.ts
- *
- * Every id and name is made up.
- */
+// Tests for Schoology messages: the recipients list, the thread list, one thread, message text both ways.
+// Run: node --experimental-strip-types test/messages.test.ts
 
 import {
   adaptConversations,

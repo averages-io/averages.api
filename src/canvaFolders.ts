@@ -1,28 +1,4 @@
-/**
- * Canva folders on the Files page (2026-10-06, per Martin: "folder is for
- * finder"). Students browse their Canva Projects folder by folder, make a
- * folder, rename one and move a design into one. Nothing is deleted: Canva
- * moves a deleted folder's contents to the Trash, so that stays in Canva.
- *
- * A Hono sub-app that index.ts mounts with
- * `app.route("/canva", canvaFolderRoutes(deps))`, like canvaExport.ts, with
- * the same deps (requireSession, canvaGuard, fromOurApp, storeFor).
- *
- *   GET  /canva/folders/:id/items     a folder's folders and designs ("root" is the top)
- *   POST /canva/folders               { name, parentId }  a new folder
- *   POST /canva/folders/:id/rename    { name }
- *   POST /canva/folders/move          { itemId, toFolderId }
- *
- * Needs the scopes folder:read and folder:write. Asking Canva for a scope the
- * integration doesn't have breaks Connect for everyone, so they're only asked
- * for once CANVA_FOLDERS_ENABLED is "1" (see canvaScopes in canva.ts); until
- * then, and for a connection made before then, every route here answers 409
- * canva_reconnect_needed and the Files page lists designs without folders.
- *
- * Canva Connect: GET /v1/folders/{id}/items (folder:read, 100/min per user),
- * POST /v1/folders and PATCH /v1/folders/{id} (folder:write, 20/min),
- * POST /v1/folders/move (folder:write, 100/min, 204).
- */
+// Canva folders on the Files page.
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import {

@@ -1,10 +1,5 @@
-/**
- * Save folder to Canva (src/canvaSave.ts, 2026-10-16): the job store, one
- * file's run from the queue (with fakes for Schoology and Canva), and the
- * routes through the real Worker with a fake CanvaStore and queue.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/canvaSave.test.ts
- */
+// Save folder to Canva: the job store, one file's run from the queue (with fakes for Schoology and Canva).
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/canvaSave.test.ts
 import app, { retryHandlers } from "../src/index.ts";
 import { openValue, sealSession } from "../src/session.ts";
 import {

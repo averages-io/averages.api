@@ -1,7 +1,5 @@
-/**
- * Feature switches (2026-10-09): src/flags.ts and the Worker's use of it.
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/flags.test.ts
- */
+// Feature switches: src/flags.ts and the Worker's use of it.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/flags.test.ts
 import worker from "../src/index.ts";
 import { withFlags, readFeatures, readEarly, earlyKey, fallbackFeatures, featureForRoute, DEFAULTS, FEATURE_KEYS } from "../src/flags.ts";
 
@@ -77,7 +75,6 @@ const OFF = (k: string) => ({ ...ENV, FLAGS: flags({ [k]: false }) });
 check("messages off → 503 feature_off", await json(await call("/messages", OFF("messaging-features"))), [503, { error: "feature_off", feature: "messaging-features" }]);
 check("turn in off → /submit/text 503", (await call("/submit/text", OFF("turnin-feature"), { method: "POST" })).status, 503);
 check("turn in off → /submit/history still answers (401 without a session)", (await call("/submit/history", OFF("turnin-feature"))).status, 401);
-// What was turned in (2026-10-09): ungated like /data/files, so turning in going off doesn't hide it.
 check("/data/submissions and /data/submission-file need no switch", [featureForRoute("GET", "/data/submissions"), featureForRoute("GET", "/data/submission-file"), featureForRoute("GET", "/data/files")], [[], [], []]);
 check("turn in off → /data/submissions still answers (401 without a session)", (await call("/data/submissions", OFF("turnin-feature"))).status, 401);
 check("on: the route runs as before (401 without a session)", (await call("/messages", ENV)).status, 401);

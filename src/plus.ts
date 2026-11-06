@@ -1,19 +1,4 @@
-/**
- * Who has Averages Plus, for the Plus perks (2026-10-21, Martin: "build
- * everything like connected to plus").
- *
- *   Browser notifications  need Plus while billing is on and set up
- *                          (plusRequired); with billing off they stay free,
- *                          as before Plus existed.
- *   Calendar sync          always needs Plus (it's new; nobody had it free).
- *   Early access           a switch in the early list is on for Plus members
- *                          before everyone (flags.ts earlyKeys).
- *
- * The answer comes from the student's BillingStore (src/billingStore.ts),
- * which Stripe's webhook keeps current. A store that can't be reached throws:
- * callers decide whether that refuses (turning something on) or waits
- * (background checks never delete anything over an outage).
- */
+// Who has Averages Plus, for the Plus perks.
 
 import { billingConfigured, hasPlus, type BillingEnv, type BillingStatus } from "./billing.ts";
 import { featureOn } from "./flags.ts";

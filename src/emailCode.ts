@@ -1,17 +1,4 @@
-/**
- * "Verify your email" codes (2026-11-06, Martin: the onboarding code never arrived; it was a stand-in).
- *
- * POST /email/code   { email }              -> emails a 6-digit code from Cloudflare Email Service (the EMAIL
- *                                              binding, wrangler.jsonc "send_email") and answers { ok, token }.
- * POST /email/verify { email, code, token } -> { ok: true, email } when the code is right.
- *
- * Nothing is stored on our servers: the token is the code's HMAC (never the code), the address and the student's id,
- * sealed with SESSION_SECRET for 10 minutes (sealValue, this file's own purpose). Only the browser that asked can use
- * it, and only for that student and that address. Guessing is limited by the per-student rate limits (rateLimit.ts:
- * emailCode, emailVerify): at most 20 tries in 10 minutes against a million codes.
- *
- * Not for an under-13 (Incognito) sign-in: it doesn't collect an email address. Demo has no real student.
- */
+// "Verify your email" codes.
 
 export const EMAIL_CODE_PURPOSE = "email-code-v1";
 export const EMAIL_CODE_TTL = 10 * 60;

@@ -1,12 +1,5 @@
-/**
- * What the student turned in, on the Files page (2026-10-09): GET
- * /data/submissions and GET /data/submission-file through the real Worker,
- * with Schoology faked, plus the helpers in src/submit.ts they use.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/submissions.test.ts
- *
- * Every id, name, key and token below is made up.
- */
+// What the student turned in, on the Files page.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/submissions.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { DEMO_UID, sealSession, SESSION_COOKIE } from "../src/session.ts";

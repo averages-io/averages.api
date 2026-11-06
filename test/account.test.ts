@@ -1,10 +1,5 @@
-/**
- * The 2026-10-28 routes, end to end through the Worker with the review
- * sandbox's account (no Schoology): classmates, join by code, folder items
- * with titles, Download your data, and Delete your account.
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/account.test.ts
- */
+// The routes, end to end through the Worker with the review sandbox's account (no Schoology): classmates, join by code.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/account.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "../src/reviewSandbox.ts";

@@ -1,14 +1,5 @@
-/**
- * Tests for the per-page extras' adapters (src/extras.ts) and the bundle
- * additions in src/adapt.ts and src/classroom.ts (2026-10-06): course code,
- * period and section; Schoology RECENT_GRADES and GRADEBOOK; Home's message
- * senders; people, updates, events, folders and gradebook.
- *
- * Run: node --experimental-strip-types test/extras.test.ts
- *
- * Payloads are shaped like Schoology's and Classroom's documented responses;
- * every id and name is made up.
- */
+// Tests for the per-page extras' adapters (src/extras.ts) and the bundle additions in src/adapt.ts and src/classroom.ts.
+// Run: node --experimental-strip-types test/extras.test.ts
 
 import {
   adaptCourses,
@@ -295,7 +286,6 @@ console.log("\ncourse updates");
   check("plain text, at most 280", [COURSE_UPDATES[1].body, COURSE_UPDATES[2].body.length], ["Rubric posted & ready.", 280]);
   check("a class that failed: partial", partial, true);
   check("each has its time in ms", COURSE_UPDATES[0].at, Math.floor((NOW - HOUR) / 1000) * 1000);
-  // 2026-10-06 review: the student's own post (no display_name) is "You", not "Classmate".
   const own = adaptUpdates({ "1": [{ id: 5, body: "My post", uid: 123, created: unix(NOW - HOUR) }] }, { "1": [{ id: "900", name: "Ms. Lee" } as any] }, NOW, "123");
   check("own post: You", own.COURSE_UPDATES.map((u) => u.from), ["You"]);
   const other = adaptUpdates({ "1": [{ id: 6, body: "Hi", uid: 456, created: unix(NOW - HOUR) }] }, { "1": [{ id: "900", name: "Ms. Lee" } as any] }, NOW, "123");
@@ -402,8 +392,6 @@ console.log("\nfolders");
   check("Classroom topics as top-level folders", topics.folders, [{ id: "t5", title: "Unit 1", parent: "", color: "" }, { id: "t6", title: "Unit 2", parent: "", color: "" }]);
   check("placement for coursework and materials in known topics", topics.placement, { "assignment:900": "t5", "material:950": "t6" });
 }
-
-/* ── Classmates (2026-10-28) ───────────────────────────────────────────── */
 
 console.log("\nclassmates");
 {

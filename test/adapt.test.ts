@@ -85,7 +85,6 @@ checkTrue("prediction floors at 0", collapse.predictedPct >= 0);
 check("a single score has no trend", predict([85]).trend, "flat");
 check("a single score predicts itself", predict([85]).predictedPct, 85);
 check("no scores is handled", predict([]), { predictedPct: 0, trend: "flat" });
-// With the class's grade (2026-11-06): Martin's 100, 90, 71, 83, 85 at 79% projects lower, not an A
 check("falling scores project below the grade", predict([100, 90, 71, 83, 85], 79), { predictedPct: 77, trend: "down" });
 check("rising scores project above it", predict([70, 75, 82, 88, 93], 80).trend, "up");
 check("never more than 15 points away", predict([0, 0, 0, 0, 0], 95).predictedPct, 80);
@@ -99,7 +98,6 @@ checkTrue(
 );
 
 console.log("\ndate formatting");
-// 2026-08-21 is a Friday.
 check("unix timestamp to 'Fri Aug 21'", formatDue(String(Date.UTC(2026, 7, 21) / 1000)), "Fri Aug 21");
 check("datetime string form", formatDue("2026-08-21 23:59:00"), "Fri Aug 21");
 check("empty due date is empty", formatDue(undefined), "");
@@ -149,7 +147,6 @@ check("scores are percentages, not raw points", HISTORY["101"].points[1], 80);
 // but haven't been graded in yet should show up, just without a grade.
 check("ungraded section still listed", COURSES[1].name, "Algebra II");
 check("ungraded section has empty history", HISTORY["102"].points, []);
-// "Updated" (2026-11-03): Schoology gives no time for the section, only per grade: the newest grade's.
 check("updated is the newest grade's date (Aug 13, the excused one counts: it was entered then)", COURSES[0].updated, "Aug 13");
 check("a class with no grades has no updated", COURSES[1].updated, "");
 {
@@ -244,7 +241,6 @@ check(
   Math.round(((4.0 + 3.3 + 2.0) / 3) * 100) / 100
 );
 check("all A's is a clean 4.0, not 3.999-something", computeProjectedGPA([{ predicted: "A" }, { predicted: "A+" }]), 4.0);
-// "—" is a class with nothing graded yet: left out of the GPA (2026-11-06); other unknown letters still count 0
 check("a class with no grade yet (—) is left out", computeProjectedGPA([{ predicted: "—" }, { predicted: "A" }]), 4.0);
 check("an unrecognized letter contributes 0, doesn't throw", computeProjectedGPA([{ predicted: "Z" }, { predicted: "A" }]), 2.0);
 check("empty course list is 0, not NaN", computeProjectedGPA([]), 0);
@@ -312,8 +308,6 @@ console.log("\nmessage bodies are flattened to plain text (they arrive as HTML)"
   );
 }
 
-// 2026-10-06 review: a long run of "<" with no ">" used to take quadratic time
-// (a second of CPU for 40 KB). Linear now, so it's milliseconds.
 {
   const nasty = "<".repeat(40000) + "x";
   let t0 = performance.now();

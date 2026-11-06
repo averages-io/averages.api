@@ -1,10 +1,4 @@
-/**
- * Canva permission probe (temporary, developer only, 2026-10-10):
- * GET /canva/connect?probe=1 and POST /canva/probe, the gates around them, and
- * that a run only ever touches the test ids it created and never returns a
- * token. Canva itself is a fake fetch. Run:
- * node --experimental-strip-types --import ./test/cf-loader.mjs test/canvaProbe.test.ts
- */
+// Canva permission probe: GET /canva/connect?probe=1 and POST /canva/probe, the gates around them.
 import app from "../src/index.ts";
 import { sealSession } from "../src/session.ts";
 import { CanvaAccount, PROBE_SCOPES, PROBE_TITLE, SWEEP_BATCHES, sweepPlan, type CanvaStorage } from "../src/canva.ts";
@@ -67,7 +61,6 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   const method = init.method ?? "GET";
   const path = url.slice("https://api.canva.com/rest/v1".length);
   calls.push({ method, path, body: init.body ? JSON.parse(String(init.body)) : null, auth: new Headers(init.headers).get("Authorization") });
-  // Like real Canva (2026-10-10 run): a long answer with signed links AFTER the id, well past 600 characters.
   if (method === "POST" && path === "/designs") return body({ design: { id: "DTEST", title: "t", owner: { user_id: "u", team_id: "t" }, urls: { edit_url: "https://www.canva.com/api/design/" + "x".repeat(700) + "/edit", view_url: "https://www.canva.com/api/design/" + "y".repeat(700) + "/view" } } }, 200);
   if (method === "POST" && path === "/folders") return body({ folder: { id: "FTEST" } }, 200);
   if (method === "GET" && path === "/designs/DTEST") return body({ design: { id: "DTEST", title: "t" } }, 200);
@@ -121,7 +114,6 @@ r = await probe({ env: { SCHOOLS_ADMIN_KEY: undefined }, body: { key: ADMIN_KEY 
 check("no admin key set: 404", [r.status, r.json.error], [404, "not_found"]);
 r = await probe({ env: { SCHOOLS_ADMIN_KEY: "short" }, body: { key: "short" } });
 check("admin key too short: 404", [r.status, r.json.error], [404, "not_found"]);
-// 2026-10-10: REVIEW_SECRET unlocks it too (Martin has no SCHOOLS_ADMIN_KEY).
 const REVIEW = "review-secret-" + "r".repeat(20);
 r = await probe({ env: { SCHOOLS_ADMIN_KEY: undefined, REVIEW_SECRET: REVIEW }, body: { key: REVIEW }, uid: "rev" });
 check("REVIEW_SECRET as the key: runs", [r.status, r.json.ok], [200, true]);
@@ -197,7 +189,6 @@ s = await connectScopes("?probe=1", { CANVA_PERMISSION_PROBE: "0" });
 check("flag off + probe=1: ignored, not added", PROBE_SCOPES.some((sc) => s.includes(sc)), false);
 check("normal scopes still asked for", ["design:content:write", "design:meta:read", "profile:read"].every((sc) => s.includes(sc)), true);
 
-/* ── the full sweep (2026-10-10) ──────────────────────────────────────── */
 console.log("sweep");
 const plan = sweepPlan();
 check("sweep: hundreds of guesses, in batches of at most 40", [plan.length > 400, SWEEP_BATCHES, plan.length <= SWEEP_BATCHES * 40], [true, Math.ceil(plan.length / 40), true]);

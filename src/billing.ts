@@ -1,36 +1,4 @@
-/**
- * Averages Plus: a monthly subscription through Stripe (2026-10-21).
- *
- * Built from Stripe's "Set up Managed Payments" blueprint. Stripe sells it as
- * the merchant of record, so it collects and pays sales tax / VAT / GST, and
- * handles fraud and order support. The steps it lists, and where they live:
- *
- *   1. A product with an eligible tax code. Already made in the Stripe
- *      Dashboard ("Averages Plus", SaaS personal use, $2.99/month plus
- *      EUR/GBP/AUD/CAD); the price is found by its lookup key (plus_monthly,
- *      or STRIPE_PRICE_LOOKUP_KEY), never a hard-coded id, so a new price
- *      only needs the key moved over in Stripe.
- *   2. A Checkout Session with managed_payments[enabled]=true, sent with the
- *      Stripe-Version 2026-02-25.preview header the blueprint asks for
- *      (createCheckoutSession). The browser goes to Stripe's hosted page; no
- *      card details ever reach us.
- *   3. Testing it: sandbox keys and Stripe's test cards.
- *   4. Webhooks: checkout.session.completed (and the subscription's own
- *      updates, so a cancel or a failed renewal ends Plus) arrive at
- *      POST /stripe/webhook, signed with STRIPE_WEBHOOK_SECRET
- *      (verifyStripeSignature).
- *
- * What's kept, per student, in their BillingStore Durable Object (US
- * jurisdiction, like everything else we store): the Stripe customer and
- * subscription ids, the subscription's status, when the current period ends,
- * whether it's set to cancel, when we last heard, and the last few event ids
- * (so a resent event isn't applied twice). No card details, no address, no
- * email: Stripe keeps those.
- *
- * Free of Hono and `cloudflare:workers`, so the tests import it directly.
- * Errors carry a short billing_* code as their message, never a key or
- * Stripe's own error text.
- */
+// Averages Plus: a monthly subscription through Stripe.
 
 import type { CanvaStorage } from "./canva.ts";
 
@@ -176,12 +144,6 @@ function referenceId(uid: string): string | undefined {
   return /^[A-Za-z0-9_-]{1,200}$/.test(uid) ? uid : undefined;
 }
 
-/**
- * The blueprint's Checkout Session: subscription mode, one Plus price,
- * managed_payments[enabled]=true, version header 2026-02-25.preview.
- * The student's uid goes in the session's and the subscription's metadata,
- * which is how the webhook knows whose Plus it is. Returns the hosted page URL.
- */
 export async function createCheckoutSession(
   env: BillingEnv,
   input: { uid: string; appOrigin: string; customerId?: string | null }
@@ -274,7 +236,6 @@ export interface BillingUpdate {
   status?: string;
   periodEnd?: number | null;
   cancelAtPeriodEnd?: boolean;
-  /** What they pay, from the subscription's price (2026-10-27, for Settings > Plus). */
   price?: PlanPrice | null;
 }
 
@@ -318,13 +279,6 @@ function periodEndOf(sub: any): number | null {
   return ends.length ? Math.max(...ends) : null;
 }
 
-/**
- * A subscription set to end (2026-10-23, found in the sandbox test): newer API
- * versions (the account's 2026-09-30.endive among them) no longer set
- * cancel_at_period_end when someone cancels in the Customer Portal; they set
- * cancel_at, a date, to the end of the period instead. Either one means it
- * won't renew. Undoing the cancellation clears both.
- */
 function cancelAtOf(sub: any): number | null {
   return typeof sub.cancel_at === "number" && sub.cancel_at > 0 ? sub.cancel_at : null;
 }
@@ -382,11 +336,6 @@ export function updateFromEvent(event: any): BillingUpdate | null {
   return null;
 }
 
-/**
- * End Plus now (2026-11-01, Martin: an "End early" button for a plan that's already set to end). Cancels the
- * subscription at Stripe right away. Stripe's own default: no proration and no refund for the days left, and no
- * final invoice. Returns the change to record, the same one the customer.subscription.deleted webhook carries.
- */
 export async function endSubscriptionNow(env: BillingEnv, uid: string, subscriptionId: string): Promise<BillingUpdate> {
   if (!/^sub_[A-Za-z0-9]{1,255}$/.test(subscriptionId)) throw new BillingError("billing_no_subscription");
   const sub = await stripeRequest(env, "DELETE", `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`);
@@ -411,7 +360,6 @@ export interface BillingRecord {
   status: string;
   periodEnd: number | null;
   cancelAtPeriodEnd: boolean;
-  /** What they pay (2026-10-27). Missing on records from before then until the next subscription event. */
   price?: PlanPrice | null;
   /** The newest event applied (Unix seconds). */
   updatedAt: number;

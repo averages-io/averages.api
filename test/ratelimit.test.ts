@@ -1,11 +1,5 @@
-/**
- * Tests for the API's own rate limits (src/rateLimit.ts, 2026-10-06): which
- * rule a request counts against, the sliding window, and the middleware on a
- * bare Hono app (the route tests in test/routes.test.ts check it on the real
- * Worker too).
- *
- * Run: node --experimental-strip-types test/ratelimit.test.ts
- */
+// Tests for the API's own rate limits: which rule a request counts against, the sliding window.
+// Run: node --experimental-strip-types test/ratelimit.test.ts
 
 import { Hono } from "hono";
 import { RATE_RULES, rateLimit, ruleFor, SlidingWindow } from "../src/rateLimit.ts";
@@ -29,13 +23,11 @@ console.log("\nwhich rule");
 const name = (m: string, p: string) => ruleFor(m, p)?.name ?? null;
 check("sign-in by IP", [name("POST", "/auth/session"), name("GET", "/auth/google/start"), ruleFor("POST", "/auth/session")?.by], ["signin", "signin", "ip"]);
 check("not limited: preflights, health, sign-out, public config", [name("OPTIONS", "/data/bundle"), name("GET", "/"), name("DELETE", "/auth/session"), name("GET", "/config/cloud"), name("GET", "/config/schools"), name("GET", "/push/config")], [null, null, null, null, null, null]);
-// 2026-10-06 review: /auth/me and Sync count as data; the Google callback as sign-in.
 check("/auth/me and /sync/* count as data; the Google callback as sign-in", [name("GET", "/auth/me"), name("GET", "/sync/settings"), name("PUT", "/sync/settings"), name("GET", "/auth/google/callback")], ["data", "data", "data", "signin"]);
 check("checking on a Canva export has its own rule; starting one is canva", [name("GET", "/canva/exports/JOB1"), name("GET", "/canva/exports/JOB1/file"), name("POST", "/canva/designs/D1/export")], ["canvaPoll", "canva", "canva"]);
 check("data: /data/* and reading messages", [name("GET", "/data/bundle"), name("GET", "/data/people"), name("GET", "/messages"), name("GET", "/messages/thread"), name("GET", "/messages/recipients")], ["data", "data", "data", "data", "data"]);
 check("send: POST /messages*", [name("POST", "/messages"), name("POST", "/messages/reply")], ["send", "send"]);
 check("submit, push, canva", [name("POST", "/submit/upload"), name("PUT", "/submit/upload/tok"), name("POST", "/push/subscribe"), name("DELETE", "/push"), name("GET", "/canva/status"), name("POST", "/canva/edit")], ["submit", "submit", "push", "push", "canva", "canva"]);
-// 2026-10-08: Google Drive and OneDrive staying connected.
 check("cloud: every /cloud/* route, per student", [name("GET", "/cloud/status"), name("GET", "/cloud/gdrive/connect"), name("GET", "/cloud/onedrive/callback"), name("POST", "/cloud/gdrive/token"), name("DELETE", "/cloud/onedrive/connection"), name("GET", "/cloudy"), ruleFor("POST", "/cloud/gdrive/token")?.by], ["cloud", "cloud", "cloud", "cloud", "cloud", null, "student"]);
 check("media: every /media/* route, per student", [name("PUT", "/media/photo"), name("GET", "/media/background"), name("DELETE", "/media/photo"), name("GET", "/mediax"), ruleFor("PUT", "/media/photo")?.by], ["media", "media", "media", null, "student"]);
 check("billing: every /billing/* route, per student; Stripe's webhook not limited", [name("GET", "/billing/status"), name("POST", "/billing/checkout"), name("POST", "/billing/portal"), name("POST", "/stripe/webhook"), ruleFor("POST", "/billing/checkout")?.by], ["billing", "billing", "billing", null, "student"]);

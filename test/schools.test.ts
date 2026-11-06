@@ -1,7 +1,5 @@
-/**
- * GET /config/schools (2026-10-06): the sign-in page's school lists.
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/schools.test.ts
- */
+// GET /config/schools: the sign-in page's school lists.
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/schools.test.ts
 import app from "../src/index.ts";
 import { schoolsFor, SCHOOLS } from "../src/schools.ts";
 

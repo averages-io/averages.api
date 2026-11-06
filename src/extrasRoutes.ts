@@ -1,16 +1,4 @@
-/**
- * Routes for the per-page extras and Schoology messages (2026-10-06),
- * mounted by index.ts:
- *
- *   app.route("/data", dataExtrasRoutes(deps))      people, classmates, updates, events, folders, gradebook
- *   app.route("/messages", messagesRoutes(deps))    list, thread, send, reply, recipients
- *
- * The work is in extras.ts and messages.ts; this file only checks the
- * request and picks the answer. Every answer is `private, no-store`. A demo
- * session gets 403 `not_available_in_demo` (its pages run on sample data and
- * never call these). Schoology failures are 502 `schoology_error`; Classroom
- * ones go through index.ts's classroomFailure (401 signs out, else 502).
- */
+// Routes for the per-page extras and Schoology messages, mounted by index.ts.
 
 import { Hono } from "hono";
 import { CALL_BUDGET, CallBudget, CLASSROOM_ID_RE } from "./classroom.ts";
@@ -112,7 +100,6 @@ export function dataExtrasRoutes(deps: ExtrasDeps) {
     }
   });
 
-  // Classmates (2026-10-28): names and Schoology pictures, per class. See fetchSchoologyClassmates.
   app.get("/classmates", deps.requireSession, guard, async (c: any) => {
     const session = c.get("session");
     if (isGoogleSession(session)) {
@@ -131,13 +118,6 @@ export function dataExtrasRoutes(deps: ExtrasDeps) {
     }
   });
 
-  /*
-   * Join a class with its access code (2026-10-28, the Fullscreen Courses page). Schoology's documented call
-   * is POST /{realm}/accesscode with { access_code }; the student only has the code, not the class's id, so
-   * this asks the sections realm without one. Not yet seen working against a real school (only the review
-   * sandbox): when Schoology won't take it, the answer is `not_joined` and the app sends the student to
-   * Schoology's own Join a Course. Google Classroom: not offered (its join needs a different sign-in scope).
-   */
   app.post("/join", deps.requireSession, guard, async (c: any) => {
     const foreign = deps.fromOurApp(c);
     if (foreign) return foreign;
@@ -298,8 +278,6 @@ export function messagesRoutes(deps: ExtrasDeps) {
     }
   });
 
-  // Delete a conversation (2026-11-03): from the student's own Inbox and Sent on Schoology. It can't be undone,
-  // and the teacher keeps their copy. POST, so the check that it came from our app applies.
   app.post("/delete", deps.requireSession, guard, async (c: any) => {
     const session = c.get("session");
     const body = (await jsonBody(c)) as { id?: unknown } | null;

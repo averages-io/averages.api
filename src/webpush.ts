@@ -1,26 +1,4 @@
-/**
- * Web Push sender (2026-10-05) — WebCrypto only, no npm dependencies, so it
- * runs in the Worker and imports directly under `node --experimental-strip-types`.
- *
- *   - VAPID (RFC 8292): an ES256 JWT in `Authorization: vapid t=<jwt>, k=<key>`.
- *   - Payload encryption (RFC 8291) with the aes128gcm content coding (RFC 8188):
- *     one record, a fresh ECDH key pair and salt per message.
- *
- * Keys, made once and kept by the Worker:
- *   - VAPID public key: base64url of the 65-byte uncompressed P-256 point. It is
- *     public — the browser passes it to pushManager.subscribe() as
- *     applicationServerKey — so a plain var is fine.
- *   - VAPID private key: the JWK from generateVapidKeys(), stored as a Worker
- *     secret holding the JSON text. Changing the key pair invalidates every
- *     existing subscription (push services bind a subscription to the key).
- *
- * sendWebPush() refuses anything but https:// endpoints on a public host name
- * (no IP literals, no localhost, no single-label names, no credentials, no
- * non-443 port) and never follows redirects, so a stored subscription can't
- * point the Worker at an internal address.
- *
- * Test: test/webpush.test.ts (includes the RFC 8291 Appendix A vector).
- */
+// Web Push sender — WebCrypto only, no npm dependencies.
 
 const enc = new TextEncoder();
 
@@ -148,10 +126,6 @@ export function isAllowedEndpoint(endpoint: string): boolean {
   if (/^[0-9.]+$/.test(host)) return false; // IPv4 literal
   if (!host.includes(".")) return false; // localhost, intranet single-label names
   if (/\.(localhost|local|internal|home\.arpa)$/.test(host)) return false;
-  // Only the browsers' own push services (2026-10-06 review): otherwise the
-  // Worker would POST to any public host a student registered, every 20
-  // minutes. Chrome, Edge (Chromium), Opera, Brave and Samsung Internet use
-  // FCM; Firefox, Mozilla's; Safari, Apple's; old Edge, Windows'.
   return PUSH_SERVICES.some((s) => host === s || host.endsWith("." + s));
 }
 

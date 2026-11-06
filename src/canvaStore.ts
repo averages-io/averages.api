@@ -1,17 +1,4 @@
-/**
- * One Durable Object per student for their Canva connection (2026-10-05).
- *
- * Opened in the "us" jurisdiction (see index.ts's canvaStore()), the same as
- * Sync, so Canva tokens and drafts stay in the United States. Kept separate
- * from SyncStore on purpose: turning Sync off deletes everything in that
- * student's SyncStore, and it must not take their Canva connection with it.
- *
- * All of the logic lives in canva.ts's CanvaAccount, which the tests drive
- * with an in-memory store; this class only hands it the real storage and
- * exposes its methods over RPC. Because one object serves one student's
- * requests one at a time, the token refresh inside accessToken() can't race
- * itself.
- */
+// One Durable Object per student for their Canva connection.
 
 import { DurableObject } from "cloudflare:workers";
 import { CanvaAccount, type CanvaConfig, type Draft, type ReturnContext } from "./canva.ts";
@@ -25,12 +12,6 @@ export class CanvaStore extends DurableObject<CanvaConfig> {
     this.account = new CanvaAccount(ctx.storage, env);
   }
 
-  /**
-   * `switches`: the Worker's current CANVA_EXPORT_ENABLED / CANVA_FOLDERS_ENABLED /
-   * CANVA_PERMISSION_PROBE (Flagship may have changed them, 2026-10-08). `probe`
-   * asks for the undocumented permission scopes too, honoured only while
-   * CANVA_PERMISSION_PROBE is "1" (2026-10-10, developer only).
-   */
   beginConnect(
     returnTo: string,
     switches?: { CANVA_EXPORT_ENABLED?: string; CANVA_FOLDERS_ENABLED?: string; CANVA_PERMISSION_PROBE?: string },
@@ -54,7 +35,6 @@ export class CanvaStore extends DurableObject<CanvaConfig> {
   accessToken(uid: string): Promise<string> {
     return this.account.accessToken(uid);
   }
-  /** For exporting designs (2026-10-06): refuses a connection made without that scope. */
   accessTokenWithScope(uid: string, scope: string): Promise<string> {
     return this.account.accessTokenWithScope(uid, scope);
   }
@@ -89,7 +69,6 @@ export class CanvaStore extends DurableObject<CanvaConfig> {
     return this.account.removeDraft(designId);
   }
 
-  /* Save folder to Canva (2026-10-16, src/canvaSave.ts). Disconnecting deletes these too. */
   private jobs(): SaveJobs {
     return new SaveJobs(this.ctx.storage);
   }

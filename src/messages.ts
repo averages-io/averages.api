@@ -1,26 +1,4 @@
-/**
- * Schoology private messages for the Messages page (2026-10-06): the inbox
- * and sent threads, one thread at a time, sending a new message and replying.
- * Schoology only: Google Classroom has no messages (the routes answer 404
- * `not_available` there).
- *
- * Schoology's message lists carry author and recipient ids but no names, so
- * names come from GET /messages/recipients (the people this student can
- * message). A district or personal key that refuses that call just means no
- * names: senders then show as "Teacher" (or "Classmate" for someone who only
- * received a group message), never as a failed page.
- *
- * Two rules keep this Worker from becoming a way to message anyone:
- *   - a new message goes only to ids that GET /messages/recipients lists for
- *     this student (one extra call per send);
- *   - a reply goes to the thread's own participants as Schoology reports
- *     them; the browser sends only the thread id and the text.
- *
- * Text only: what the student types is sent as escaped text with line breaks,
- * so nothing they write can become markup in a teacher's inbox, and links go
- * as plain text. Everything read back is flattened to plain text here and
- * escaped again by the page.
- */
+// Schoology private messages for the Messages page: the inbox and sent threads, one thread at a time.
 
 import { clip, decodeEntities, relativeTime, schoologyTime, toPlainText } from "./adapt.ts";
 import type { Credentials } from "./oauth.ts";
@@ -140,10 +118,6 @@ export function threadSubject(rows: Raw[]): string {
  * shows paragraphs). Same order as toPlainText: tags out first, then entities
  * decoded exactly one level, so typed "&lt;b&gt;" stays the text "<b>".
  */
-/**
- * A message's files (2026-11-03): ids, names and sizes only. Never the download path: GET
- * /messages/file looks the file up again in the student's own conversation to open it.
- */
 export function messageFiles(row: Raw): { id: string; name: string; size: number }[] {
   const out: { id: string; name: string; size: number }[] = [];
   for (const f of listOf<Raw>(row?.attachments?.files, "file").slice(0, 20)) {
@@ -195,13 +169,11 @@ export function findMessageFile(rows: Raw[], fileId: string): { name: string; do
 }
 
 export function messageText(html: unknown, max = MAX_MESSAGE): string {
-  // Linear on any input and capped first (2026-10-06 review; see toPlainText in adapt.ts).
   const withBreaks = String(html ?? "")
     .slice(0, 100_000)
     .replace(/\r\n?/g, "\n")
     .replace(/<\s*br\b[^<>]*>/gi, "\n")
     .replace(/<\s*\/\s*(p|div|li|h[1-6]|blockquote)\s*>/gi, "\n")
-    // A link written in the message keeps its address (2026-11-03): "the handout" becomes "the handout (https://…)".
     .replace(/<a\b[^<>]*?\bhref\s*=\s*["']([^"'<>]{1,2000})["'][^<>]*>([^<]{0,500})<\s*\/\s*a\s*>/gi, (_m, href: string, label: string) => {
       const url = webAddress(decodeEntities(href));
       const text = label.trim();
@@ -374,19 +346,19 @@ function notHere(error: unknown): boolean {
  * opening it there would) or, for a thread the student started that has no
  * reply yet, from sent. Null when it's in neither.
  */
-export async function getThread(id: string, creds: Credentials): Promise<Raw[] | null> {
+export async function getThread(id: string, creds: Credentials, opts: { keepUnread?: boolean } = {}): Promise<Raw[] | null> {
+  // keep_unread: Schoology marks a thread read when it's viewed; looking one up for a file shouldn't.
+  const q: Record<string, string | number> = opts.keepUnread ? { with_attachments: 1, keep_unread: "TRUE" } : { with_attachments: 1 };
   let firstError: unknown = null;
   try {
-    // with_attachments (2026-11-03, Martin: files and links teachers sent didn't show): without it
-    // Schoology leaves a message's attachments out entirely.
-    const rows = listOf(await schoologyGet(`/messages/inbox/${id}`, creds, { with_attachments: 1 }), "message");
+    const rows = listOf(await schoologyGet(`/messages/inbox/${id}`, creds, q), "message");
     if (rows.length) return rows;
   } catch (error) {
     if (!notHere(error)) throw error;
     firstError = error;
   }
   try {
-    const rows = listOf(await schoologyGet(`/messages/sent/${id}`, creds, { with_attachments: 1 }), "message");
+    const rows = listOf(await schoologyGet(`/messages/sent/${id}`, creds, q), "message");
     return rows.length ? rows : null;
   } catch (error) {
     if (!notHere(error)) throw error;
@@ -396,12 +368,6 @@ export async function getThread(id: string, creds: Credentials): Promise<Raw[] |
   }
 }
 
-/**
- * Deletes a conversation from the student's own Schoology folders (2026-11-03, Martin: "delete convos in app").
- * Schoology: "Delete a message (cannot be undone)", and deleting doesn't un-send it, so the teacher keeps their
- * copy. A conversation can be in the Inbox and in Sent (the student wrote in it too), so both go. Resolves false
- * when it's in neither (already gone); a refusal in both folders for another reason is thrown.
- */
 export async function deleteThread(id: string, creds: Credentials): Promise<boolean> {
   if (!ID_RE.test(id)) return false;
   let gone = false;
@@ -433,7 +399,6 @@ function cleanMessage(value: string): string {
   return value.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 }
 
-/** Most files on one message (2026-11-03). */
 export const MAX_MESSAGE_FILES = 10;
 /** Files uploaded for a message (POST /submit/upload with purpose "message"): their ids, digits only, each once. */
 function parseFileIds(value: unknown): Parsed<{ fileIds: string[] }> {
@@ -508,12 +473,6 @@ export type SendResult = { ok: true; id: string } | { ok: false; error: "recipie
  * A recipients list that can't be read throws (the route answers 502): with
  * no list there's nothing to check against.
  */
-/**
- * Who a new message may go to (2026-11-03, found with the sandbox): Schoology's
- * own list (GET /messages/recipients) can come back empty, even for a teacher,
- * which refused every new message. Then it's the teachers of the student's own
- * classes. Schoology still has the last word on the send itself.
- */
 async function allowedRecipients(creds: Credentials & { uid?: string }, wanted: string[]): Promise<Set<string>> {
   const allowed = new Set(adaptRecipients(await getRecipients(creds).catch(() => [])).map((r) => r.id));
   if (wanted.every((id) => allowed.has(id)) || !creds.uid) return allowed;
@@ -536,7 +495,6 @@ export async function sendNewMessage(creds: Credentials & { uid?: string }, inpu
       subject: input.subject,
       message: messageHtml(input.message),
       recipient_ids: input.recipientIds.join(","),
-      // Files the student uploaded for it (2026-11-03): Schoology takes them the same way as on its own posts.
       ...(input.fileIds && input.fileIds.length ? { "file-attachment": { id: input.fileIds } } : {}),
     });
   } catch (error) {

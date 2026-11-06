@@ -1,10 +1,5 @@
-/**
- * Averages Plus perks (2026-10-21): notifications need Plus while billing is
- * on (src/push.ts, src/pushStore.ts), the calendar link (src/calendar.ts),
- * early access (flags.ts + index.ts) and Plus ending (the webhook).
- *
- * Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/plus.test.ts
- */
+// Averages Plus perks: notifications need Plus while billing is on (src/push.ts, src/pushStore.ts).
+// Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/plus.test.ts
 import { Hono } from "hono";
 import worker from "../src/index.ts";
 import { pushRoutes, type PushStoreApi } from "../src/push.ts";
@@ -262,7 +257,6 @@ const CAL_ENV = { ...BILLING_ON, FEATURES_ON: "billing" };
   const noPlus = await call(calApp, "POST", "/calendar", { cookie: ana, body: { tz: "America/Los_Angeles" }, env: CAL_ENV });
   check("make a link without Plus: 403 plus_required", [noPlus.status, noPlus.data?.error], [403, "plus_required"]);
   {
-    // Billing off (2026-10-21, Martin): every Plus perk is free, calendar sync included.
     const readsBefore = calendarReads;
     const free = await call(calApp, "POST", "/calendar", { cookie: await cookieFor("9050"), body: {}, env: BILLING_OFF });
     check("billing off: anyone in Classic gets a calendar link", [free.status, typeof free.data?.url], [200, "string"]);
@@ -297,7 +291,6 @@ const CAL_ENV = { ...BILLING_ON, FEATURES_ON: "billing" };
   check("after 10 minutes: read again", [(await call(calApp, "GET", url.pathname, { env: CAL_ENV })).status, calendarReads], [200, 2]);
   clock += 11 * 60 * 1000;
 
-  // Settings > Time Zone (2026-10-28): /calendar/touch carries the student's zone to the feed.
   {
     const feedName = `f:${await tokenHash(token)}`;
     const tzOf = () => (recs.get(feedName) as any)?.tz;
@@ -386,7 +379,6 @@ section("Worker: early access and Plus ending");
   const early = await go("/messages", { cookie: zoe });
   check("early feature with Plus: let through (no longer feature_off)", early.status !== 503, true);
   {
-    // Billing off: early features are on for everyone (2026-10-21).
     const offEnv = { ...env, FEATURES_ON: "" };
     const goOff = (path: string, cookie?: string) => {
       resetRateLimits();

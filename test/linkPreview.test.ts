@@ -1,5 +1,4 @@
-// Link previews (2026-11-03, src/linkPreview.ts): which addresses may be fetched, what a page's tags give, and that
-// redirects and pictures are checked too. No network: fetch is stubbed.
+// Link previews: which addresses may be fetched, what a page's tags give, and that redirects and pictures are checked too.
 import { getLinkImage, getLinkPreview, isSafeWebTarget, parseTarget, previewFromHtml } from "../src/linkPreview.ts";
 
 let passed = 0, failed = 0;

@@ -86,27 +86,9 @@ export const GPA_SCALE: Record<string, number> = {
   F: 0.0,
 };
 
-/**
- * Unweighted GPA averaged across each course's *predicted* letter grade
- * (`AdaptedCourse.predicted`), not the current one — "Projected GPA" is
- * meant to answer "where is this trending," matching the per-course
- * Predicted-grade chip's own framing elsewhere in the app. Rounded to 2
- * decimals. Sent as the bundle's `projectedGPA`.
- *
- * (2026-10-06: this used to also feed a weekly-email "vs last week" GPA
- * snapshot. The Weekly Grade Summary email was replaced by browser
- * notifications on 2026-10-04 and the snapshot is gone; the number itself
- * stays in the bundle.)
- *
- * Returns 0 for no courses rather than NaN.
- */
 export function computeProjectedGPA(courses: { predicted: string }[]): number {
-  // classes with no grade yet ("—") don't count (2026-11-06)
   courses = courses.filter((c) => c.predicted !== "—");
   if (courses.length === 0) return 0;
-  // `?? 0` alone isn't enough: `predicted` can come from Schoology data, and an
-  // inherited key like "constructor" resolves to a function, not undefined,
-  // which would turn the whole sum into NaN (security audit, 2026-09-15).
   const total = courses.reduce((sum, c) => {
     const points = Object.prototype.hasOwnProperty.call(GPA_SCALE, c.predicted) ? GPA_SCALE[c.predicted] : 0;
     return sum + (typeof points === "number" ? points : 0);
@@ -128,9 +110,6 @@ export function predict(points: number[], current?: number): {
   trend: "up" | "down" | "flat";
 } {
   let clean = points.filter((p) => typeof p === "number" && !Number.isNaN(p));
-  // With the class's grade (2026-11-06, Martin: scores going 100, 90, 71, 83, 85 projected an A): the latest 8 scores'
-  // line, one step on, pulls the grade half way toward it. So falling scores project lower than now, rising higher,
-  // and one odd score can't swing it far. The projection never moves the grade more than 15 points.
   if (typeof current === "number" && Number.isFinite(current) && current > 0 && clean.length >= 3) {
     clean = clean.slice(-8);
     const n = clean.length, mx = (n - 1) / 2, my = clean.reduce((a, b) => a + b, 0) / n;
@@ -214,14 +193,6 @@ export function schoologyTime(value: unknown): number | null {
   return toDate(value)?.getTime() ?? null;
 }
 
-/**
- * Schoology's due dates come with a time: "2026-10-09 23:59:00", in the
- * student's own time zone (2026-10-07, Martin: "then how does the Schoology
- * app have times"). Until now the bundle kept only "Fri Oct 9" and read the
- * rest as UTC, so in California work turned overdue seven hours early. This
- * is that moment as epoch ms, read in `tz` (the zone the app sends as ?tz=);
- * unix timestamps pass through.
- */
 export function schoologyLocalMs(value: unknown, tz: string): number | null {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value === "number" || /^\d+$/.test(String(value))) {
@@ -280,7 +251,6 @@ function dueParts(value: unknown, tz: string): { dueAt?: string; time?: string }
   return ms === null ? {} : { dueAt: new Date(ms).toISOString(), time: timeLabel(ms, tz) };
 }
 
-/** The calendar day ("2026-10-09") of `ms` in `tz`. */
 function dayIn(ms: number, tz: string): string {
   const off = zoneOffset(ms, tz);
   return new Date(ms + off).toISOString().slice(0, 10);
@@ -318,7 +288,6 @@ export interface AdaptedCourse {
   predictedPct: number;
   trend: "up" | "down" | "flat";
   updated: string;
-  /** Schoology's course code ("ENG10"); "" for Classroom. (2026-10-06) */
   code: string;
   /** The class period from the section's title ("Period 3", "P3", "3rd Period"), else "". */
   period: number | "";
@@ -328,13 +297,6 @@ export interface AdaptedCourse {
   teacher: string;
 }
 
-/**
- * The class period in a section title, for the course cards (2026-10-06):
- * "Period 3", "Per. 3", "Pd 3", "P3", "3rd Period", "Period 03" all give 3.
- * Schools write this many ways and nothing else in Schoology or Classroom
- * says which period a class meets, so this only reads the obvious forms and
- * gives "" otherwise (a wrong period is worse than none).
- */
 const PERIOD_RE = /\b(?:period|per|pd|p)\.?\s*0?(\d{1,2})(?![0-9])|\b0?(\d{1,2})(?:st|nd|rd|th)\s+(?:period|per\b|pd\b)/i;
 
 export function parsePeriod(text: unknown): number | "" {
@@ -357,11 +319,6 @@ export function sectionLabel(text: unknown, courseName: string): string {
   return rest ? label : "";
 }
 
-/**
- * One class's last graded scores for the trend chart. `titles` is
- * [title, type] per point, for the chart's hover labels (2026-10-15); `ids`
- * only lives on the server long enough to look the titles up.
- */
 export interface HistorySeries {
   points: number[];
   dates: string[];
@@ -416,12 +373,6 @@ function historyForSection(gradeEntry: Raw): HistorySeries {
   };
 }
 
-/**
- * Names each trend point (2026-10-15): the grades payload only has assignment
- * ids, so the titles come from the assignments lists the bundle already
- * fetched. A score whose assignment isn't in the list gets "". The ids are
- * dropped afterwards; the page never needed them.
- */
 export function addHistoryTitles(history: Record<string, HistorySeries>, assignmentsBySection: Record<string, Raw[]>): void {
   for (const [sectionId, series] of Object.entries(history)) {
     const ids = series.ids ?? [];
@@ -441,7 +392,6 @@ export function addHistoryTitles(history: Record<string, HistorySeries>, assignm
   }
 }
 
-/** The student's own score on one assignment, from GET /users/{uid}/grades?section_id= (2026-10-15). */
 export function assignmentScore(gradeSections: Raw[], sectionId: string, assignmentId: string): { earned: number; possible: number } | null {
   for (const entry of gradeSections ?? []) {
     if (String(entry?.section_id ?? entry?.id ?? "") !== sectionId) continue;
@@ -458,12 +408,6 @@ function asArray(value: unknown): Raw[] {
   return [];
 }
 
-/**
- * When a class's grades last changed (2026-11-03, Martin: "the updated column
- * doesn't work"). Schoology's grades answer has no time for the section, only
- * one per grade, and the section list has none either, so "Updated" was always
- * blank. This is the newest grade's time (unix seconds), or undefined.
- */
 function latestGradeTime(gradeEntry: Raw | undefined): number | undefined {
   let latest = 0;
   for (const period of asArray(gradeEntry?.period)) {
@@ -475,11 +419,6 @@ function latestGradeTime(gradeEntry: Raw | undefined): number | undefined {
   return latest ? Math.floor(latest / 1000) : undefined;
 }
 
-/**
- * "Updated" counts new and changed work too (2026-11-06, Martin: the column didn't change when a quiz or discussion
- * was posted): the newest of the class's latest grade and its work's last_updated (unix seconds, on assignments and
- * tests; discussions don't have one). Run after the bundle reads the class lists.
- */
 export function freshenUpdated(courses: { id: string; updated: string }[], grades: Raw[], bySection: Record<string, Raw[]>, now: number = Date.now()): void {
   const gradesBySection = new Map<string, Raw>();
   for (const entry of grades ?? []) gradesBySection.set(String(entry?.section_id ?? entry?.id ?? ""), entry);
@@ -524,8 +463,6 @@ export function adaptCourses(
         )
       : null;
     const pct = reportedPct ?? fallbackPct ?? 0;
-    // Nothing graded yet (2026-11-06, Martin: such a class said F 0.0%): no letter ("—", which the pages show as no
-    // grade yet), and it's left out of the GPA.
     const none = history.points.length === 0 && !(reportedPct !== null && reportedPct > 0);
 
     const { predictedPct, trend } = predict(history.points, reportedPct ?? undefined);
@@ -534,9 +471,6 @@ export function adaptCourses(
       section?.section_title ||
       section?.title ||
       "Untitled course";
-    // The period and section name (2026-10-06): the section title first
-    // ("Period 3", "Biology - Honors"), then the section code when the title
-    // doesn't say ("P3").
     const period = parsePeriod(section?.section_title);
     const titleLabel = sectionLabel(section?.section_title, String(name));
 
@@ -560,18 +494,6 @@ export function adaptCourses(
   return { COURSES, HISTORY };
 }
 
-/**
- * An assignment that runs in an outside tool (2026-10-16): Google Assignments,
- * Turnitin and other LTI tools a teacher adds to Schoology. The student opens
- * and turns it in on Schoology, never in Averages.io, and its turn-in isn't a
- * Schoology dropbox submission we can see. So it's never called Missing: it's
- * "Pending" until a grade comes back.
- *
- * Schoology's docs don't list the field's values. Plain assignments say
- * `assignment_type: "basic"`; anything naming LTI, an external tool or a tool
- * counts. GET /data/bundle logs the values it sees (assignment_types) so the
- * real ones can be checked.
- */
 export function isOutsideTool(raw: Raw): boolean {
   const kind = String(raw?.assignment_type ?? "").toLowerCase();
   return /lti|external|tool/.test(kind);
@@ -597,17 +519,9 @@ const TYPE_MAP: Record<string, string> = {
   assessment: "assessment",
   quiz: "assessment",
   test: "assessment",
-  // Schoology's newer Test/Quiz (2026-11-06, Martin: tests didn't show as tests): "assessment_v2" in a class's list.
   assessment_v2: "assessment",
 };
 
-/**
- * A class's discussions as work (2026-11-06, Martin: "Was George right?" and "Where do you see parabolas in real
- * life?" were on Schoology's To Do and nowhere in Averages). GET /sections/{id}/discussions lists them apart from the
- * assignments; the graded ones, and any with a due date, are work like an assignment: listed by due date, graded in
- * the gradebook (under their grade_item_id), answered on Schoology (no Turn in here). The rest are just class
- * conversations and stay out.
- */
 export function discussionsAsWork(list: Raw[] | null | undefined): Raw[] {
   return (list ?? [])
     .filter((d) => d && /^\d{1,20}$/.test(String(d.id ?? "")) && String(d.published ?? "1") !== "0" && (d.due || String(d.graded ?? "0") === "1"))
@@ -635,19 +549,14 @@ export function adaptAssignments(
         title: assignment?.title ?? "Untitled",
         courseId,
         due: formatDue(assignment?.due),
-        // The exact moment and its time (2026-10-07): "Due in 3 hours", "11:59 PM".
         dueAt: new Date(dueMs).toISOString(),
         time: timeLabel(dueMs, tz),
         id: String(assignment?.id ?? ""),
-        // Runs in an outside tool (2026-10-16): Pending, not Missing, and opened on Schoology.
         ...(isOutsideTool(assignment) ? { outside: true } : {}),
-        // Takes no turn-ins on Schoology (2026-11-03): allow_dropbox "0", work handed in on paper or in class.
-        // The app doesn't offer Turn in for it (Schoology answers a turn-in with 403).
         ...(["0", 0, false, "false"].includes(assignment?.allow_dropbox) ? { noDropbox: true } : {}),
       };
 
       if (dayIn(dueMs, tz) === today) {
-        // With its id (2026-10-07): Home links to it as assignment?id=<id>.
         TODAY.push({ title: item.title, courseId, id: item.id, ...(item.outside ? { outside: true } : {}), ...(item.noDropbox ? { noDropbox: true } : {}) });
       }
 
@@ -662,7 +571,6 @@ export function adaptAssignments(
     }
   }
 
-  // By the real due time (the "Fri Oct 9" labels sorted as words before 2026-10-07).
   const byDue = (a: Raw, b: Raw) => Date.parse(a.dueAt) - Date.parse(b.dueAt);
   OVERDUE.sort(byDue);
   UPCOMING.sort(byDue);
@@ -671,21 +579,7 @@ export function adaptAssignments(
   return { OVERDUE, UPCOMING: UPCOMING.slice(0, 25), TODAY };
 }
 
-/**
- * Schoology message bodies arrive as HTML (a teacher's rich-text editor
- * produces <p>, <br>, entities). The app escapes everything it renders, so raw
- * markup would show up as visible tags; this flattens it to plain text first
- * (security audit, 2026-09-15).
- *
- * Order matters: tags are stripped BEFORE entities are decoded, and entities
- * are decoded exactly one level, so someone who literally typed "&lt;script&gt;"
- * ends up with the text "<script>", which the page then escapes on render.
- */
 export function toPlainText(html: unknown): string {
-  // Linear on any input (2026-10-06 review): a tag can't contain "<", so a
-  // long run of "<" with no ">" (which made /<[^>]*>/ quadratic, a second of
-  // CPU on 40 KB) is passed over in one step. Capped at 100 KB first: nothing
-  // shown anywhere needs more.
   const withBreaks = String(html ?? "").slice(0, 100_000).replace(/<\s*(br|\/p|\/div|\/li)\b[^<>]*>/gi, " ");
   const noTags = withBreaks.replace(/<[^<>]*>/g, "");
   return decodeEntities(noTags).replace(/\s+/g, " ").trim();
@@ -709,13 +603,6 @@ export function clip(text: string, max: number): string {
   return Array.from(text).slice(0, max).join("");
 }
 
-/**
- * Home's Messages widget. Schoology's message lists carry the author's id
- * but not their name, so the sender is named from `names` (GET
- * /messages/recipients, the people this student can message, read in the
- * bundle's first wave): until 2026-10-06 this showed the raw id. Someone not
- * on that list, or a district where it can't be read, shows as "Teacher".
- */
 export function adaptMessages(messages: Raw[], names?: Map<string, string>): Raw[] {
   return messages.slice(0, 25).map((message) => ({
     from:
@@ -730,8 +617,6 @@ export function adaptMessages(messages: Raw[], names?: Map<string, string>): Raw
     subject: toPlainText(message?.subject ?? ""),
     unread: String(message?.message_status ?? "").toLowerCase() === "unread",
     id: String(message?.id ?? ""),
-    // Who sent it (2026-11-03): Schoology's list of who you can message can be empty, so the name
-    // isn't known here; the app finds it among the student's teachers by this id.
     authorId: /^\d{1,20}$/.test(String(message?.author_id ?? "")) ? String(message.author_id) : "",
   }));
 }
@@ -750,17 +635,14 @@ export interface AssignmentDetail {
   title: string;
   description: string;
   due: string;
-  /** The exact due moment (ISO) and its time in the student's zone (2026-10-07). */
   dueAt?: string;
   time?: string;
   type: string;
-  /** What it's worth (Schoology's max_points), or null when it isn't graded with points (2026-10-15). */
   maxPoints: number | null;
   /** The student's score once graded, from their grades (the route adds it); null when not graded. */
   score?: { earned: number; possible: number } | null;
   files: AttachmentFile[];
   links: { title: string; url: string }[];
-  /** Runs in an outside tool like Google Assignments or Turnitin (2026-10-16): opened and turned in on Schoology. */
   outside: boolean;
 }
 
@@ -832,8 +714,6 @@ export function findAttachment(raw: Raw, fileId: string): { name: string; downlo
   return null;
 }
 
-/* ── Course files (Files page, 2026-10-05) ─────────────────────────────── */
-
 export interface CourseFile {
   /** Schoology's attachment id. */
   id: string;
@@ -848,7 +728,6 @@ export interface CourseFile {
   kind: "document" | "assignment";
   /** That document's or assignment's id (needed to download it again). */
   parent: string;
-  /** The class folder it's in, when not at the top level (2026-11-06). */
   folder?: string;
   parentTitle: string;
   /** Upload time in ms, 0 when unknown. */
@@ -903,7 +782,6 @@ export function adaptCourseFiles(
         const parent = String(item?.id ?? "");
         if (!/^\d{1,20}$/.test(parent)) continue;
         const parentTitle = toPlainText(item?.title ?? "").slice(0, 255) || (kind === "document" ? "Document" : "Assignment");
-        // the class folder it's in (2026-11-06, Martin: folders didn't show in Files); "" at the top level
         const fid = String(item?.course_fid ?? item?.folder_id ?? "");
         const folder = /^\d{1,20}$/.test(fid) && fid !== "0" ? fid : "";
         for (const f of attachedFiles(item)) {
@@ -916,9 +794,6 @@ export function adaptCourseFiles(
   if (files.length > MAX_COURSE_FILES) partial = true;
   return { files: files.slice(0, MAX_COURSE_FILES), partial };
 }
-
-/* ── Recent grades and the gradebook (2026-10-06) ──────────────────────── */
-
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Most graded items listed per category, same as Classroom's. */
@@ -954,7 +829,7 @@ function titlesOf(assignments: Raw[] | undefined): Map<string, string> {
   for (const a of assignments ?? []) {
     const id = String(a?.id ?? "");
     if (/^\d{1,20}$/.test(id)) titles.set(id, toPlainText(a?.title ?? "").slice(0, 200) || "Untitled");
-    const gid = String(a?.grade_item_id ?? "");   // a discussion's grade is filed under its grade item (2026-11-06)
+    const gid = String(a?.grade_item_id ?? "");
     if (gid !== id && /^\d{1,20}$/.test(gid)) titles.set(gid, toPlainText(a?.title ?? "").slice(0, 200) || "Untitled");
   }
   return titles;
@@ -1011,11 +886,6 @@ export function adaptRecentGrades(grades: Raw[], assignmentsBySection: Record<st
   return out.slice(0, 10).map((x) => x.grade);
 }
 
-/**
- * The extra details on a gradebook row (2026-10-28, the Fullscreen Grades
- * page): when it was graded and due (ms), the teacher's comment, and
- * Schoology's missing mark (exception 3). Only fields that have a value.
- */
 function gradeExtras(graded: Raw | undefined, assignment: Raw | undefined): { gradedAt?: number; due?: number; comment?: string; missing?: boolean } {
   const out: { gradedAt?: number; due?: number; comment?: string; missing?: boolean } = {};
   const at = graded ? schoologyTime(graded.timestamp) : null;
@@ -1059,7 +929,7 @@ export function adaptSchoologyGradebook(input: { categories: Raw[] | null; grade
     seen.add(id);
     if (String(a?.published ?? "1") === "0" || String(a?.count_in_grade ?? "1") === "0") continue;
     const gid = String(a?.grade_item_id ?? "");
-    if (gid && gid !== id) seen.add(gid);   // a discussion's score is filed under its grade item (2026-11-06)
+    if (gid && gid !== id) seen.add(gid);
     const graded = scores.get(id) ?? (gid ? scores.get(gid) : undefined);
     const points = num(a?.max_points) ?? num(graded?.max_points);
     if (points === null || points <= 0) continue;

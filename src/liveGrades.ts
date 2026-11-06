@@ -1,21 +1,4 @@
-/**
- * Live grades (2026-10-27, Martin: "can it be the refresh animation that we
- * already made that's on the landing page, the scrolling numbers").
- *
- * While a signed-in page is open and on screen, the app asks GET /data/grades
- * every few minutes. When a class's grade moved, the number rolls to the new
- * one like the landing page's tiles (public/js/averages-live.js).
- *
- * Kept as light as a check can be: ONE Schoology call (/users/{uid}/grades),
- * none of the bundle's sections, assignments or inbox. Every check uses the
- * student's own Schoology access, and Schoology's rate limit is unpublished
- * and shared by a whole school, so a check that runs this often has to be
- * cheap. The app only asks for the full bundle when something changed.
- *
- * How often: the API decides and says so in `next` (seconds). 5 minutes, or
- * 2 minutes with Averages Plus. While billing is off every Plus perk is free,
- * so everyone gets 2 minutes then. Off with the `live-grades` switch.
- */
+// Live grades. While a signed-in page is open and on screen, the app asks GET /data/grades every few minutes.
 
 import { adaptCourses } from "./adapt.ts";
 

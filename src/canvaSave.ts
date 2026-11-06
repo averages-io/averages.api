@@ -1,29 +1,4 @@
-/**
- * Save a folder to Canva (2026-10-16): every file in one of the teacher's
- * Course Materials folders becomes a design in the student's Canva, inside a
- * new Canva folder with the same name. A single file works the same way (a
- * folder of one, without the Canva folder).
- *
- * Too slow to do while the student waits (Canva lets one student start 20
- * imports a minute, and each takes a few seconds), so it runs on the retry
- * queue (src/retryQueue.ts): one message per file, spaced SAVE_SPACING_S
- * apart so Canva's limit is never reached. A file Canva or Schoology answers
- * "slow down" or "try later" for waits and goes again; one that can't work
- * (too big, not a file Canva opens) is marked failed and the rest carry on.
- * The student can leave the page: the job keeps going and the page shows its
- * progress when it's opened again.
- *
- *   POST   /canva/save-folder        { name, files: [{ section, kind, parent, file }] }  ->  { job, total }
- *   GET    /canva/save-folder/:job   progress: { total, done, failed, waiting, items: [{ name, state }] }
- *   DELETE /canva/save-folder/:job   stop (files already saved stay in Canva)
- *
- * Where things are kept: the job lives in the student's own CanvaStore (US),
- * with file ids, names and results only. To download the files from
- * Schoology later, the job holds the student's sign-in sealed with
- * SESSION_SECRET (AES-GCM) for at most SAVE_CRED_TTL_S; it's deleted as soon
- * as the last file is done or the job is stopped. The queue messages carry
- * the CanvaStore id, the job id and a file number, nothing else.
- */
+// Save a folder to Canva: every file in one of the teacher's Course Materials folders becomes a design in the student's.
 
 import type { RetryOutcome } from "./retryQueue.ts";
 

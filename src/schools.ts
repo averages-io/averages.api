@@ -1,15 +1,4 @@
-/**
- * The schools the sign-in page lists (2026-10-06), served by
- * GET /config/schools?lms=schoology.
- *
- * Schoology: districts added over time, to make finding them easier; a
- * student can always type their district's Schoology address instead,
- * listed or not.
- *
- * The list starts empty. Add a school as { name, domain, aliases? }, where
- * `domain` is the address the school's Schoology lives at and `aliases`
- * are other addresses it also answers on.
- */
+// The schools the sign-in page lists, served by GET /config/schools?lms=schoology.
 export interface School {
   name: string;
   domain: string;
@@ -18,8 +7,6 @@ export interface School {
 
 export const SCHOOLS: Readonly<Record<"schoology", readonly School[]>> = {
   schoology: [
-    // Schools without their own address, and Schoology's developer sandbox schools, sign in at app.schoology.com
-    // (2026-11-03, Martin couldn't find his sandbox school).
     { name: "Schoology (app.schoology.com)", domain: "app.schoology.com", aliases: ["schoology.com", "www.schoology.com"] },
   ],
 };
