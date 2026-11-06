@@ -244,7 +244,9 @@ check(
   Math.round(((4.0 + 3.3 + 2.0) / 3) * 100) / 100
 );
 check("all A's is a clean 4.0, not 3.999-something", computeProjectedGPA([{ predicted: "A" }, { predicted: "A+" }]), 4.0);
-check("an unrecognized/blank letter (—) contributes 0, doesn't throw", computeProjectedGPA([{ predicted: "—" }, { predicted: "A" }]), 2.0);
+// "—" is a class with nothing graded yet: left out of the GPA (2026-11-06); other unknown letters still count 0
+check("a class with no grade yet (—) is left out", computeProjectedGPA([{ predicted: "—" }, { predicted: "A" }]), 4.0);
+check("an unrecognized letter contributes 0, doesn't throw", computeProjectedGPA([{ predicted: "Z" }, { predicted: "A" }]), 2.0);
 check("empty course list is 0, not NaN", computeProjectedGPA([]), 0);
 // `predicted` can be a section's own reported letter grade, i.e. a data-derived
 // string. An inherited Object key resolves to a function, which `?? 0` would

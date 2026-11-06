@@ -101,6 +101,8 @@ export const GPA_SCALE: Record<string, number> = {
  * Returns 0 for no courses rather than NaN.
  */
 export function computeProjectedGPA(courses: { predicted: string }[]): number {
+  // classes with no grade yet ("—") don't count (2026-11-06)
+  courses = courses.filter((c) => c.predicted !== "—");
   if (courses.length === 0) return 0;
   // `?? 0` alone isn't enough: `predicted` can come from Schoology data, and an
   // inherited key like "constructor" resolves to a function, not undefined,
@@ -522,6 +524,9 @@ export function adaptCourses(
         )
       : null;
     const pct = reportedPct ?? fallbackPct ?? 0;
+    // Nothing graded yet (2026-11-06, Martin: such a class said F 0.0%): no letter ("—", which the pages show as no
+    // grade yet), and it's left out of the GPA.
+    const none = history.points.length === 0 && !(reportedPct !== null && reportedPct > 0);
 
     const { predictedPct, trend } = predict(history.points, reportedPct ?? undefined);
     const name =
@@ -539,9 +544,9 @@ export function adaptCourses(
       id,
       name,
       color: colorForCourse(id),
-      grade: letterFromPct(pct),
+      grade: none ? "—" : letterFromPct(pct),
       pct,
-      predicted: letterFromPct(predictedPct || pct),
+      predicted: none ? "—" : letterFromPct(predictedPct || pct),
       predictedPct: predictedPct || pct,
       trend,
       updated: relativeTime(latestGradeTime(gradeEntry) ?? gradeEntry?.timestamp ?? section?.last_updated),

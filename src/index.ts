@@ -168,6 +168,7 @@ import {
 import { findMessageFile, getRecipients, getThread, namesFrom } from "./messages.ts";
 import { getFolder, getSectionGrades, parseFolder } from "./extras.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
+import { cleanEmail, codeHash, codeMessage, DEFAULT_EMAIL_FROM, EMAIL_CODE_PURPOSE, EMAIL_CODE_TTL, newCode, sameHash, sendFailure, type SendEmailBinding } from "./emailCode.ts";
 import { getLinkImage, getLinkPreview, parseTarget } from "./linkPreview.ts";
 import { rateLimit } from "./rateLimit.ts";
 import type { SyncStore } from "./syncStore.ts";
@@ -222,6 +223,13 @@ type Bindings = {
    * answers 503 and the app keeps pictures inside the Sync record as before.
    */
   MEDIA?: R2Bucket;
+  /**
+   * "Verify your email" codes (2026-11-06, src/emailCode.ts): Cloudflare Email Service's send binding
+   * (wrangler.jsonc "send_email"), sending from EMAIL_FROM (a var; no-reply@averages.io when unset) on the
+   * onboarded averages.io domain. Unset: POST /email/code answers 503 email_not_configured.
+   */
+  EMAIL?: SendEmailBinding;
+  EMAIL_FROM?: string;
   /**
    * Canva connections and drafts: one CanvaStore Durable Object per student,
    * also in the "us" jurisdiction (see canvaStore below). Added 2026-10-05.
@@ -2771,6 +2779,43 @@ app.route("/messages", messagesRoutes(extrasDeps));
 
 // Link previews in messages (2026-11-03, src/linkPreview.ts): the page's title, site and picture; the picture comes
 // through here so a student's browser never contacts the site. Signed-in only.
+/* ── Verify your email (2026-11-06, src/emailCode.ts) ─────────────────────── */
+app.post("/email/code", requireSession, async (c) => {
+  const session = c.get("session");
+  c.header("Cache-Control", "no-store");
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  if (session.inc) return c.json({ error: "not_in_incognito" }, 403);
+  if (!c.env.SESSION_SECRET) return c.json({ error: "server_misconfigured" }, 500);
+  const body = (await c.req.json().catch(() => null)) as { email?: unknown } | null;
+  const email = cleanEmail(body?.email);
+  if (!email) return c.json({ error: "bad_email" }, 400);
+  if (!c.env.EMAIL) return c.json({ error: "email_not_configured" }, 503);
+  const code = newCode();
+  const { subject, text, html } = codeMessage(code);
+  try {
+    await c.env.EMAIL.send({ to: email, from: { email: c.env.EMAIL_FROM || DEFAULT_EMAIL_FROM, name: "Averages.io" }, subject, text, html });
+  } catch (err) {
+    const f = sendFailure(err);
+    console.error(JSON.stringify({ event: "email_code_failed", code: String((err as { code?: unknown })?.code ?? "") }));
+    return c.json({ error: f.error }, f.status);
+  }
+  const token = await sealValue({ u: session.uid, e: email, h: await codeHash(c.env.SESSION_SECRET, session.uid, email, code) }, c.env.SESSION_SECRET, EMAIL_CODE_PURPOSE, EMAIL_CODE_TTL);
+  return c.json({ ok: true, token, expiresIn: EMAIL_CODE_TTL });
+});
+app.post("/email/verify", requireSession, async (c) => {
+  const session = c.get("session");
+  c.header("Cache-Control", "no-store");
+  if (isDemo(session) || session.inc) return c.json({ error: "not_available" }, 403);
+  const body = (await c.req.json().catch(() => null)) as { email?: unknown; code?: unknown; token?: unknown } | null;
+  const email = cleanEmail(body?.email), code = typeof body?.code === "string" ? body.code.trim() : "";
+  if (!email || !/^\d{6}$/.test(code) || typeof body?.token !== "string" || body.token.length > 2048) return c.json({ error: "bad_request" }, 400);
+  const sealed = (await openValue(body.token, c.env.SESSION_SECRET, EMAIL_CODE_PURPOSE)) as { u?: string; e?: string; h?: string } | null;
+  // run out, or for someone else, or for another address: ask for a new code
+  if (!sealed || sealed.u !== session.uid || sealed.e !== email || typeof sealed.h !== "string") return c.json({ error: "code_expired" }, 400);
+  if (!sameHash(sealed.h, await codeHash(c.env.SESSION_SECRET, session.uid, email, code))) return c.json({ error: "wrong_code" }, 400);
+  return c.json({ ok: true, email });
+});
+
 app.get("/links/preview", requireSession, async (c) => {
   c.header("Cache-Control", "private, max-age=3600");
   const target = parseTarget(c.req.query("url"));

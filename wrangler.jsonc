@@ -32,6 +32,9 @@
     ]
   },
   "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
+  // "Verify your email" codes (2026-11-06, src/emailCode.ts): Cloudflare Email Service, from averages.io only.
+  // averages.io must be onboarded once in the dashboard: Compute > Email Service > Email Sending > Onboard Domain.
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["no-reply@averages.io"] }],
   "ratelimits": [
     { "name": "RATE_LIMIT_SIGNIN", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
     { "name": "RATE_LIMIT_DATA", "namespace_id": "1002", "simple": { "limit": 90, "period": 60 } },

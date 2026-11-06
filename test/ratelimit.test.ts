@@ -55,9 +55,12 @@ check("the numbers", Object.values(RATE_RULES).map((r) => [r.name, r.limit, r.wi
   ["apply", 5, 600000, "ip"],
   ["applyCode", 5, 600000, "ip"],
   ["applyVerify", 20, 600000, "ip"],
+  ["emailCode", 5, 600000, "student"],
+  ["emailVerify", 20, 600000, "student"],
 ]);
 check("school applications per IP; Martin's list like sign-in", [name("POST", "/schools/apply"), name("GET", "/schools/applications")], ["apply", "signin"]);
 check("verify-email codes have their own rules", [name("POST", "/schools/apply/code"), name("POST", "/schools/apply/verify")], ["applyCode", "applyVerify"]);
+check("onboarding's email codes too (2026-11-06)", [name("POST", "/email/code"), name("POST", "/email/verify")], ["emailCode", "emailVerify"]);
 
 console.log("\nsliding window");
 {

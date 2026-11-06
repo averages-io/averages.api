@@ -54,7 +54,7 @@ import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
 
 export interface RateRule {
-  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "billing" | "apply" | "applyCode" | "applyVerify";
+  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "billing" | "apply" | "applyCode" | "applyVerify" | "emailCode" | "emailVerify";
   limit: number;
   windowMs: number;
   by: "ip" | "student";
@@ -95,6 +95,10 @@ export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   // checking codes allows typos. Each address also has its own limits (SchoolsStore).
   applyCode: { name: "applyCode", limit: 5, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY_CODE" },
   applyVerify: { name: "applyVerify", limit: 20, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY_VERIFY" },
+  // "Verify your email" in onboarding and Settings (2026-11-06, src/emailCode.ts): each code is an email we send, so
+  // 5 per 10 minutes per student; checking allows typos, 20 per 10 minutes (a million codes: guessing gets nowhere).
+  emailCode: { name: "emailCode", limit: 5, windowMs: 10 * MINUTE, by: "student", binding: "RATE_LIMIT_APPLY_CODE" },
+  emailVerify: { name: "emailVerify", limit: 20, windowMs: 10 * MINUTE, by: "student", binding: "RATE_LIMIT_APPLY_VERIFY" },
 };
 
 function under(path: string, prefix: string): boolean {
@@ -108,6 +112,8 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (method === "POST" && path === "/schools/apply") return RATE_RULES.apply;
   if (method === "POST" && path === "/schools/apply/code") return RATE_RULES.applyCode;
   if (method === "POST" && path === "/schools/apply/verify") return RATE_RULES.applyVerify;
+  if (method === "POST" && path === "/email/code") return RATE_RULES.emailCode;
+  if (method === "POST" && path === "/email/verify") return RATE_RULES.emailVerify;
   // Martin's list: per IP like sign-in, so its key can't be guessed quickly.
   if (path === "/schools/applications") return RATE_RULES.signin;
   // Who's signed in, and Sync Across Devices: per student like the data (2026-10-06 review).
