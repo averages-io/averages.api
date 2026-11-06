@@ -10,6 +10,9 @@
  */
 
 import {
+  discussionsAsWork,
+  adaptSchoologyGradebook,
+  freshenUpdated,
   adaptAssignmentDetail,
   adaptAssignments,
   assignmentTypesSeen,
@@ -82,6 +85,10 @@ checkTrue("prediction floors at 0", collapse.predictedPct >= 0);
 check("a single score has no trend", predict([85]).trend, "flat");
 check("a single score predicts itself", predict([85]).predictedPct, 85);
 check("no scores is handled", predict([]), { predictedPct: 0, trend: "flat" });
+// With the class's grade (2026-11-06): Martin's 100, 90, 71, 83, 85 at 79% projects lower, not an A
+check("falling scores project below the grade", predict([100, 90, 71, 83, 85], 79), { predictedPct: 77, trend: "down" });
+check("rising scores project above it", predict([70, 75, 82, 88, 93], 80).trend, "up");
+check("never more than 15 points away", predict([0, 0, 0, 0, 0], 95).predictedPct, 80);
 
 console.log("\ncourse colors");
 checkTrue("assigns a hex color", /^#[0-9a-f]{6}$/i.test(colorForCourse("12345")));
@@ -334,6 +341,24 @@ console.log("\ntrend titles and one assignment's score (2026-10-15)");
   check("score found by assignment id", assignmentScore(grades, "11", "502"), { earned: 45, possible: 50 });
   check("excused work has no score", assignmentScore(grades, "11", "504"), null);
   check("not graded / other class: null", [assignmentScore(grades, "11", "999"), assignmentScore(grades, "12", "501"), assignmentScore([], "11", "501")], [null, null, null]);
+}
+
+console.log("\ndiscussions, new quizzes and Updated (2026-11-06)");
+{
+  const d = discussionsAsWork([
+    { id: 701, title: "Was George right?", due: "2026-10-24 23:59:00", graded: 1, published: 1, grade_item_id: 702, body: "Post, then reply twice." },
+    { id: 703, title: "Questions about the lab", due: null, graded: 0, published: 1 },
+    { id: 704, title: "Draft", due: "2026-11-01 23:59:00", graded: 1, published: 0 },
+  ]);
+  check("graded or dated, published discussions are work", d.map((x) => [x.id, x.type, x.allow_dropbox, x.description]), [[701, "discussion", "0", "Post, then reply twice."]]);
+  const { OVERDUE } = adaptAssignments({ "9": d.concat([{ id: 705, title: "Unit 3 Quiz", type: "assessment_v2", due: "2026-10-20 23:59:00" }]) }, "UTC", Date.parse("2026-11-06T00:00:00Z"));
+  check("listed with their type; a new Test/Quiz is a test", OVERDUE.map((x) => [x.title, x.type, x.noDropbox ?? false]), [["Unit 3 Quiz", "assessment", false], ["Was George right?", "discussion", true]]);
+  const courses = [{ id: "9", updated: "3d ago" }];
+  const now = Date.parse("2026-11-06T12:00:00Z");
+  freshenUpdated(courses, [], { "9": [{ id: 1, last_updated: String(Math.floor((now - 2 * 3600_000) / 1000)) }] }, now);
+  check("Updated counts work posted after the last grade", courses[0].updated, "2h ago");
+  const gb = adaptSchoologyGradebook({ categories: null, assignments: d, gradeEntry: { period: [{ assignment: [{ assignment_id: 702, grade: 9, max_points: 10, timestamp: 1793000000 }] }] } });
+  check("a discussion's grade is found under its grade item", gb.categories[0].assignments.map((a: any) => [a.title, a.score ?? null]), [["Was George right?", 9]]);
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

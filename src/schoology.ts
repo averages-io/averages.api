@@ -362,6 +362,17 @@ export async function getAssignmentsWithAttachments(sectionId: string, creds: Cr
   return listOf(payload, "assignment");
 }
 
+/** A class's discussions (2026-11-06): the graded ones and those with a due date count as work (discussionsAsWork). */
+export async function getDiscussions(sectionId: string, creds: Credentials) {
+  const payload = await schoologyGet(`/sections/${sectionId}/discussions`, creds, { limit: COURSE_FILE_PAGE });
+  return listOf(payload, "discussion");
+}
+
+/** One discussion, for its page (the prompt, due date and points). */
+export async function getDiscussion(sectionId: string, discussionId: string, creds: Credentials) {
+  return schoologyGet<Record<string, any>>(`/sections/${sectionId}/discussions/${discussionId}`, creds);
+}
+
 /** One document with its attachment, so a download is looked up again on the Worker. */
 export async function getDocument(sectionId: string, documentId: string, creds: Credentials) {
   return schoologyGet<Record<string, any>>(`/sections/${sectionId}/documents/${documentId}`, creds, {

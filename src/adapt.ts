@@ -121,11 +121,26 @@ export function computeProjectedGPA(courses: { predicted: string }[]): number {
  * current one. Falls back to the current average when there aren't enough
  * graded points to establish a direction (a single score is not a trend).
  */
-export function predict(points: number[]): {
+export function predict(points: number[], current?: number): {
   predictedPct: number;
   trend: "up" | "down" | "flat";
 } {
-  const clean = points.filter((p) => typeof p === "number" && !Number.isNaN(p));
+  let clean = points.filter((p) => typeof p === "number" && !Number.isNaN(p));
+  // With the class's grade (2026-11-06, Martin: scores going 100, 90, 71, 83, 85 projected an A): the latest 8 scores'
+  // line, one step on, pulls the grade half way toward it. So falling scores project lower than now, rising higher,
+  // and one odd score can't swing it far. The projection never moves the grade more than 15 points.
+  if (typeof current === "number" && Number.isFinite(current) && current > 0 && clean.length >= 3) {
+    clean = clean.slice(-8);
+    const n = clean.length, mx = (n - 1) / 2, my = clean.reduce((a, b) => a + b, 0) / n;
+    let num = 0, den = 0;
+    for (let i = 0; i < n; i++) { num += (i - mx) * (clean[i] - my); den += (i - mx) ** 2; }
+    const slope = den === 0 ? 0 : num / den;
+    const next = Math.max(0, Math.min(100, my + slope * (n - mx)));
+    const moved = Math.max(-15, Math.min(15, (next - current) / 2));
+    const predictedPct = Math.max(0, Math.min(100, Math.round(current + moved)));
+    const trend = moved > 0.5 ? "up" : moved < -0.5 ? "down" : "flat";
+    return { predictedPct, trend };
+  }
   if (clean.length === 0) return { predictedPct: 0, trend: "flat" };
 
   const average = clean.reduce((a, b) => a + b, 0) / clean.length;
@@ -413,6 +428,8 @@ export function addHistoryTitles(history: Record<string, HistorySeries>, assignm
     for (const a of assignmentsBySection[sectionId] ?? []) {
       const id = String(a?.id ?? "");
       if (/^\d{1,20}$/.test(id)) byId.set(id, a);
+      const gid = String(a?.grade_item_id ?? "");
+      if (gid !== id && /^\d{1,20}$/.test(gid)) byId.set(gid, a);
     }
     series.titles = series.points.map((_, i) => {
       const a = byId.get(ids[i] ?? "");
@@ -445,7 +462,7 @@ function asArray(value: unknown): Raw[] {
  * one per grade, and the section list has none either, so "Updated" was always
  * blank. This is the newest grade's time (unix seconds), or undefined.
  */
-function latestGradeTime(gradeEntry: Raw): number | undefined {
+function latestGradeTime(gradeEntry: Raw | undefined): number | undefined {
   let latest = 0;
   for (const period of asArray(gradeEntry?.period)) {
     for (const a of asArray(period?.assignment)) {
@@ -454,6 +471,24 @@ function latestGradeTime(gradeEntry: Raw): number | undefined {
     }
   }
   return latest ? Math.floor(latest / 1000) : undefined;
+}
+
+/**
+ * "Updated" counts new and changed work too (2026-11-06, Martin: the column didn't change when a quiz or discussion
+ * was posted): the newest of the class's latest grade and its work's last_updated (unix seconds, on assignments and
+ * tests; discussions don't have one). Run after the bundle reads the class lists.
+ */
+export function freshenUpdated(courses: { id: string; updated: string }[], grades: Raw[], bySection: Record<string, Raw[]>, now: number = Date.now()): void {
+  const gradesBySection = new Map<string, Raw>();
+  for (const entry of grades ?? []) gradesBySection.set(String(entry?.section_id ?? entry?.id ?? ""), entry);
+  for (const c of courses) {
+    let latest = latestGradeTime(gradesBySection.get(c.id)) ?? 0;
+    for (const a of bySection[c.id] ?? []) {
+      const t = Number(a?.last_updated ?? 0);
+      if (Number.isFinite(t) && t > latest && t * 1000 <= now + 60_000) latest = t;
+    }
+    if (latest) c.updated = relativeTime(latest, now);
+  }
 }
 
 export function adaptCourses(
@@ -488,7 +523,7 @@ export function adaptCourses(
       : null;
     const pct = reportedPct ?? fallbackPct ?? 0;
 
-    const { predictedPct, trend } = predict(history.points);
+    const { predictedPct, trend } = predict(history.points, reportedPct ?? undefined);
     const name =
       section?.course_title ||
       section?.section_title ||
@@ -557,7 +592,22 @@ const TYPE_MAP: Record<string, string> = {
   assessment: "assessment",
   quiz: "assessment",
   test: "assessment",
+  // Schoology's newer Test/Quiz (2026-11-06, Martin: tests didn't show as tests): "assessment_v2" in a class's list.
+  assessment_v2: "assessment",
 };
+
+/**
+ * A class's discussions as work (2026-11-06, Martin: "Was George right?" and "Where do you see parabolas in real
+ * life?" were on Schoology's To Do and nowhere in Averages). GET /sections/{id}/discussions lists them apart from the
+ * assignments; the graded ones, and any with a due date, are work like an assignment: listed by due date, graded in
+ * the gradebook (under their grade_item_id), answered on Schoology (no Turn in here). The rest are just class
+ * conversations and stay out.
+ */
+export function discussionsAsWork(list: Raw[] | null | undefined): Raw[] {
+  return (list ?? [])
+    .filter((d) => d && /^\d{1,20}$/.test(String(d.id ?? "")) && String(d.published ?? "1") !== "0" && (d.due || String(d.graded ?? "0") === "1"))
+    .map((d) => ({ ...d, type: "discussion", allow_dropbox: "0", description: d.body ?? "" }));
+}
 
 export function adaptAssignments(
   assignmentsBySection: Record<string, Raw[]>,
@@ -793,6 +843,8 @@ export interface CourseFile {
   kind: "document" | "assignment";
   /** That document's or assignment's id (needed to download it again). */
   parent: string;
+  /** The class folder it's in, when not at the top level (2026-11-06). */
+  folder?: string;
   parentTitle: string;
   /** Upload time in ms, 0 when unknown. */
   at: number;
@@ -846,8 +898,11 @@ export function adaptCourseFiles(
         const parent = String(item?.id ?? "");
         if (!/^\d{1,20}$/.test(parent)) continue;
         const parentTitle = toPlainText(item?.title ?? "").slice(0, 255) || (kind === "document" ? "Document" : "Assignment");
+        // the class folder it's in (2026-11-06, Martin: folders didn't show in Files); "" at the top level
+        const fid = String(item?.course_fid ?? item?.folder_id ?? "");
+        const folder = /^\d{1,20}$/.test(fid) && fid !== "0" ? fid : "";
         for (const f of attachedFiles(item)) {
-          files.push({ ...f, course, kind, parent, parentTitle });
+          files.push({ ...f, course, kind, parent, parentTitle, ...(folder ? { folder } : {}) });
         }
       }
     }
@@ -894,6 +949,8 @@ function titlesOf(assignments: Raw[] | undefined): Map<string, string> {
   for (const a of assignments ?? []) {
     const id = String(a?.id ?? "");
     if (/^\d{1,20}$/.test(id)) titles.set(id, toPlainText(a?.title ?? "").slice(0, 200) || "Untitled");
+    const gid = String(a?.grade_item_id ?? "");   // a discussion's grade is filed under its grade item (2026-11-06)
+    if (gid !== id && /^\d{1,20}$/.test(gid)) titles.set(gid, toPlainText(a?.title ?? "").slice(0, 200) || "Untitled");
   }
   return titles;
 }
@@ -996,7 +1053,9 @@ export function adaptSchoologyGradebook(input: { categories: Raw[] | null; grade
     if (!/^\d{1,20}$/.test(id) || seen.has(id)) continue;
     seen.add(id);
     if (String(a?.published ?? "1") === "0" || String(a?.count_in_grade ?? "1") === "0") continue;
-    const graded = scores.get(id);
+    const gid = String(a?.grade_item_id ?? "");
+    if (gid && gid !== id) seen.add(gid);   // a discussion's score is filed under its grade item (2026-11-06)
+    const graded = scores.get(id) ?? (gid ? scores.get(gid) : undefined);
     const points = num(a?.max_points) ?? num(graded?.max_points);
     if (points === null || points <= 0) continue;
     const title = toPlainText(a?.title ?? "").slice(0, 200) || "Untitled";

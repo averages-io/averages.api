@@ -43,6 +43,8 @@ import {
   getDocuments,
   openAttachment,
   getAssignments,
+  getDiscussion,
+  getDiscussions,
   getGrades,
   getMe,
   getMessages,
@@ -53,6 +55,8 @@ import {
 import {
   adaptAssignmentDetail,
   adaptAssignments,
+  discussionsAsWork,
+  freshenUpdated,
   assignmentTypesSeen,
   adaptCourseFiles,
   adaptCourses,
@@ -162,7 +166,7 @@ import {
   safeTimeZone,
 } from "./classroom.ts";
 import { findMessageFile, getRecipients, getThread, namesFrom } from "./messages.ts";
-import { getSectionGrades } from "./extras.ts";
+import { getFolder, getSectionGrades, parseFolder } from "./extras.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
 import { getLinkImage, getLinkPreview, parseTarget } from "./linkPreview.ts";
 import { rateLimit } from "./rateLimit.ts";
@@ -1363,10 +1367,12 @@ app.get("/data/bundle", requireSession, async (c) => {
     await Promise.all(
       COURSES.slice(0, 12).map(async (course) => {
         try {
-          assignmentsBySection[course.id] = await getAssignments(
-            course.id,
-            session
-          );
+          // Graded discussions are work too (2026-11-06): read alongside, never the reason a class's list is empty.
+          const [list, discussions] = await Promise.all([
+            getAssignments(course.id, session),
+            getDiscussions(course.id, session).catch(() => []),
+          ]);
+          assignmentsBySection[course.id] = list.concat(discussionsAsWork(discussions));
         } catch (error) {
           console.error("bundle_assignments_failed", error instanceof SchoologyError ? error.status : "", error instanceof SchoologyError ? String(error.body ?? "").slice(0, 160) : String(error).slice(0, 160));
           assignmentsBySection[course.id] = [];
@@ -1375,6 +1381,11 @@ app.get("/data/bundle", requireSession, async (c) => {
     );
 
     const { OVERDUE, UPCOMING, TODAY } = adaptAssignments(assignmentsBySection, studentTimeZone(c));
+    try {
+      freshenUpdated(COURSES, grades, assignmentsBySection);
+    } catch {
+      /* the grade time stays */
+    }
     // Which assignment_type values real districts send (2026-10-16), to check
     // how Google Assignments and Turnitin show up (see isOutsideTool). Plain
     // words only, never titles or grades. Remove once confirmed.
@@ -1660,14 +1671,17 @@ app.get("/data/assignment", requireSession, async (c) => {
     // The student's score comes from their grades in this class, asked for at
     // the same time (2026-10-15, the Submissions box's "18/20 A-"). It never
     // fails the page: without it the box shows just the points.
+    // A discussion (2026-11-06, type=discussion from the lists): its own Schoology read, shown like an assignment
+    // that's answered on Schoology.
+    const discussion = c.req.query("type") === "discussion";
     const [raw, gradeSections] = await Promise.all([
-      getAssignment(section, id, session),
+      discussion ? getDiscussion(section, id, session).then((d) => discussionsAsWork([d])[0] ?? { ...d, type: "discussion" }) : getAssignment(section, id, session),
       getSectionGrades(session.uid, section, session).catch(() => null),
     ]);
     c.header("Cache-Control", "private, no-store");
     let score: { earned: number; possible: number } | null = null;
     try {
-      score = gradeSections ? assignmentScore(gradeSections, section, id) : null;
+      score = gradeSections ? assignmentScore(gradeSections, section, id) ?? (raw?.grade_item_id ? assignmentScore(gradeSections, section, String(raw.grade_item_id)) : null) : null;
     } catch {
       score = null;
     }
@@ -1870,16 +1884,20 @@ app.get("/data/files", async (c) => {
     const worker = async () => {
       while (next < courses.length) {
         const course = courses[next++];
-        const [documents, assignments] = await Promise.all([
+        const [documents, assignments, root] = await Promise.all([
           getDocuments(course.id, session).catch(() => null),
           getAssignmentsWithAttachments(course.id, session).catch(() => null),
+          // the class's top-level folders, for Files (2026-11-06): one read per class
+          getFolder(course.id, "0", session).catch(() => null),
         ]);
         bySection[course.id] = { documents, assignments };
+        if (root) for (const f of parseFolder(root).folders) folders.push({ ...f, course: course.id });
       }
     };
+    const folders: { id: string; title: string; color: string; course: string }[] = [];
     await Promise.all(Array.from({ length: Math.min(4, courses.length) }, worker));
     const { files, partial } = adaptCourseFiles(bySection);
-    return c.json({ courses, files, partial });
+    return c.json({ courses, files, folders, partial });
   } catch (error) {
     if (error instanceof SchoologyError) return c.json({ error: "schoology_error", status: error.status }, 502);
     return c.json({ error: "unexpected_error" }, 500);

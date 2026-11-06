@@ -57,8 +57,8 @@ export interface SyncRecord {
   seen?: SeenLists;
 }
 
-export type SeenLists = Partial<Record<"u" | "g" | "m", string[]>>;
-export const SEEN_KINDS = ["u", "g", "m"] as const;
+export type SeenLists = Partial<Record<(typeof SEEN_KINDS)[number], string[]>>;
+export const SEEN_KINDS = ["u", "g", "m", "a", "f"] as const; // a, f: new work and new class files (2026-11-06)
 export const SEEN_CAP = 300;
 const SEEN_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
 

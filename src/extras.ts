@@ -25,10 +25,10 @@
  * comes from this module's roster reads.
  */
 
-import { adaptCourses, adaptSchoologyGradebook, clip, colorForCourse, relativeTime, schoologyTime, toPlainText } from "./adapt.ts";
+import { adaptCourses, adaptSchoologyGradebook, clip, discussionsAsWork, colorForCourse, relativeTime, schoologyTime, toPlainText } from "./adapt.ts";
 import { CallBudget, CLASSROOM_ID_RE, ClassroomError, classroomList, dueMs, itemType, listCourses, plain, type GradebookCategory } from "./classroom.ts";
 import type { Credentials } from "./oauth.ts";
-import { getAssignments, getSections, listOf, SchoologyError, schoologyGet } from "./schoology.ts";
+import { getAssignments, getDiscussions, getSections, listOf, SchoologyError, schoologyGet } from "./schoology.ts";
 
 type Raw = Record<string, any>;
 
@@ -892,14 +892,16 @@ export async function fetchSchoologyGradebook(uid: string, sectionId: string, cr
       if (!refused(error)) partial = true;
       return null;
     });
-  const [categories, grades, assignments] = await Promise.all([
+  const [categories, grades, list, discussions] = await Promise.all([
     soft(getGradingCategories(sectionId, creds)),
     soft(getSectionGrades(uid, sectionId, creds)),
     getAssignments(sectionId, creds),
+    getDiscussions(sectionId, creds).catch(() => []),   // graded discussions are in the gradebook too (2026-11-06)
   ]);
+  const assignments = list.concat(discussionsAsWork(discussions));
   const gradeEntry = (grades ?? []).find((g) => String(g?.section_id ?? g?.id ?? "") === sectionId);
   return {
     GRADEBOOK: { [sectionId]: adaptSchoologyGradebook({ categories: categories && categories.length ? categories : null, gradeEntry, assignments }) },
-    partial: partial || assignments.length >= 200,
+    partial: partial || list.length >= 200,
   };
 }

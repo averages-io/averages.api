@@ -168,10 +168,11 @@ console.log("\nkvFromSyncStore (Durable Object storage)");
 console.log("\nseen notifications (2026-11-03)");
 {
   check("merge keeps everything from both devices, once", mergeSeen({ g: ["1", "2"], m: ["9"] }, { g: ["2", "3"], u: ["5"] }), { u: ["5"], g: ["1", "2", "3"], m: ["9"] });
-  check("only the three kinds and id-looking values", cleanSeen({ g: ["123", "<script>", "a b", 7], x: ["1"], m: "nope" }), { g: ["123", "7"] });
+  check("only the known kinds and id-looking values", cleanSeen({ g: ["123", "<script>", "a b", 7], x: ["1"], m: "nope" }), { g: ["123", "7"] });
   const many = Array.from({ length: SEEN_CAP + 50 }, (_, i) => String(i));
   const merged = mergeSeen({ g: many }, { g: ["new"] });
   check("capped at SEEN_CAP, oldest dropped, newest kept", [merged.g!.length, merged.g![0], merged.g![merged.g!.length - 1]], [SEEN_CAP, "51", "new"]);
+  check("new work and new files are kept too (2026-11-06)", mergeSeen({ a: ["71"] }, { f: ["74"], a: ["72"] }), { a: ["71", "72"], f: ["74"] });
   check("nothing in, nothing out", [mergeSeen(null, undefined), cleanSeen("x")], [{}, {}]);
   const store = new Map<string, string>();
   const kv: KVLike = { get: async (k) => (store.has(k) ? JSON.parse(store.get(k)!) : null), put: async (k, v) => { store.set(k, v); }, delete: async (k) => { store.delete(k); } };

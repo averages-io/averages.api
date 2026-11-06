@@ -271,7 +271,8 @@ freshCalls();
   check("GRADEBOOK rows", b.GRADEBOOK["101"].categories.map((c: any) => [c.name, c.weight, c.assignments.map((a: any) => [a.title, a.graded])]), [["All work", 100, [["Titration Lab", true], ["Unit 2 Test", false]]]]);
   check("no GPA snapshot any more (weekly email removed)", ["gpaVsLastWeek" in b, typeof b.projectedGPA], [false, "number"]);
   const paths = schoologyCalls().map((x) => x.path).sort();
-  check("one recipients call; no grading-category or other extra calls", paths, ["/messages/inbox", "/messages/recipients", "/sections/101/assignments", "/sections/102/assignments", `/users/${ME}/grades`, `/users/${ME}/sections`]);
+  // + each class's discussions (2026-11-06): graded discussions are work too
+  check("one recipients call; no grading-category or other extra calls", paths, ["/messages/inbox", "/messages/recipients", "/sections/101/assignments", "/sections/101/discussions", "/sections/102/assignments", "/sections/102/discussions", `/users/${ME}/grades`, `/users/${ME}/sections`]);
   world.recipients = 403;
   const refusedNames = await json(await call("/data/bundle", { cookie: schoologySession }));
   check("recipients refused: still a bundle, sender is Teacher (never the id)", refusedNames.MESSAGES.map((m: any) => m.from), ["Teacher"]);
@@ -448,7 +449,7 @@ freshCalls();
 {
   const g = await json(await call("/data/gradebook?course=101", { cookie: schoologySession }));
   check("exact weights from grading_categories", g.GRADEBOOK["101"].categories.map((c: any) => [c.name, c.weight, c.assignments.map((a: any) => [a.title, a.score ?? null])]), [["Tests", 70, [["Unit 2 Test", null]]], ["Labs", 30, [["Titration Lab", 18]]]]);
-  check("three calls: categories, this section's grades, assignments", schoologyCalls().map((x) => x.path + (x.query.get("section_id") ? `?section_id=${x.query.get("section_id")}` : "")).sort(), [`/sections/101/assignments`, `/sections/101/grading_categories`, `/users/${ME}/grades?section_id=101`]);
+  check("four calls: categories, this section's grades, assignments, discussions", schoologyCalls().map((x) => x.path + (x.query.get("section_id") ? `?section_id=${x.query.get("section_id")}` : "")).sort(), [`/sections/101/assignments`, `/sections/101/discussions`, `/sections/101/grading_categories`, `/users/${ME}/grades?section_id=101`]);
   world.categories["101"] = 403;
   const fallback = await json(await call("/data/gradebook?course=101", { cookie: schoologySession }));
   check("categories refused: the grades payload's list, not partial", [fallback.GRADEBOOK["101"].categories[0].name, fallback.partial], ["All work", false]);
