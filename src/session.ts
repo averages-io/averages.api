@@ -17,6 +17,8 @@ export interface SessionData extends Credentials {
   /** 2 = sealed with the 15-day lifetime. Missing on older (30-day) sessions. */
   v?: number;
   inc?: true;
+  /** The school's Schoology address signed in through (Sign in with Schoology only). */
+  sd?: string;
   g?: GoogleSession;
   p?: SessionProfile;
 }

@@ -225,10 +225,26 @@ export interface SchoologyUser {
   name_last?: string;
   primary_email?: string;
   picture_url?: string;
+  role_id?: string | number;
 }
 
 export async function getMe(creds: Credentials): Promise<SchoologyUser> {
   return schoologyGet<SchoologyUser>("/users/me", creds);
+}
+
+/**
+ * A teacher or admin account: its Schoology role is marked faculty (GET /roles/{id}: "faculty": 1). Averages.io is
+ * for students, so these can't sign in. Unknown (no role, or Schoology won't say) counts as a student.
+ */
+export async function isFacultyAccount(me: SchoologyUser, creds: Credentials): Promise<boolean> {
+  const role = String(me.role_id ?? "");
+  if (!/^\d{1,20}$/.test(role)) return false;
+  try {
+    const r = await schoologyGet<{ faculty?: number | string }>(`/roles/${role}`, creds);
+    return String(r?.faculty ?? "0") === "1";
+  } catch {
+    return false;
+  }
 }
 
 export async function getSections(uid: string, creds: Credentials) {

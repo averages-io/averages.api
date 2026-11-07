@@ -36,7 +36,7 @@ import {
   getDiscussion,
   getDiscussions,
   getGrades,
-  getMe,
+  getMe, isFacultyAccount,
   getMessages,
   getSections,
   schoologyGet,
@@ -234,6 +234,8 @@ type Bindings = {
   EARLY?: FeatureKey[];
   CALENDAR?: DurableObjectNamespace;
   MAINTENANCE_MESSAGE?: string;
+  /** "1": Fullscreen for everyone (while its switch is on). "0": only testers (fullscreenTester). Unset counts as "1". */
+  FULLSCREEN_PUBLIC?: string;
   REVIEW_KEY?: string;
   FLAGS?: { getBooleanValue(key: string, defaultValue: boolean, context?: Record<string, unknown>): Promise<boolean> };
   REVIEW_SECRET?: string;
@@ -538,6 +540,7 @@ app.post("/auth/session", async (c) => {
     if (!uid) {
       return c.json({ error: "no_user_id" }, 502);
     }
+    if (await isFacultyAccount(me, { key, secret })) return c.json({ error: "teacher_account" }, 403);
 
     // Under 13 (the login page's 13+ box left unticked): Incognito only, sealed
     // into the session so nothing stored on our servers can be turned on.
@@ -668,9 +671,10 @@ app.get("/auth/schoology/callback", async (c) => {
     const me = await getMe(creds);
     const uid = sandbox ? REVIEW_UID : String(me.uid ?? me.id ?? "");
     if (!uid) return signinBack(c, "no_user_id");
+    if (!sandbox && (await isFacultyAccount(me, creds))) return signinBack(c, "teacher_account");
     const p = profileFrom(me);
     // The access token rides in the sealed session cookie, like a personal key does: never stored on our servers.
-    const session = await sealSession({ ...creds, uid, p, ...(pending.u13 ? { inc: true as const } : {}) }, c.env.SESSION_SECRET);
+    const session = await sealSession({ ...creds, uid, p, sd: pending.d, ...(pending.u13 ? { inc: true as const } : {}) }, c.env.SESSION_SECRET);
     c.header("Set-Cookie", sessionCookie(session, COOKIE_DOMAIN), { append: true });
     c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
     console.log(JSON.stringify({ event: "schoology_signin_ok" }));
@@ -1625,12 +1629,29 @@ app.get("/config/cloud", (c) => {
   return c.json(cfg);
 });
 
-app.get("/config/features", (c) => {
+/**
+ * Who sees Fullscreen while FULLSCREEN_PUBLIC is "0": students signed in through the app.schoology.com sandbox/dev
+ * school, and API-key sign-ins (testers and the reviewer account). Not demo.
+ */
+export function fullscreenTester(session: SessionData | null): boolean {
+  if (!session || isDemo(session) || session.g) return false;
+  if (typeof session.sd === "string") return session.sd === "app.schoology.com";
+  return !session.token;
+}
+export function fullscreenPublic(env: { FULLSCREEN_PUBLIC?: string }): boolean {
+  return String(env.FULLSCREEN_PUBLIC ?? "1").trim() !== "0";
+}
+
+app.get("/config/features", async (c) => {
   const features = Object.fromEntries(FEATURE_KEYS.map((k) => [k, featureOn(c.env, k)])) as Features;
   const everyone = !plusRequired(c.env as any);
   if (everyone) for (const k of FEATURE_KEYS) if (!features[k] && earlyKey(c.env, k)) features[k] = true;
   const msg = typeof c.env.MAINTENANCE_MESSAGE === "string" ? c.env.MAINTENANCE_MESSAGE.trim().slice(0, 300) : "";
-  c.header("Cache-Control", "public, max-age=30");
+  // Fullscreen only for testers until FULLSCREEN_PUBLIC is "1": then the answer depends on who's asking.
+  const perStudent = !fullscreenPublic(c.env) && features.fullscreen;
+  if (perStudent) features.fullscreen = fullscreenTester(await sessionFrom(c));
+  c.header("Cache-Control", perStudent ? "private, no-store" : "public, max-age=30");
+  if (perStudent) c.header("Vary", "Cookie");
   return c.json({
     features,
     early: FEATURE_KEYS.filter((k) => !features[k] && earlyKey(c.env, k)),

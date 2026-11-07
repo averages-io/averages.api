@@ -644,6 +644,8 @@ export interface AssignmentDetail {
   files: AttachmentFile[];
   links: { title: string; url: string }[];
   outside: boolean;
+  /** "open": Schoology takes a submission now; "closed": the teacher closed it; "none": no dropbox. */
+  submissions?: "open" | "closed" | "none";
 }
 
 /**
@@ -694,6 +696,8 @@ export function adaptAssignmentDetail(raw: Raw, sectionId: string, tz = "UTC"): 
     files,
     links,
     outside: isOutsideTool(raw),
+    // Whether Schoology takes a submission right now: no dropbox at all, or the teacher closed it.
+    submissions: ["0", 0, false, "false"].includes(raw?.allow_dropbox) ? "none" : ["1", 1, true, "true"].includes(raw?.dropbox_locked) ? "closed" : "open",
   };
 }
 
