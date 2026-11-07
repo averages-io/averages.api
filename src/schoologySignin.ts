@@ -27,8 +27,8 @@ export const isSandboxConsumer = (c: Consumer | null): boolean => !!c && isSandb
 const HOST_RE = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/;
 
 /**
- * The school's Schoology address, cleaned ("https://NMUSD.schoology.com/home"
- * -> "nmusd.schoology.com"), or null. Only Schoology's own addresses
+ * The school's Schoology address, cleaned ("https://EXAMPLEUSD.schoology.com/home"
+ * -> "exampleusd.schoology.com"), or null. Only Schoology's own addresses
  * (*.schoology.com) and the schools in src/schools.ts (districts with their own
  * address, like lms.district.org) are allowed: anything else would make this
  * an open redirect to any site, with our name on it.

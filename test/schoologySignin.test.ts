@@ -50,15 +50,15 @@ function cookieValue(res: Response, name: string): string | null {
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
 console.log("helpers");
-check("domain: a district's schoology.com address, cleaned", schoolDomain("https://NMUSD.schoology.com/home"), "nmusd.schoology.com");
+check("domain: a district's schoology.com address, cleaned", schoolDomain("https://EXAMPLEUSD.schoology.com/home"), "exampleusd.schoology.com");
 check("domain: plain schoology.com goes to app.schoology.com", schoolDomain("schoology.com"), "app.schoology.com");
 check("domain: any other site is refused (no open redirect)", [schoolDomain("evil.example"), schoolDomain("schoology.com.evil.example"), schoolDomain("evilschoology.com")], [null, null, null]);
 check("domain: a listed district address is allowed", schoolDomain("lms.district.org", [{ domain: "lms.district.org" }]), "lms.district.org");
 check("domain: junk is refused", [schoolDomain(""), schoolDomain("a b.com"), schoolDomain("127.0.0.1"), schoolDomain(null)], [null, null, null, null]);
 check("token answer parsed", parseTokenAnswer("oauth_token=a1&oauth_token_secret=b2&xoauth=1"), { token: "a1", secret: "b2" });
 check("token answer missing a part", [parseTokenAnswer("oauth_token=a1"), parseTokenAnswer("<html>"), parseTokenAnswer("")], [null, null, null]);
-check("authorize goes to the school's own Schoology", authorizeUrl("nmusd.schoology.com", "T 1", "https://api.averages.io/auth/schoology/callback"),
-  "https://nmusd.schoology.com/oauth/authorize?oauth_token=T+1&oauth_callback=https%3A%2F%2Fapi.averages.io%2Fauth%2Fschoology%2Fcallback");
+check("authorize goes to the school's own Schoology", authorizeUrl("exampleusd.schoology.com", "T 1", "https://api.averages.io/auth/schoology/callback"),
+  "https://exampleusd.schoology.com/oauth/authorize?oauth_token=T+1&oauth_callback=https%3A%2F%2Fapi.averages.io%2Fauth%2Fschoology%2Fcallback");
 check("sameToken", [sameToken("abc", "abc"), sameToken("abc", "abd"), sameToken("", ""), sameToken("abc", "abcd")], [true, false, false, false]);
 check("consumer needs both secrets", [consumerFrom({}), consumerFrom({ SCHOOLOGY_CONSUMER_KEY: "k" }), consumerFrom({ SCHOOLOGY_CONSUMER_KEY: " k ", SCHOOLOGY_CONSUMER_SECRET: "s" })], [null, null, { key: "k", secret: "s" }]);
 
@@ -76,9 +76,9 @@ console.log("\nstart");
 let pending = "";
 {
   calls.length = 0;
-  const r = await call("/auth/schoology/start?domain=nmusd.schoology.com&under13=0");
+  const r = await call("/auth/schoology/start?domain=exampleusd.schoology.com&under13=0");
   const to = new URL(r.headers.get("Location") ?? "about:blank");
-  check("302 to the school's Schoology authorize page", [r.status, to.origin + to.pathname], [302, "https://nmusd.schoology.com/oauth/authorize"]);
+  check("302 to the school's Schoology authorize page", [r.status, to.origin + to.pathname], [302, "https://exampleusd.schoology.com/oauth/authorize"]);
   check("with the request token, coming back to the app's own site (Schoology only returns to the App URL's site)", [to.searchParams.get("oauth_token"), to.searchParams.get("oauth_callback")], ["REQTOKEN1", "https://app.averages.io/auth/schoology/callback"]);
   check("asked Schoology for a request token, signed with no token yet", [calls.map((c) => c.path), /oauth_token=""/.test(calls[0]?.auth ?? ""), /oauth_consumer_key="consumer-key-abc"/.test(calls[0]?.auth ?? "")], [["/v1/oauth/request_token"], true, true]);
   pending = cookieValue(r, OAUTH_COOKIE) ?? "";
@@ -90,11 +90,11 @@ let pending = "";
   const r = await call("/auth/schoology/start?domain=evil.example");
   check("an unknown site goes back to sign-in, never there", r.headers.get("Location"), "https://app.averages.io/?signin_error=unknown_school#schoology");
   ENV = { SESSION_SECRET: SECRET };
-  const r2 = await call("/auth/schoology/start?domain=nmusd.schoology.com");
+  const r2 = await call("/auth/schoology/start?domain=exampleusd.schoology.com");
   check("no consumer secrets: back with not_configured", r2.headers.get("Location"), "https://app.averages.io/?signin_error=not_configured#schoology");
   ENV = { SESSION_SECRET: SECRET, ...CONSUMER };
   refuse = true; calls.length = 0;
-  const r3 = await call("/auth/schoology/start?domain=nmusd.schoology.com");
+  const r3 = await call("/auth/schoology/start?domain=exampleusd.schoology.com");
   check("Schoology refusing our key: back with schoology_refused", r3.headers.get("Location"), "https://app.averages.io/?signin_error=schoology_refused#schoology");
   refuse = false;
 }
@@ -122,7 +122,7 @@ console.log("\ncallback");
   check("the in-between cookie is cleared", setCookies(r).some((c) => c.startsWith(`${OAUTH_COOKIE}=;`) && /Max-Age=0/.test(c)), true);
 
   // under 13: Incognito only, sealed in
-  const st = await call("/auth/schoology/start?domain=nmusd.schoology.com&under13=1");
+  const st = await call("/auth/schoology/start?domain=exampleusd.schoology.com&under13=1");
   const p13 = cookieValue(st, OAUTH_COOKIE) ?? "";
   const r13 = await call("/auth/schoology/callback?oauth_token=REQTOKEN1", `${OAUTH_COOKIE}=${p13}`);
   const s13 = await openSession(cookieValue(r13, SESSION_COOKIE) ?? "", SECRET);

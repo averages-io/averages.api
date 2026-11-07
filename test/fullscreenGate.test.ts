@@ -19,12 +19,12 @@ check("public unless it's \"0\"", [fullscreenPublic({}), fullscreenPublic({ FULL
 check("testers", [
   fullscreenTester(null),
   fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x", sd: "app.schoology.com" }),
-  fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x", sd: "nmusd.schoology.com" }),
+  fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x", sd: "exampleusd.schoology.com" }),
   fullscreenTester({ ...base, key: "k", secret: "s" }),
   fullscreenTester({ ...base, key: "demo", secret: "demo", uid: "__demo__" }),
   fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x" }),
   fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x", sd: "www.schoology.com" }),
-  fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x", sd: "nmusd.schoology.com" }, "nmusd.schoology.com"),
+  fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x", sd: "exampleusd.schoology.com" }, "exampleusd.schoology.com"),
 ], [false, true, false, true, false, true, true, true]);
 
 async function features(env: any, session?: any) {
@@ -36,7 +36,7 @@ async function features(env: any, session?: any) {
 const ON = { SESSION_SECRET: SECRET, FEATURES_ON: "fullscreen", FULLSCREEN_PUBLIC: "0" };
 const env0 = { ...ON };
 const r1 = await features(env0);
-const r2 = await features(env0, { key: "k", secret: "s", token: "t", tokenSecret: "x", uid: "5", sd: "nmusd.schoology.com" });
+const r2 = await features(env0, { key: "k", secret: "s", token: "t", tokenSecret: "x", uid: "5", sd: "exampleusd.schoology.com" });
 const r3 = await features(env0, { key: "k", secret: "s", token: "t", tokenSecret: "x", uid: "6", sd: "app.schoology.com" });
 const r4 = await features({ ...ON, FULLSCREEN_PUBLIC: "1" });
 console.log("  (switch reads as", JSON.stringify([r1, r4]), ")");
