@@ -17,7 +17,7 @@ import {
   refused,
   SCHOOLOGY_ID_RE,
 } from "./extras.ts";
-import { searchPeople,
+import { searchPeople, setThreadStatus,
   adaptRecipients,
   adaptThread,
   deleteThread,
@@ -285,6 +285,21 @@ export function messagesRoutes(deps: ExtrasDeps) {
       if (!sent.ok) return c.json({ error: sent.error }, 403);
       return c.json({ ok: true, id: sent.id });
     } catch (error) {
+      return schoologyFailure(c, error);
+    }
+  });
+
+  // Mark as read / unread, on Schoology too: { id, unread: true | false }
+  app.post("/status", deps.requireSession, guard, async (c: any) => {
+    const session = c.get("session");
+    const body = (await jsonBody(c)) as { id?: unknown; unread?: unknown } | null;
+    const id = typeof body?.id === "string" || typeof body?.id === "number" ? String(body.id) : "";
+    if (!ID_RE.test(id) || typeof body?.unread !== "boolean") return c.json({ error: "bad_request" }, 400);
+    try {
+      const done = await setThreadStatus(id, body.unread, session);
+      return done ? c.json({ ok: true }) : c.json({ error: "not_found" }, 404);
+    } catch (error) {
+      if (refused(error)) return c.json({ error: "not_allowed" }, 403);
       return schoologyFailure(c, error);
     }
   });

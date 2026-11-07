@@ -389,6 +389,19 @@ export async function getThread(id: string, creds: Credentials, opts: { keepUnre
   }
 }
 
+// Marks a conversation read or unread on Schoology too (PUT /messages/inbox/{id} { message_status }), so the dot
+// matches on Schoology's own site. Inbox only: a thread only in Sent has nothing to mark. False when it isn't there.
+export async function setThreadStatus(id: string, unread: boolean, creds: Credentials): Promise<boolean> {
+  if (!ID_RE.test(id)) return false;
+  try {
+    await schoologyRequest("PUT", `/messages/inbox/${id}`, creds, { message_status: unread ? "unread" : "read" });
+    return true;
+  } catch (error) {
+    if (notHere(error)) return false;
+    throw error;
+  }
+}
+
 export async function deleteThread(id: string, creds: Credentials): Promise<boolean> {
   if (!ID_RE.test(id)) return false;
   let gone = false;

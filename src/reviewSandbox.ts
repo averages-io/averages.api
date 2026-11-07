@@ -60,6 +60,8 @@ const state = {
   sent: [] as MessageRow[],
   /** Threads opened from the inbox (Schoology marks them read). */
   read: new Set<string>(),
+  /** Threads the reviewer marked unread again (PUT /messages/inbox/{id}). */
+  unread: new Set<string>(),
   /** Files announced with POST /upload, by Schoology file id (with their bytes once sent, within the caps above). */
   uploads: new Map<string, { filename: string; filesize: number; md5: string; uploaded: boolean; at: number; bytes?: Uint8Array }>(),
   /** Comments the reviewer added to their own turn-ins (a file turn-in's description), oldest first. */
@@ -362,7 +364,25 @@ function threadsOf(now: number): Map<string, MessageRow[]> {
 }
 
 const isMine = (r: MessageRow) => r.author === REVIEW_UID;
-const threadUnread = (id: string, rows: MessageRow[]) => !state.read.has(id) && rows.some((r) => !isMine(r) && r.unread);
+const threadUnread = (id: string, rows: MessageRow[]) => state.unread.has(id) || (!state.read.has(id) && rows.some((r) => !isMine(r) && r.unread));
+
+/** PUT /messages/inbox/{id} { message_status: "read" | "unread" }: answers nothing, like Schoology. */
+function putStatus(id: string, body: unknown, now: number): Response {
+  const rows = threadsOf(now).get(id);
+  if (!rows || !rows.some((r) => !isMine(r))) return notFound();
+  const status = bodyJson(body)?.message_status;
+  if (status !== "read" && status !== "unread") return json(400, { error: "message_status must be read or unread" });
+  if (status === "unread") {
+    state.read.delete(id);
+    state.unread.add(id);
+    if (state.unread.size > MAX_KEPT * 2) state.unread.delete(state.unread.values().next().value!);
+  } else {
+    state.unread.delete(id);
+    state.read.add(id);
+    if (state.read.size > MAX_KEPT * 2) state.read.delete(state.read.values().next().value!);
+  }
+  return new Response(null, { status: 204 });
+}
 
 function rowJson(r: MessageRow, unread: boolean): Raw {
   return {
@@ -669,7 +689,8 @@ function get(path: string[], url: URL, now: number): Response {
       if (!rows || !here) return notFound();
       const unread = threadUnread(sub, rows);
       // Opening a thread from the inbox marks it read, as it does on Schoology.
-      if (id === "inbox") {
+      if (id === "inbox" && url.searchParams.get("keep_unread") !== "TRUE") {
+        state.unread.delete(sub);
         state.read.add(sub);
         if (state.read.size > MAX_KEPT * 2) state.read.delete(state.read.values().next().value!);
       }
@@ -747,6 +768,7 @@ export async function sandboxFetch(method: string, url: string, body?: unknown):
         return post(path, body, now);
       case "PUT":
         if (path[0] === "upload" && path[1] === "sandbox" && path.length === 3) return putUpload(path[2], body);
+        if (path[0] === "messages" && path[1] === "inbox" && path.length === 3) return putStatus(path[2], body, now);
         return notFound();
       default:
         return json(405, { error: "Method not allowed" });

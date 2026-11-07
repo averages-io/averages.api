@@ -105,5 +105,21 @@ console.log("\ndelete your account");
   check("signed out", (await call("/messages/people?q=chen", { cookie: null })).res.status, 401);
 }
 
+// Read / unread goes to Schoology too (PUT /messages/inbox/{id})
+{
+  const find = (d: any, id: string) => (d.CONVERSATIONS || []).find((x: any) => String(x.id) === id);
+  const t = ((await call("/messages")).data.CONVERSATIONS || []).find((x: any) => x.unread);
+  const id = String(t?.id ?? "");
+  check("there's an unread thread", /^\d+$/.test(id), true);
+  let r = await call("/messages/status", { method: "POST", json: { id, unread: false } });
+  check("marked read", [r.res.status, r.data.ok, !!find((await call("/messages")).data, id)?.unread], [200, true, false]);
+  r = await call("/messages/status", { method: "POST", json: { id, unread: true } });
+  check("marked unread again, and Schoology says so", [r.res.status, !!find((await call("/messages")).data, id)?.unread], [200, true]);
+  check("not in the inbox", (await call("/messages/status", { method: "POST", json: { id: "424242", unread: true } })).res.status, 404);
+  check("bad body", (await call("/messages/status", { method: "POST", json: { id, unread: "yes" } })).res.status, 400);
+  check("from another site", (await call("/messages/status", { method: "POST", json: { id, unread: true }, origin: "https://evil.example" })).res.status >= 400, true);
+  check("signed out", (await call("/messages/status", { method: "POST", json: { id, unread: true }, cookie: null })).res.status, 401);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
