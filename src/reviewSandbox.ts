@@ -598,13 +598,24 @@ function get(path: string[], url: URL, now: number): Response {
       { uid: "8300000001", name: "Ms. Alvarez (Librarian)" },
       { uid: "8300000002", name: "Mr. Chen (Counselor)" },
     ];
+    // Schoology's search covers every school; one person from somewhere else, who the app should leave out
+    const elsewhere = [{ uid: "8300000009", name: "Ms. Chen (Other School)", school: "Somewhere Else High", school_id: "7010000999" }];
     const hits = q ? everyone.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 20) : [];
-    return json(200, { users: { search_result: hits.map((p) => ({ ...p, picture_url: "", school: SCHOOL_NAME, school_id: "1" })), total: hits.length } });
+    const far = q ? elsewhere.filter((p) => p.name.toLowerCase().includes(q)) : [];
+    return json(200, { users: { search_result: [...hits.map((p) => ({ ...p, picture_url: "", school: SCHOOL_NAME, school_id: SCHOOL_ID })), ...far.map((p) => ({ ...p, picture_url: "" }))], total: hits.length + far.length } });
   }
 
   if (realm === "users") {
-    // Any uid answers as the reviewer: it's the only user this sandbox has.
-    if (path.length === 2) return json(200, me());
+    // Teachers, classmates and the two staff from search answer as themselves, with Schoology's send_message
+    // (1: this student may message them; classmates 0, as with student-to-student messaging off). Any other uid
+    // answers as the reviewer.
+    if (path.length === 2) {
+      const t = TEACHERS.find((x) => x.uid === id), m = CLASSMATES.find((x) => x.uid === id);
+      const staff = id === "8300000001" ? "Ms. Alvarez (Librarian)" : id === "8300000002" ? "Mr. Chen (Counselor)" : "";
+      if (t || staff) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, name_display: t ? t.name : staff, send_message: 1 });
+      if (m) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, name_display: `${m.first} ${m.last}`, send_message: 0 });
+      return json(200, me());
+    }
     if (path.length !== 3) return notFound();
     if (sub === "sections") return json(200, { section: SECTIONS.map(sectionJson), total: SECTIONS.length });
     if (sub === "grades") {

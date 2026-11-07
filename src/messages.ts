@@ -61,17 +61,39 @@ export async function getRecipients(creds: Credentials): Promise<Raw[]> {
 export async function searchPeople(creds: Credentials & { uid?: string }, query: string): Promise<{ id: string; name: string; school: string; picture: string }[]> {
   const q = query.replace(/\s+/g, " ").trim().slice(0, 60);
   if (q.length < 2) return [];
-  const payload: any = await schoologyGet("/search", creds, { keywords: q, type: "user", limit: 20 });
+  const [payload, mine]: any[] = await Promise.all([
+    schoologyGet("/search", creds, { keywords: q, type: "user", limit: 50 }),
+    schoologyGet("/users/me", creds).catch(() => null),
+  ]);
+  // Schoology's search covers every school on Schoology: keep it to this student's school (and its other buildings)
+  const schools = new Set([String(mine?.school_id ?? ""), ...String(mine?.additional_buildings ?? "").split(",")].map((x) => x.trim()).filter((x) => /^\d+$/.test(x)));
   const rows = listOf<Raw>(payload?.users ?? payload, "search_result");
   const out: { id: string; name: string; school: string; picture: string }[] = [];
   for (const row of rows) {
     const id = String(row?.uid ?? row?.id ?? "");
     if (!ID_RE.test(id) || id === creds.uid || out.some((p) => p.id === id)) continue;
+    if (schools.size && !schools.has(String(row?.school_id ?? ""))) continue;
+    if (out.length >= 20) break;
     const name = personName(row);
     if (!name) continue;
     const pic = typeof row?.picture_url === "string" && /^https:\/\//.test(row.picture_url) && !/user-default/.test(row.picture_url) ? row.picture_url.slice(0, 600) : "";
     out.push({ id, name, school: clip(toPlainText(row?.school ?? ""), 120), picture: pic });
   }
+  return out;
+}
+
+/**
+ * Whether this student may message each person, by Schoology's own answer: GET /users/{id} carries send_message
+ * (1 or 0) for whoever asks. null when Schoology didn't say. Up to 25 people, ids digits only.
+ */
+export async function canMessage(creds: Credentials, ids: string[]): Promise<Record<string, boolean | null>> {
+  const list = [...new Set(ids.map(String).filter((id) => ID_RE.test(id)))].slice(0, 25);
+  const out: Record<string, boolean | null> = {};
+  await Promise.all(list.map(async (id) => {
+    const u: any = await schoologyGet(`/users/${id}`, creds).catch(() => null);
+    const send = u && String(u.uid ?? u.id ?? "") === id ? u.send_message : undefined;
+    out[id] = send === 1 || send === "1" || send === true ? true : send === 0 || send === "0" || send === false ? false : null;
+  }));
   return out;
 }
 

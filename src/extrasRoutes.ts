@@ -17,7 +17,7 @@ import {
   refused,
   SCHOOLOGY_ID_RE,
 } from "./extras.ts";
-import { searchPeople, setThreadStatus,
+import { canMessage, searchPeople, setThreadStatus,
   adaptRecipients,
   adaptThread,
   deleteThread,
@@ -272,6 +272,19 @@ export function messagesRoutes(deps: ExtrasDeps) {
       return c.json({ people: await searchPeople(session, String(c.req.query("q") ?? "")) });
     } catch (error) {
       if (refused(error)) return c.json({ people: [] });
+      return schoologyFailure(c, error);
+    }
+  });
+
+  // Can this student message these people? (GET /messages/can?ids=1,2,3) Schoology's send_message for each.
+  app.get("/can", deps.requireSession, guard, async (c: any) => {
+    const session = c.get("session");
+    const ids = String(c.req.query("ids") ?? "").split(",").map((x) => x.trim()).filter((x) => ID_RE.test(x));
+    if (!ids.length || ids.length > 25) return c.json({ error: "bad_request" }, 400);
+    c.header("Cache-Control", "private, no-store");
+    try {
+      return c.json({ can: await canMessage(session, ids) });
+    } catch (error) {
       return schoologyFailure(c, error);
     }
   });

@@ -121,5 +121,18 @@ console.log("\ndelete your account");
   check("signed out", (await call("/messages/status", { method: "POST", json: { id, unread: true }, cookie: null })).res.status, 401);
 }
 
+// Can I message them? Schoology's send_message per person; search keeps to the student's school
+{
+  const r = await call("/messages/can?ids=8300000001,8200000001,123");
+  check("classmate no", r.data.can?.["8200000001"], false);
+  check("librarian yes", r.data.can?.["8300000001"], true);
+  check("not a person here: unknown", r.data.can?.["123"] ?? null, null);
+  check("no ids", (await call("/messages/can?ids=")).res.status, 400);
+  check("too many", (await call("/messages/can?ids=" + Array.from({ length: 26 }, (_, i) => 1000 + i).join(","))).res.status, 400);
+  check("signed out", (await call("/messages/can?ids=8300000001", { cookie: null })).res.status, 401);
+  const s = await call("/messages/people?q=chen");
+  check("search leaves out other schools", (s.data.people || []).map((p: any) => p.name), ["Maya Chen", "Mr. Chen (Counselor)"]);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
