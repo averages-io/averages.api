@@ -58,14 +58,15 @@ export async function getRecipients(creds: Credentials): Promise<Raw[]> {
  * People in Schoology by name, as its own search finds them for this student (GET /search?type=user): counselors,
  * librarians, other teachers. Schoology decides who shows up. Ids digits only, each once, never the student.
  */
-export async function searchPeople(creds: Credentials & { uid?: string }, query: string): Promise<{ id: string; name: string; school: string; picture: string }[]> {
+export async function searchPeople(creds: Credentials & { uid?: string }, query: string, opts: { mySchool?: boolean } = {}): Promise<{ id: string; name: string; school: string; picture: string }[]> {
   const q = query.replace(/\s+/g, " ").trim().slice(0, 60);
   if (q.length < 2) return [];
   const [payload, mine]: any[] = await Promise.all([
-    schoologyGet("/search", creds, { keywords: q, type: "user", limit: 50 }),
-    schoologyGet("/users/me", creds).catch(() => null),
+    schoologyGet("/search", creds, { keywords: q, type: "user", limit: opts.mySchool ? 50 : 20 }),
+    opts.mySchool ? schoologyGet("/users/me", creds).catch(() => null) : null,
   ]);
-  // Schoology's search covers every school on Schoology: keep it to this student's school (and its other buildings)
+  // Schoology's search covers every school on Schoology. With "only my school" on (a setting), keep this student's
+  // school and its other buildings.
   const schools = new Set([String(mine?.school_id ?? ""), ...String(mine?.additional_buildings ?? "").split(",")].map((x) => x.trim()).filter((x) => /^\d+$/.test(x)));
   const rows = listOf<Raw>(payload?.users ?? payload, "search_result");
   const out: { id: string; name: string; school: string; picture: string }[] = [];

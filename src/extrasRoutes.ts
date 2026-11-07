@@ -265,11 +265,11 @@ export function messagesRoutes(deps: ExtrasDeps) {
     }
   });
 
-  // Add contacts: people in Schoology by name (GET /messages/people?q=)
+  // Add contacts: people in Schoology by name (GET /messages/people?q=, &scope=school for just their school)
   app.get("/people", deps.requireSession, guard, async (c: any) => {
     const session = c.get("session");
     try {
-      return c.json({ people: await searchPeople(session, String(c.req.query("q") ?? "")) });
+      return c.json({ people: await searchPeople(session, String(c.req.query("q") ?? ""), { mySchool: c.req.query("scope") === "school" }) });
     } catch (error) {
       if (refused(error)) return c.json({ people: [] });
       return schoologyFailure(c, error);
