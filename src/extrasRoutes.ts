@@ -17,7 +17,7 @@ import {
   refused,
   SCHOOLOGY_ID_RE,
 } from "./extras.ts";
-import {
+import { searchPeople,
   adaptRecipients,
   adaptThread,
   deleteThread,
@@ -261,6 +261,17 @@ export function messagesRoutes(deps: ExtrasDeps) {
     } catch (error) {
       // Not allowed to list them (some districts, some personal keys): nobody to show, not a failure.
       if (refused(error)) return c.json({ recipients: [] });
+      return schoologyFailure(c, error);
+    }
+  });
+
+  // Add contacts: people in Schoology by name (GET /messages/people?q=)
+  app.get("/people", deps.requireSession, guard, async (c: any) => {
+    const session = c.get("session");
+    try {
+      return c.json({ people: await searchPeople(session, String(c.req.query("q") ?? "")) });
+    } catch (error) {
+      if (refused(error)) return c.json({ people: [] });
       return schoologyFailure(c, error);
     }
   });

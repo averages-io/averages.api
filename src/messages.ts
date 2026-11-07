@@ -54,6 +54,27 @@ export async function getRecipients(creds: Credentials): Promise<Raw[]> {
   return recipientRows(await schoologyGet("/messages/recipients", creds, { limit: 200 }));
 }
 
+/**
+ * People in Schoology by name, as its own search finds them for this student (GET /search?type=user): counselors,
+ * librarians, other teachers. Schoology decides who shows up. Ids digits only, each once, never the student.
+ */
+export async function searchPeople(creds: Credentials & { uid?: string }, query: string): Promise<{ id: string; name: string; school: string; picture: string }[]> {
+  const q = query.replace(/\s+/g, " ").trim().slice(0, 60);
+  if (q.length < 2) return [];
+  const payload: any = await schoologyGet("/search", creds, { keywords: q, type: "user", limit: 20 });
+  const rows = listOf<Raw>(payload?.users ?? payload, "search_result");
+  const out: { id: string; name: string; school: string; picture: string }[] = [];
+  for (const row of rows) {
+    const id = String(row?.uid ?? row?.id ?? "");
+    if (!ID_RE.test(id) || id === creds.uid || out.some((p) => p.id === id)) continue;
+    const name = personName(row);
+    if (!name) continue;
+    const pic = typeof row?.picture_url === "string" && /^https:\/\//.test(row.picture_url) && !/user-default/.test(row.picture_url) ? row.picture_url.slice(0, 600) : "";
+    out.push({ id, name, school: clip(toPlainText(row?.school ?? ""), 120), picture: pic });
+  }
+  return out;
+}
+
 function personName(row: Raw): string {
   const full = row.name ?? row.name_display ?? `${row.name_first ?? ""} ${row.name_last ?? ""}`;
   return clip(toPlainText(full), 120);
@@ -482,6 +503,13 @@ async function allowedRecipients(creds: Credentials & { uid?: string }, wanted: 
     if (!ID_RE.test(id)) return;
     const rows = await getAdminEnrollments(id, creds).catch(() => []);
     for (const t of teacherRows(rows, creds.uid!)) allowed.add(t.id);
+  }));
+  // someone they found with Add contacts: Schoology still shows them their profile (GET /users/{id}); Schoology has
+  // the last word on the send itself
+  const rest = wanted.filter((id) => !allowed.has(id) && ID_RE.test(id)).slice(0, 5);
+  await Promise.all(rest.map(async (id) => {
+    const u: any = await schoologyGet(`/users/${id}`, creds).catch(() => null);
+    if (u && String(u.uid ?? u.id ?? "") === id) allowed.add(id);
   }));
   return allowed;
 }

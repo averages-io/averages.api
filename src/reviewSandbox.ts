@@ -568,6 +568,20 @@ function get(path: string[], url: URL, now: number): Response {
   const [realm, id, sub, subId, extra] = path;
   const withAttachments = truthy(url.searchParams.get("with_attachments"));
 
+  // Schoology's search (Add contacts): the sandbox's teachers, classmates and a librarian, by name
+  if (realm === "search" && path.length === 1) {
+    if (url.searchParams.get("type") !== "user") return json(200, { users: { search_result: [], total: 0 } });
+    const q = (url.searchParams.get("keywords") ?? "").toLowerCase().trim();
+    const everyone = [
+      ...TEACHERS.map((t) => ({ uid: t.uid, name: t.name })),
+      ...CLASSMATES.map((m) => ({ uid: m.uid, name: `${m.first} ${m.last}` })),
+      { uid: "8300000001", name: "Ms. Alvarez (Librarian)" },
+      { uid: "8300000002", name: "Mr. Chen (Counselor)" },
+    ];
+    const hits = q ? everyone.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 20) : [];
+    return json(200, { users: { search_result: hits.map((p) => ({ ...p, picture_url: "", school: SCHOOL_NAME, school_id: "1" })), total: hits.length } });
+  }
+
   if (realm === "users") {
     // Any uid answers as the reviewer: it's the only user this sandbox has.
     if (path.length === 2) return json(200, me());

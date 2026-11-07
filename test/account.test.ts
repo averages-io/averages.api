@@ -97,5 +97,13 @@ console.log("\ndelete your account");
   check("signed out: 401", out.res.status, 401);
 }
 
+// Add contacts: people by name through Schoology's own search
+{
+  const r = await call("/messages/people?q=librar");
+  check("search finds the librarian", [r.res.status, (r.data.people || []).map((p: any) => p.name)], [200, ["Ms. Alvarez (Librarian)"]]);
+  check("one letter isn't a search", (await call("/messages/people?q=a")).data, { people: [] });
+  check("signed out", (await call("/messages/people?q=chen", { cookie: null })).res.status, 401);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
