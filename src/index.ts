@@ -236,6 +236,8 @@ type Bindings = {
   MAINTENANCE_MESSAGE?: string;
   /** "1": Fullscreen for everyone (while its switch is on). "0": only testers (fullscreenTester). Unset counts as "1". */
   FULLSCREEN_PUBLIC?: string;
+  /** More school addresses (comma-separated) that see Fullscreen while FULLSCREEN_PUBLIC is "0". */
+  FULLSCREEN_SCHOOLS?: string;
   REVIEW_KEY?: string;
   FLAGS?: { getBooleanValue(key: string, defaultValue: boolean, context?: Record<string, unknown>): Promise<boolean> };
   REVIEW_SECRET?: string;
@@ -1633,10 +1635,13 @@ app.get("/config/cloud", (c) => {
  * Who sees Fullscreen while FULLSCREEN_PUBLIC is "0": students signed in through the app.schoology.com sandbox/dev
  * school, and API-key sign-ins (testers and the reviewer account). Not demo.
  */
-export function fullscreenTester(session: SessionData | null): boolean {
+export function fullscreenTester(session: SessionData | null, extra = ""): boolean {
   if (!session || isDemo(session) || session.g) return false;
-  if (typeof session.sd === "string") return session.sd === "app.schoology.com";
-  return !session.token;
+  // Sign-ins from before the school was kept in the session (no `sd`) all came through the app.schoology.com
+  // install, the only school Sign in with Schoology works for so far: they count as testers until they sign in again.
+  if (typeof session.sd !== "string") return true;
+  const testers = ["app.schoology.com", "www.schoology.com", "schoology.com", ...String(extra).split(",").map((d) => d.trim().toLowerCase()).filter(Boolean)];
+  return testers.includes(session.sd.toLowerCase());
 }
 export function fullscreenPublic(env: { FULLSCREEN_PUBLIC?: string }): boolean {
   return String(env.FULLSCREEN_PUBLIC ?? "1").trim() !== "0";
@@ -1649,7 +1654,7 @@ app.get("/config/features", async (c) => {
   const msg = typeof c.env.MAINTENANCE_MESSAGE === "string" ? c.env.MAINTENANCE_MESSAGE.trim().slice(0, 300) : "";
   // Fullscreen only for testers until FULLSCREEN_PUBLIC is "1": then the answer depends on who's asking.
   const perStudent = !fullscreenPublic(c.env) && features.fullscreen;
-  if (perStudent) features.fullscreen = fullscreenTester(await sessionFrom(c));
+  if (perStudent) features.fullscreen = fullscreenTester(await sessionFrom(c), c.env.FULLSCREEN_SCHOOLS ?? "");
   c.header("Cache-Control", perStudent ? "private, no-store" : "public, max-age=30");
   if (perStudent) c.header("Vary", "Cookie");
   return c.json({

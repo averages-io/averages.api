@@ -22,7 +22,10 @@ check("testers", [
   fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x", sd: "nmusd.schoology.com" }),
   fullscreenTester({ ...base, key: "k", secret: "s" }),
   fullscreenTester({ ...base, key: "demo", secret: "demo", uid: "__demo__" }),
-], [false, true, false, true, false]);
+  fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x" }),
+  fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x", sd: "www.schoology.com" }),
+  fullscreenTester({ ...base, key: "k", secret: "s", token: "t", tokenSecret: "x", sd: "nmusd.schoology.com" }, "nmusd.schoology.com"),
+], [false, true, false, true, false, true, true, true]);
 
 async function features(env: any, session?: any) {
   const headers = new Headers({ Origin: "https://app.averages.io" });
