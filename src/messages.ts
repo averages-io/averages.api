@@ -377,6 +377,14 @@ export async function loadConversations(creds: Credentials, me: string, now = Da
     getRecipients(creds).catch(() => null),
   ]);
   const { CONVERSATIONS, PEOPLE } = adaptConversations({ inbox, sent, names: namesFrom(recipients), me, now });
+  // Schoology's recipients list is often empty for students, which left everyone as "Teacher": ask Schoology for the
+  // names it didn't give (GET /users/{id}, which shows students their teachers' and classmates' names), a few at most.
+  const unnamed = Object.keys(PEOPLE).filter((id) => ID_RE.test(id) && (PEOPLE[id].name === FALLBACK_AUTHOR || PEOPLE[id].name === FALLBACK_OTHER)).slice(0, 8);
+  await Promise.all(unnamed.map(async (id) => {
+    const u: any = await schoologyGet(`/users/${id}`, creds).catch(() => null);
+    const name = u && String(u.uid ?? u.id ?? "") === id ? personName(u) : "";
+    if (name) PEOPLE[id] = { name };
+  }));
   return { CONVERSATIONS, PEOPLE, me, partial: sent === null };
 }
 
