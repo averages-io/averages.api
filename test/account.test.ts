@@ -136,5 +136,21 @@ console.log("\ndelete your account");
   check("only my school leaves out other schools", (s.data.people || []).map((p: any) => p.name), ["Maya Chen", "Mr. Chen (Counselor)"]);
 }
 
+// Background refresh: ?since=<fingerprint> answers { unchanged: true } when nothing changed
+{
+  const first = await call("/data/bundle");
+  const fp = first.res.headers.get("X-Averages-Fp") ?? "";
+  check("bundle has a fingerprint", [first.res.status, /^[a-f0-9]{16}$/.test(fp), Array.isArray(first.data.COURSES)], [200, true, true]);
+  const again = await call("/data/bundle?since=" + fp);
+  check("same again: unchanged", [again.res.status, again.data, again.res.headers.get("X-Averages-Fp")], [200, { unchanged: true }, fp]);
+  const other = await call("/data/bundle?since=0000000000000000");
+  check("an old fingerprint: the whole answer", Array.isArray(other.data.COURSES), true);
+  const junk = await call("/data/bundle?since=nope");
+  check("junk since: the whole answer", Array.isArray(junk.data.COURSES), true);
+  const u1 = await call("/data/updates"), ufp = u1.res.headers.get("X-Averages-Fp") ?? "";
+  check("updates: unchanged too", (await call("/data/updates?since=" + ufp)).data, { unchanged: true });
+  check("the page can read it (CORS)", /x-averages-fp/i.test(first.res.headers.get("Access-Control-Expose-Headers") ?? ""), true);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

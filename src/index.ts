@@ -185,6 +185,7 @@ import {
 } from "./submit.ts";
 import { canvaExportRoutes } from "./canvaExport.ts";
 import { canvaFolderRoutes, createFolder, moveItem } from "./canvaFolders.ts";
+import { answerUnlessSame, FP_HEADER } from "./fingerprint.ts";
 import { cleanFolderName, newJobId, parseSaveFiles, SAVE_CRED_TTL_S, SAVE_JOB_RE, SAVE_MAX_FILES, SAVE_SPACING_S, saveOneFile } from "./canvaSave.ts";
 
 // The Durable Object classes have to be exported from the Worker's main module
@@ -343,7 +344,7 @@ app.use("*", async (c, next) => {
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type"],
-    exposeHeaders: ["Retry-After", "Content-Disposition", "X-Media-Version"],
+    exposeHeaders: ["Retry-After", "Content-Disposition", "X-Media-Version", FP_HEADER],
   })(c, next);
 });
 
@@ -1095,7 +1096,8 @@ app.get("/data/bundle", requireSession, async (c) => {
       console.error("bundle_grades_failed", error instanceof Error ? error.message : String(error));
     }
 
-    return c.json({
+    // ?since=<fp>: { unchanged: true } when nothing changed (src/fingerprint.ts)
+    return answerUnlessSame(c, {
       generatedAt: new Date(now).toISOString(),
       COURSES,
       HISTORY,

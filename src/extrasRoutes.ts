@@ -1,5 +1,6 @@
 // Routes for the per-page extras and Schoology messages, mounted by index.ts.
 
+import { answerUnlessSame } from "./fingerprint.ts";
 import { Hono } from "hono";
 import { CALL_BUDGET, CallBudget, CLASSROOM_ID_RE } from "./classroom.ts";
 import {
@@ -145,7 +146,7 @@ export function dataExtrasRoutes(deps: ExtrasDeps) {
     // Classroom's announcements are already in the bundle.
     if (isGoogleSession(session)) return c.json({ COURSE_UPDATES: null, partial: false });
     try {
-      return c.json(await fetchSchoologyUpdates(session.uid, session));
+      return answerUnlessSame(c, await fetchSchoologyUpdates(session.uid, session));
     } catch (error) {
       return schoologyFailure(c, error);
     }
