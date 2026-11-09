@@ -31,9 +31,6 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const GRADING_PERIOD = "7010000101";
 const SCHOOL_ID = "7010000001";
-/** The student's own campus, and another campus in the same school (district): Only search my school keeps to the first. */
-const BUILDING_ID = "7010000011";
-const OTHER_BUILDING_ID = "7010000012";
 const SCHOOL_NAME = "Averages Sample High School";
 /** Where this sandbox's files download from (an api.schoology.com URL, as isSchoologyApiUrl requires). */
 const ATTACHMENT_BASE = `https://${API_HOST}/v1/attachment/sandbox/`;
@@ -575,7 +572,6 @@ function me(): Raw {
     uid: REVIEW_UID,
     id: REVIEW_UID,
     school_id: SCHOOL_ID,
-    building_id: BUILDING_ID,
     name_title: "",
     name_first: STUDENT.name_first,
     name_middle: "",
@@ -601,7 +597,6 @@ function get(path: string[], url: URL, now: number): Response {
       ...CLASSMATES.map((m) => ({ uid: m.uid, name: `${m.first} ${m.last}` })),
       { uid: "8300000001", name: "Ms. Alvarez (Librarian)" },
       { uid: "8300000002", name: "Mr. Chen (Counselor)" },
-      { uid: "8300000003", name: "Dr. Chen (Other Campus)" },
     ];
     // Schoology's search covers every school; one person from somewhere else, who the app should leave out
     const elsewhere = [{ uid: "8300000009", name: "Ms. Chen (Other School)", school: "Somewhere Else High", school_id: "7010000999" }];
@@ -616,12 +611,11 @@ function get(path: string[], url: URL, now: number): Response {
     // answers as the reviewer.
     if (path.length === 2) {
       const t = TEACHERS.find((x) => x.uid === id), m = CLASSMATES.find((x) => x.uid === id);
-      const staff = id === "8300000001" ? "Ms. Alvarez (Librarian)" : id === "8300000002" ? "Mr. Chen (Counselor)" : id === "8300000003" ? "Dr. Chen (Other Campus)" : "";
+      const staff = id === "8300000001" ? "Ms. Alvarez (Librarian)" : id === "8300000002" ? "Mr. Chen (Counselor)" : "";
       // teachers and staff show their school email (as Schoology shows a teacher's to a student); classmates' is empty
       const mail = (n: string) => n.replace(/\(.*\)/g, "").replace(/^(dr|mr|mrs|ms|sra|coach)\.?\s+/i, "").trim().toLowerCase().replace(/[^a-z]+/g, ".").replace(/^\.|\.$/g, "") + "@sample.example.org";
-      const building = id === "8300000003" ? OTHER_BUILDING_ID : BUILDING_ID;
-      if (t || staff) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, building_id: building, name_display: t ? t.name : staff, primary_email: mail(t ? t.name : staff), send_message: 1 });
-      if (m) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, building_id: building, name_display: `${m.first} ${m.last}`, primary_email: "", send_message: 0 });
+      if (t || staff) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, name_display: t ? t.name : staff, primary_email: mail(t ? t.name : staff), send_message: 1 });
+      if (m) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, name_display: `${m.first} ${m.last}`, primary_email: "", send_message: 0 });
       return json(200, me());
     }
     if (path.length !== 3) return notFound();
