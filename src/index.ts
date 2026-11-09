@@ -183,7 +183,8 @@ import {
   turnInAssignments,
   type SubmittedFile,
 } from "./submit.ts";
-import { canvaExportRoutes } from "./canvaExport.ts";
+import { canvaExportRoutes, contentDisposition } from "./canvaExport.ts";
+import { capStream, DRIVE_FILE_ID_RE, DriveExportError, isDriveExportType, openDriveExport } from "./driveExport.ts";
 import { canvaFolderRoutes, createFolder, moveItem } from "./canvaFolders.ts";
 import { answerUnlessSame, FP_HEADER } from "./fingerprint.ts";
 import { cleanFolderName, newJobId, parseSaveFiles, SAVE_CRED_TTL_S, SAVE_JOB_RE, SAVE_MAX_FILES, SAVE_SPACING_S, saveOneFile } from "./canvaSave.ts";
@@ -2218,6 +2219,45 @@ app.post("/cloud/:app/token", requireSession, async (c) => {
     return c.json(await cloudStore(c.env, session.uid, c.req.url).accessToken(session.uid, cloudApp, opts));
   } catch (error) {
     return cloudFailure(c, error, "cloud_unavailable");
+  }
+});
+
+/**
+ * A Google file over Drive's 10 MB export limit, as Word, Excel, PowerPoint, PDF or CSV (src/driveExport.ts).
+ * GET /cloud/gdrive/export/:id?as=docx. Streamed through with the student's own Drive token, never stored.
+ */
+app.get("/cloud/gdrive/export/:id", requireSession, async (c) => {
+  const session = c.get("session");
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
+  c.header("Cache-Control", "no-store");
+  if (isIncognito(session)) return c.json({ error: "incognito_mode" }, 403);
+  if (!cloudConfigured(c.env, "gdrive")) return c.json({ error: "cloud_not_configured" }, 503);
+  const id = c.req.param("id");
+  const as = c.req.query("as") ?? "";
+  if (!DRIVE_FILE_ID_RE.test(id) || !isDriveExportType(as)) return c.json({ error: "bad_request" }, 400);
+  let token: string;
+  try {
+    token = (await cloudStore(c.env, session.uid, c.req.url).accessToken(session.uid, "gdrive", {})).access_token;
+  } catch (error) {
+    return cloudFailure(c, error, "cloud_unavailable");
+  }
+  try {
+    const file = await openDriveExport(token, id, as);
+    const headers = new Headers({
+      "Content-Type": file.type,
+      "Content-Disposition": contentDisposition(file.name),
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Access-Control-Expose-Headers": "Content-Disposition",
+    });
+    if (file.length !== null) headers.set("Content-Length", String(file.length));
+    return new Response(file.length !== null ? file.body : file.body.pipeThrough(capStream(95 * 1024 * 1024)), { status: 200, headers });
+  } catch (error) {
+    if (error instanceof DriveExportError) return c.json({ error: error.code }, error.status as any);
+    console.error("drive_export_failed", error instanceof Error ? error.name : "unknown");
+    return c.json({ error: "cloud_download_failed" }, 502);
   }
 });
 

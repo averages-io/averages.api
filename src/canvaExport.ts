@@ -133,6 +133,11 @@ export async function createExport(token: string, designId: string, type: TurnIn
     body: JSON.stringify({ design_id: designId, format }),
   });
   const json = await readJson(res);
+  // Canva refuses a type this design can't be (a Canva Doc as a PNG or JPG, say): say so instead of "try again"
+  if (res.status === 400 && type !== "pdf") {
+    console.error("canva_export_call_failed", res.status, String(json?.code ?? ""), String(json?.message ?? "").slice(0, 200));
+    throw new CanvaError("canva_export_wrong_type", 422);
+  }
   if (!res.ok) throw exportFailure(res, json);
   const id = String(json?.job?.id ?? "");
   if (!JOB_ID_RE.test(id)) throw new CanvaError("canva_export_unavailable", 502);
