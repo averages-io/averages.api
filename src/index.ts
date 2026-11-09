@@ -2255,7 +2255,10 @@ app.get("/cloud/gdrive/export/:id", requireSession, async (c) => {
     if (file.length !== null) headers.set("Content-Length", String(file.length));
     return new Response(file.length !== null ? file.body : file.body.pipeThrough(capStream(95 * 1024 * 1024)), { status: 200, headers });
   } catch (error) {
-    if (error instanceof DriveExportError) return c.json({ error: error.code }, error.status as any);
+    if (error instanceof DriveExportError) {
+      console.error("drive_export_failed", error.code, error.trace);
+      return c.json({ error: error.code }, error.status as any);
+    }
     console.error("drive_export_failed", error instanceof Error ? error.name : "unknown");
     return c.json({ error: "cloud_download_failed" }, 502);
   }

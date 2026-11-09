@@ -27,6 +27,8 @@ const TIMEOUT_MS = 60_000;
 export class DriveExportError extends Error {
   code: string;
   status: number;
+  /** What happened on the way, for the logs: hosts and statuses only, never a token or a full address. */
+  trace = "";
   constructor(code: string, status: number) {
     super(code);
     this.code = code;
@@ -71,10 +73,23 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
  * not_exportable (that type isn't offered for this file), file_too_large, cloud_download_failed.
  */
 export async function openDriveExport(token: string, fileId: string, as: DriveExportType, f: FetchLike = fetch) {
+  const trace: string[] = [];
+  try {
+    return await openTraced(token, fileId, as, f, trace);
+  } catch (e) {
+    if (e instanceof DriveExportError) e.trace = trace.join(" > ");
+    throw e;
+  }
+}
+
+const hostOf = (u: string) => { try { return new URL(u).hostname; } catch { return "?"; } };
+
+async function openTraced(token: string, fileId: string, as: DriveExportType, f: FetchLike, trace: string[]) {
   if (!DRIVE_FILE_ID_RE.test(fileId)) throw new DriveExportError("file_gone", 404);
   const auth = { Authorization: `Bearer ${token}` };
   const metaUrl = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=name,mimeType,trashed,exportLinks&supportsAllDrives=true`;
   const meta = await f(metaUrl, { headers: auth, signal: AbortSignal.timeout(15_000) });
+  trace.push(`meta ${meta.status}`);
   if (meta.status === 404) throw new DriveExportError("file_gone", 404);
   if (meta.status === 401 || meta.status === 403) throw new DriveExportError("download_blocked", 403);
   if (!meta.ok) throw new DriveExportError("cloud_download_failed", 502);
@@ -82,6 +97,7 @@ export async function openDriveExport(token: string, fileId: string, as: DriveEx
   if (info?.trashed) throw new DriveExportError("file_gone", 404);
   const type = DRIVE_EXPORT_TYPES[as];
   const link = info?.exportLinks && typeof info.exportLinks[type] === "string" ? info.exportLinks[type] : "";
+  trace.push(`links ${Object.keys(info?.exportLinks ?? {}).length}`);
   if (!link) throw new DriveExportError("not_exportable", 422);
   if (!exportHostOk(link, true)) throw new DriveExportError("cloud_download_failed", 502);
 
@@ -90,12 +106,13 @@ export async function openDriveExport(token: string, fileId: string, as: DriveEx
   for (let hop = 0; hop <= MAX_HOPS; hop++) {
     const toDocs = exportHostOk(url, true);
     res = await f(url, { headers: toDocs ? auth : {}, redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS) });
+    trace.push(`${hostOf(url)} ${res.status}`);
     if (res.status < 300 || res.status >= 400) break;
     const next = res.headers.get("Location");
     await res.body?.cancel().catch(() => {});
     if (!next || hop === MAX_HOPS) throw new DriveExportError("cloud_download_failed", 502);
     const resolved = new URL(next, url).toString();
-    if (!exportHostOk(resolved, false)) throw new DriveExportError("cloud_download_failed", 502);
+    if (!exportHostOk(resolved, false)) { trace.push(`refused ${hostOf(resolved)}`); throw new DriveExportError("cloud_download_failed", 502); }
     url = resolved;
   }
   if (!res) throw new DriveExportError("cloud_download_failed", 502);
@@ -110,6 +127,7 @@ export async function openDriveExport(token: string, fileId: string, as: DriveEx
   }
   // A sign-in page instead of the file means Google didn't take the token.
   const got = (res.headers.get("Content-Type") || "").toLowerCase();
+  trace.push(`type ${got.split(";")[0] || "none"}`);
   if (got.startsWith("text/html")) {
     await res.body.cancel().catch(() => {});
     throw new DriveExportError("download_blocked", 403);
