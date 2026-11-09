@@ -266,7 +266,7 @@ export function messagesRoutes(deps: ExtrasDeps) {
     }
   });
 
-  // Add contacts: people in Schoology by name (GET /messages/people?q=, &scope=school for just their school)
+  // Add contacts: people in Schoology by name (GET /messages/people?q=, &scope=school for just their own campus)
   app.get("/people", deps.requireSession, guard, async (c: any) => {
     const session = c.get("session");
     try {

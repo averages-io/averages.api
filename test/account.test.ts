@@ -150,9 +150,9 @@ console.log("\ndelete your account: everything, or it says so");
   check("too many", (await call("/messages/can?ids=" + Array.from({ length: 26 }, (_, i) => 1000 + i).join(","))).res.status, 400);
   check("signed out", (await call("/messages/can?ids=8300000001", { cookie: null })).res.status, 401);
   const all = await call("/messages/people?q=chen");
-  check("search covers everyone on Schoology", (all.data.people || []).map((p: any) => p.name), ["Maya Chen", "Mr. Chen (Counselor)", "Ms. Chen (Other School)"]);
+  check("search covers everyone on Schoology", (all.data.people || []).map((p: any) => p.name), ["Maya Chen", "Mr. Chen (Counselor)", "Dr. Chen (Other Campus)", "Ms. Chen (Other School)"]);
   const s = await call("/messages/people?q=chen&scope=school");
-  check("only my school leaves out other schools", (s.data.people || []).map((p: any) => p.name), ["Maya Chen", "Mr. Chen (Counselor)"]);
+  check("only my school: my campus, not other schools or my district's other campuses", (s.data.people || []).map((p: any) => p.name), ["Maya Chen", "Mr. Chen (Counselor)"]);
 }
 
 // Background refresh: ?since=<fingerprint> answers { unchanged: true } when nothing changed

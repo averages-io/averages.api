@@ -54,9 +54,19 @@ export async function getRecipients(creds: Credentials): Promise<Raw[]> {
   return recipientRows(await schoologyGet("/messages/recipients", creds, { limit: 200 }));
 }
 
+/** How many search matches get their campus checked one by one (each is a Schoology call: GET /users/{id}). */
+export const PEOPLE_CHECKS = 12;
+
 /**
- * People in Schoology by name, as its own search finds them for this student (GET /search?type=user): counselors,
- * librarians, other teachers. Schoology decides who shows up. Ids digits only, each once, never the student.
+ * People in Schoology by name, for Add contacts (GET /search?type=user): counselors, librarians, other teachers.
+ * Ids digits only, each once, never the student. Schoology's search covers every school on Schoology, and that's
+ * what everyone gets (Martin, 2026-11-09: "let people see all the schools like it was").
+ *
+ * mySchool (Settings → Only search my school): just the student's own campus. Schoology's "school" (school_id) is
+ * often a whole district, so a match must also be in one of the student's own buildings (building_id,
+ * additional_buildings). When a search row doesn't say its building, that person's profile is asked (up to
+ * PEOPLE_CHECKS of them); a profile that doesn't say either falls back to the same school_id. If we can't tell
+ * where the student is, nobody is shown.
  */
 export async function searchPeople(creds: Credentials & { uid?: string }, query: string, opts: { mySchool?: boolean } = {}): Promise<{ id: string; name: string; school: string; picture: string }[]> {
   const q = query.replace(/\s+/g, " ").trim().slice(0, 60);
@@ -65,20 +75,57 @@ export async function searchPeople(creds: Credentials & { uid?: string }, query:
     schoologyGet("/search", creds, { keywords: q, type: "user", limit: opts.mySchool ? 50 : 20 }),
     opts.mySchool ? schoologyGet("/users/me", creds).catch(() => null) : null,
   ]);
-  // Schoology's search covers every school on Schoology. With "only my school" on (a setting), keep this student's
-  // school and its other buildings.
-  const schools = new Set([String(mine?.school_id ?? ""), ...String(mine?.additional_buildings ?? "").split(",")].map((x) => x.trim()).filter((x) => /^\d+$/.test(x)));
+  const pic = (row: Raw) => typeof row?.picture_url === "string" && /^https:\/\//.test(row.picture_url) && !/user-default/.test(row.picture_url) ? row.picture_url.slice(0, 600) : "";
+  if (!opts.mySchool) {
+    const all: { id: string; name: string; school: string; picture: string }[] = [];
+    for (const row of listOf<Raw>(payload?.users ?? payload, "search_result")) {
+      const id = String(row?.uid ?? row?.id ?? "");
+      if (!ID_RE.test(id) || id === creds.uid || all.some((p) => p.id === id)) continue;
+      if (all.length >= 20) break;
+      const name = personName(row);
+      if (name) all.push({ id, name, school: clip(toPlainText(row?.school ?? ""), 120), picture: pic(row) });
+    }
+    return all;
+  }
+  const digits = (x: unknown) => { const v = String(x ?? "").trim(); return /^\d+$/.test(v) ? v : ""; };
+  const school = digits(mine?.school_id);
+  if (!school) return [];   // their school unknown: show nobody rather than everybody
+  // their own campus(es); a school without separate buildings uses its own id as the building
+  const buildings = new Set([digits(mine?.building_id), ...String(mine?.additional_buildings ?? "").split(",").map(digits)].filter(Boolean));
+  if (!buildings.size) buildings.add(school);
+  const sameSchool = (x: unknown) => { const v = digits(x); return !!v && (v === school || buildings.has(v)); };
+  const onCampus = (b: unknown) => { const v = digits(b); return !!v && buildings.has(v); };
+
   const rows = listOf<Raw>(payload?.users ?? payload, "search_result");
-  const out: { id: string; name: string; school: string; picture: string }[] = [];
+  const picked: { row: Raw; id: string; sure: boolean }[] = [];
   for (const row of rows) {
     const id = String(row?.uid ?? row?.id ?? "");
-    if (!ID_RE.test(id) || id === creds.uid || out.some((p) => p.id === id)) continue;
-    if (schools.size && !schools.has(String(row?.school_id ?? ""))) continue;
+    if (!ID_RE.test(id) || id === creds.uid || picked.some((p) => p.id === id)) continue;
+    if (!sameSchool(row?.school_id ?? row?.building_id)) continue;   // another district or school: never
+    const b = digits(row?.building_id);
+    if (b && !onCampus(b)) continue;   // same district, another campus
+    picked.push({ row, id, sure: !!b });
+    if (picked.length >= 30) break;
+  }
+  // rows that didn't say their campus: ask each person's profile (a few at a time)
+  const unsure = picked.filter((p) => !p.sure).slice(0, PEOPLE_CHECKS);
+  const confirmed = new Set<string>();
+  for (let i = 0; i < unsure.length; i += 4) {
+    await Promise.all(unsure.slice(i, i + 4).map(async (p) => {
+      const u: any = await schoologyGet(`/users/${p.id}`, creds).catch(() => null);
+      if (!u || String(u.uid ?? u.id ?? "") !== p.id) return;
+      const theirs = [digits(u.building_id), ...String(u.additional_buildings ?? "").split(",").map(digits)].filter(Boolean);
+      // their campus known: it must be one of the student's; not shown to us: the same school is the best we can do
+      if (theirs.length ? theirs.some(onCampus) : sameSchool(u.school_id)) confirmed.add(p.id);
+    }));
+  }
+  const out: { id: string; name: string; school: string; picture: string }[] = [];
+  for (const { row, id, sure } of picked) {
+    if (!sure && !confirmed.has(id)) continue;
     if (out.length >= 20) break;
     const name = personName(row);
     if (!name) continue;
-    const pic = typeof row?.picture_url === "string" && /^https:\/\//.test(row.picture_url) && !/user-default/.test(row.picture_url) ? row.picture_url.slice(0, 600) : "";
-    out.push({ id, name, school: clip(toPlainText(row?.school ?? ""), 120), picture: pic });
+    out.push({ id, name, school: clip(toPlainText(row?.school ?? ""), 120), picture: pic(row) });
   }
   return out;
 }
