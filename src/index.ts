@@ -450,12 +450,14 @@ app.get("/", (c) => {
  * too). Each one on its own, so one failing doesn't keep the others. Never
  * throws: it runs after sign-out has already answered.
  */
-async function forgetConnections(env: Bindings, uid: string, requestUrl: string): Promise<void> {
+async function forgetConnections(env: Bindings, uid: string, requestUrl: string, strict = false): Promise<void> {
   const jobs: Promise<unknown>[] = [];
   if (env.CANVA) jobs.push(Promise.resolve().then(() => canvaStore(env, uid, requestUrl).disconnect(uid)));
   if (env.CLOUD) for (const app of CLOUD_APPS) jobs.push(Promise.resolve().then(() => cloudStore(env, uid, requestUrl).disconnect(uid, app, { revokeShared: true })));
   const results = await Promise.allSettled(jobs);
   for (const r of results) if (r.status === "rejected") console.error("signout_forget_failed", r.reason);
+  // Delete account: the app must hear that something is still there
+  if (strict && results.some((r) => r.status === "rejected")) throw new Error("connections_not_deleted");
 }
 
 /** Constant-time match against the reviewer secrets; off unless both are set and at least 16 characters. */
@@ -990,10 +992,11 @@ app.delete("/account", requireSession, async (c) => {
   const results = await Promise.allSettled([
     // No SYNC binding (a local setup without it): nothing was ever stored there.
     c.env.SYNC ? deleteSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid) : Promise.resolve(),
-    deleteAllMedia(c.env.MEDIA as unknown as MediaBucket | undefined, session.uid),
-    forgetPush(c.env, session.uid, c.req.url),
-    forgetCalendar(c.env as any, session.uid, c.req.url),
-    forgetConnections(c.env, session.uid, c.req.url),
+    // strict: each one throws when it couldn't delete, so a partial delete answers delete_incomplete, not ok
+    deleteAllMedia(c.env.MEDIA as unknown as MediaBucket | undefined, session.uid, true),
+    forgetPush(c.env, session.uid, c.req.url, undefined, true),
+    forgetCalendar(c.env as any, session.uid, c.req.url, undefined, true),
+    forgetConnections(c.env, session.uid, c.req.url, true),
   ]);
   const failed = results.filter((r) => r.status === "rejected").length;
   for (const r of results) if (r.status === "rejected") console.error("account_delete_failed", r.reason);

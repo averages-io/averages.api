@@ -97,6 +97,23 @@ console.log("\ndelete your account");
   check("signed out: 401", out.res.status, 401);
 }
 
+console.log("\ndelete your account: everything, or it says so");
+{
+  // pictures in R2: all gone
+  const objs = new Map([["u/r:reviewer/photo", 1], ["u/r:reviewer/background", 1], ["u/someone-else/photo", 1]]);
+  ENV.MEDIA = { async list({ prefix }: any) { return { objects: [...objs.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })), truncated: false }; }, async delete(keys: string[]) { for (const k of keys) objs.delete(k); } };
+  let r = await call("/account", { method: "DELETE" });
+  check("pictures deleted, nobody else's", [r.res.status, [...objs.keys()]], [200, ["u/someone-else/photo"]]);
+  // a store that can't be reached: the app hears it, and stays signed in
+  ENV.MEDIA = { async list() { throw new Error("r2 down"); }, async delete() {} };
+  const quiet = console.error; console.error = () => {};
+  r = await call("/account", { method: "DELETE" });
+  console.error = quiet;
+  const cleared = ((r.res.headers as any).getSetCookie?.() ?? []).some((c: string) => readCookie(c.split(";")[0], SESSION_COOKIE) === "");
+  check("pictures couldn't go: delete_incomplete, still signed in", [r.res.status, r.data.error, cleared], [502, "delete_incomplete", false]);
+  delete ENV.MEDIA;
+}
+
 // Add contacts: people by name through Schoology's own search
 {
   const r = await call("/messages/people?q=librar");

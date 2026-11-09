@@ -275,12 +275,14 @@ export function pushRoutes(deps: PushDeps) {
  * every browser's subscription right away. Never throws: signing out must
  * work even if this doesn't.
  */
-export async function forgetPush(env: PushEnv, uid: string, requestUrl: string, storeFor?: StoreFor): Promise<void> {
+/** strict (Delete account): a failure is thrown instead of only logged. */
+export async function forgetPush(env: PushEnv, uid: string, requestUrl: string, storeFor?: StoreFor, strict = false): Promise<void> {
   if (!uid || uid === DEMO_UID) return;
   if (!storeFor && !env.PUSH) return; // not deployed with the PUSH binding yet
   try {
     await (storeFor ?? defaultStoreFor)(env, uid, requestUrl).deleteAll();
   } catch (err) {
     console.error("push_forget_failed", err instanceof Error ? err.message : String(err));
+    if (strict) throw err;
   }
 }

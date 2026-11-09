@@ -52,7 +52,8 @@ export interface MediaBucket {
 }
 
 /** Every picture this student has, gone. Never throws: Sync's own delete must still go through. */
-export async function deleteAllMedia(bucket: MediaBucket | undefined, uid: string): Promise<void> {
+/** strict (Delete account): a failure is thrown, so the app hears "not everything was deleted" instead of "done". */
+export async function deleteAllMedia(bucket: MediaBucket | undefined, uid: string, strict = false): Promise<void> {
   if (!bucket) return;
   try {
     // Every key first, then delete: deleting while paging can make a cursor skip some.
@@ -67,6 +68,7 @@ export async function deleteAllMedia(bucket: MediaBucket | undefined, uid: strin
     for (let i = 0; i < keys.length; i += 1000) await bucket.delete(keys.slice(i, i + 1000));
   } catch (err) {
     console.error("media_delete_all_failed", err);
+    if (strict) throw err;
   }
 }
 

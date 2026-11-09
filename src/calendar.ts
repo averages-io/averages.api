@@ -297,7 +297,8 @@ function parseSession(text: unknown): SessionData | null {
 }
 
 /** Deletes a student's link and its feed. Never throws (sign-out, Incognito, Plus ending use it). */
-export async function forgetCalendar(env: CalendarEnv, uid: string, requestUrl: string, storeFor?: CalendarStoreFor): Promise<void> {
+/** strict (Delete account): a failure is thrown instead of only logged. */
+export async function forgetCalendar(env: CalendarEnv, uid: string, requestUrl: string, storeFor?: CalendarStoreFor, strict = false): Promise<void> {
   if (!uid) return;
   if (!storeFor && !env.CALENDAR) return;
   const open = storeFor ?? calendarStoreFor;
@@ -308,6 +309,7 @@ export async function forgetCalendar(env: CalendarEnv, uid: string, requestUrl: 
     await link.remove();
   } catch (err) {
     console.error("calendar_forget_failed", err instanceof Error ? err.message : String(err));
+    if (strict) throw err;
   }
 }
 
