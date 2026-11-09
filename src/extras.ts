@@ -148,7 +148,24 @@ export async function fetchSchoologyPeople(uid: string, creds: Credentials): Pro
       byCourse[course.id] = refused(error) ? [] : null;
     }
   });
-  return adaptPeople("schoology", courses, byCourse);
+  const answer = adaptPeople("schoology", courses, byCourse);
+  // Teachers' school emails: Schoology shows a student their teachers' primary email on the profile (GET /users/{id}),
+  // when the teacher's privacy allows it. Only what Schoology already shows them; empty otherwise.
+  await runPool(answer.CONTACTS.slice(0, 12), SCHOOLOGY_CONCURRENCY, async (c) => {
+    try {
+      const u: any = await schoologyGet(`/users/${c.id}`, creds);
+      if (String(u?.uid ?? u?.id ?? "") === c.id) c.email = schoolEmail(u?.primary_email);
+    } catch {
+      /* no email, as before */
+    }
+  });
+  return answer;
+}
+
+/** A school email as Schoology gives it, or "": one plain address, nothing else. */
+export function schoolEmail(value: unknown): string {
+  const v = typeof value === "string" ? value.trim() : "";
+  return v.length <= 254 && /^[^\s@<>()",;:]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(v) ? v : "";
 }
 
 /** Classroom teachers need the optional rosters permission (letter `r`); without it, nothing and needsPermission. */

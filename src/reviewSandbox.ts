@@ -612,8 +612,10 @@ function get(path: string[], url: URL, now: number): Response {
     if (path.length === 2) {
       const t = TEACHERS.find((x) => x.uid === id), m = CLASSMATES.find((x) => x.uid === id);
       const staff = id === "8300000001" ? "Ms. Alvarez (Librarian)" : id === "8300000002" ? "Mr. Chen (Counselor)" : "";
-      if (t || staff) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, name_display: t ? t.name : staff, send_message: 1 });
-      if (m) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, name_display: `${m.first} ${m.last}`, send_message: 0 });
+      // teachers and staff show their school email (as Schoology shows a teacher's to a student); classmates' is empty
+      const mail = (n: string) => n.replace(/\(.*\)/g, "").replace(/^(dr|mr|mrs|ms|sra|coach)\.?\s+/i, "").trim().toLowerCase().replace(/[^a-z]+/g, ".").replace(/^\.|\.$/g, "") + "@sample.example.org";
+      if (t || staff) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, name_display: t ? t.name : staff, primary_email: mail(t ? t.name : staff), send_message: 1 });
+      if (m) return json(200, { uid: id, id: Number(id) || id, school_id: SCHOOL_ID, name_display: `${m.first} ${m.last}`, primary_email: "", send_message: 0 });
       return json(200, me());
     }
     if (path.length !== 3) return notFound();

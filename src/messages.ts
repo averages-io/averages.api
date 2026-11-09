@@ -3,7 +3,7 @@
 import { clip, decodeEntities, relativeTime, schoologyTime, toPlainText } from "./adapt.ts";
 import type { Credentials } from "./oauth.ts";
 import { getMessages, getSections, listOf, SchoologyError, schoologyGet, schoologyPost, schoologyRequest } from "./schoology.ts";
-import { getAdminEnrollments, teacherRows } from "./extras.ts";
+import { getAdminEnrollments, schoolEmail, teacherRows } from "./extras.ts";
 
 type Raw = Record<string, any>;
 
@@ -85,17 +85,22 @@ export async function searchPeople(creds: Credentials & { uid?: string }, query:
 
 /**
  * Whether this student may message each person, by Schoology's own answer: GET /users/{id} carries send_message
- * (1 or 0) for whoever asks. null when Schoology didn't say. Up to 25 people, ids digits only.
+ * (1 or 0) for whoever asks. null when Schoology didn't say. Up to 25 people, ids digits only. Plus their school
+ * email when Schoology shows it.
  */
-export async function canMessage(creds: Credentials, ids: string[]): Promise<Record<string, boolean | null>> {
+export async function canMessage(creds: Credentials, ids: string[]): Promise<{ can: Record<string, boolean | null>; email: Record<string, string> }> {
   const list = [...new Set(ids.map(String).filter((id) => ID_RE.test(id)))].slice(0, 25);
-  const out: Record<string, boolean | null> = {};
+  const can: Record<string, boolean | null> = {}, email: Record<string, string> = {};
   await Promise.all(list.map(async (id) => {
     const u: any = await schoologyGet(`/users/${id}`, creds).catch(() => null);
-    const send = u && String(u.uid ?? u.id ?? "") === id ? u.send_message : undefined;
-    out[id] = send === 1 || send === "1" || send === true ? true : send === 0 || send === "0" || send === false ? false : null;
+    const mine = u && String(u.uid ?? u.id ?? "") === id;
+    const send = mine ? u.send_message : undefined;
+    can[id] = send === 1 || send === "1" || send === true ? true : send === 0 || send === "0" || send === false ? false : null;
+    // their school email, when Schoology shows it to this student (teachers, usually; students' come back empty)
+    const e = mine ? schoolEmail(u.primary_email) : "";
+    if (e) email[id] = e;
   }));
-  return out;
+  return { can, email };
 }
 
 function personName(row: Raw): string {

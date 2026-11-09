@@ -125,6 +125,8 @@ console.log("\ndelete your account");
 {
   const r = await call("/messages/can?ids=8300000001,8200000001,123");
   check("classmate no", r.data.can?.["8200000001"], false);
+  check("the librarian's school email comes too", r.data.email?.["8300000001"], "alvarez@sample.example.org");
+  check("a classmate's doesn't", r.data.email?.["8200000001"], undefined);
   check("librarian yes", r.data.can?.["8300000001"], true);
   check("not a person here: unknown", r.data.can?.["123"] ?? null, null);
   check("no ids", (await call("/messages/can?ids=")).res.status, 400);
@@ -150,6 +152,13 @@ console.log("\ndelete your account");
   const u1 = await call("/data/updates"), ufp = u1.res.headers.get("X-Averages-Fp") ?? "";
   check("updates: unchanged too", (await call("/data/updates?since=" + ufp)).data, { unchanged: true });
   check("the page can read it (CORS)", /x-averages-fp/i.test(first.res.headers.get("Access-Control-Expose-Headers") ?? ""), true);
+}
+
+// Teachers' school emails on the people list (GET /data/people)
+{
+  const r = await call("/data/people");
+  const withMail = (r.data.CONTACTS || []).filter((c: any) => c.email);
+  check("teachers come with their school email", [r.res.status, withMail.length > 0, withMail.every((c: any) => /@sample\.example\.org$/.test(c.email))], [200, true, true]);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

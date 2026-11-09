@@ -284,7 +284,7 @@ export function messagesRoutes(deps: ExtrasDeps) {
     if (!ids.length || ids.length > 25) return c.json({ error: "bad_request" }, 400);
     c.header("Cache-Control", "private, no-store");
     try {
-      return c.json({ can: await canMessage(session, ids) });
+      return c.json(await canMessage(session, ids));
     } catch (error) {
       return schoologyFailure(c, error);
     }
