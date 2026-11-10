@@ -465,7 +465,8 @@ export function adaptCourses(
     const pct = reportedPct ?? fallbackPct ?? 0;
     const none = history.points.length === 0 && !(reportedPct !== null && reportedPct > 0);
 
-    const { predictedPct, trend } = predict(history.points, reportedPct ?? undefined);
+    const better = projectGrade({ gradeEntry, assignments: undefined, reportedPct });
+    const { predictedPct, trend } = better ?? predict(history.points, reportedPct ?? undefined);
     const name =
       section?.course_title ||
       section?.section_title ||
@@ -492,6 +493,126 @@ export function adaptCourses(
   }
 
   return { COURSES, HISTORY };
+}
+
+/**
+ * The predicted grade, made better (2026-11-09, Martin: "improve the grade prediction system in any way possible").
+ *
+ * predict() above only looked at the last few scores as equal percentages. This looks at how the class grade is
+ * actually made and what's still coming:
+ *  - every graded score, by points (a 100-point test counts more than a 5-point quiz);
+ *  - momentum: how the student is doing lately (the most recent third of the term's points) against the whole
+ *    term, at most 12 points either way: the coming work is expected at that level;
+ *  - each grading category at its own rate plus that momentum, combined by the class's own category weights (work
+ *    outside them doesn't count, as in Schoology), or by total points when it has none;
+ *  - the work still to come: the next 4 assignments, shaped like the work so far (their points and categories).
+ *    Only the grades payload is needed, so the bundle and the live grade checks (GET /data/grades) agree; a
+ *    caller can pass the class's assignments to count its listed ungraded work instead.
+ * The answer is then anchored to Schoology's own grade: predicted = reported grade + (projected - current) by this
+ * model, so rounding, dropped scores or rules we can't see don't show up as a fake change. Needs 3 graded scores;
+ * fewer keep predict()'s answer.
+ */
+/** The share of the term's points that counts as "lately" (the most recent third). */
+export const PREDICT_RECENT_SHARE = 1 / 3;
+export function projectGrade(input: { gradeEntry: Raw | undefined; assignments: Raw[] | undefined; reportedPct: number | null }): { predictedPct: number; trend: "up" | "down" | "flat" } | null {
+  const entry = input.gradeEntry ?? {};
+  // the grading period Schoology's reported grade is for, when it says; else every period's work
+  const periodId = String(asArray(entry?.final_grade)[0]?.period_id ?? "");
+  const periods = asArray(entry?.period);
+  const usePeriods = periodId && periods.some((p) => String(p?.period_id ?? p?.id ?? "") === periodId) ? periods.filter((p) => String(p?.period_id ?? p?.id ?? "") === periodId) : periods;
+  type G = { e: number; p: number; at: number; cat: string };
+  const graded: G[] = [];
+  const gradedIds = new Set<string>();
+  for (const period of usePeriods) for (const row of asArray(period?.assignment)) {
+    const sc = scoreOf(row);
+    const id = String(row?.assignment_id ?? "");
+    if (id) gradedIds.add(id);
+    if (!sc) continue;
+    graded.push({ e: sc.earned, p: sc.possible, at: schoologyTime(row?.timestamp) ?? 0, cat: String(row?.category_id ?? "") });
+  }
+  const cats = new Map<string, number>();   // category -> weight (0 when the class doesn't weight)
+  for (const c of asArray(entry?.grading_category)) {
+    const id = String(c?.id ?? "");
+    const w = num(c?.weight);
+    if (id) cats.set(id, w !== null && w > 0 ? w : 0);
+  }
+  const weighted = [...cats.values()].some((w) => w > 0);
+  // with weights, work outside the weighted categories doesn't count toward the grade, so it doesn't set the pace either
+  if (weighted) for (let i = graded.length - 1; i >= 0; i--) if (!((cats.get(graded[i].cat) ?? 0) > 0)) graded.splice(i, 1);
+  if (graded.length < 3) return null;
+  graded.sort((a, b) => a.at - b.at);
+
+  // Momentum: how the student is doing lately against the whole term. Steady work: 0. Each category then keeps its
+  // own rate plus that momentum, so a strong category isn't pulled toward the average (that made steady students look
+  // like they were slipping).
+  const pointsRate = (list: G[]) => list.reduce((n, g) => n + g.e, 0) / list.reduce((n, g) => n + g.p, 0);
+  const overall = pointsRate(graded);
+  // where the student is now: their rate over the most recent third of the term's points (by points, so a 5-point
+  // quiz moves it a little and a 100-point test a lot), against the whole term
+  const totalP = graded.reduce((n, g) => n + g.p, 0);
+  let needP = totalP * PREDICT_RECENT_SHARE, re = 0, rp = 0;
+  for (let i = graded.length - 1; i >= 0 && needP > 0; i--) {
+    const take = Math.min(1, needP / graded[i].p);
+    re += graded[i].e * take; rp += graded[i].p * take; needP -= graded[i].p * take;
+  }
+  const momentum = rp > 0 ? Math.max(-0.12, Math.min(0.12, re / rp - overall)) : 0;
+  const byCat = new Map<string, G[]>();
+  for (const g of graded) { const k = weighted ? g.cat : ""; byCat.set(k, [...(byCat.get(k) ?? []), g]); }
+  const rate = (k: string) => {
+    const list = byCat.get(k) ?? [];
+    // a category with no scores yet: the student's overall rate
+    const own = list.length ? pointsRate(list) : overall;
+    return Math.min(1.1, Math.max(0, own + momentum));
+  };
+
+  // what's still to come, by category
+  const remaining = new Map<string, number>();
+  for (const a of input.assignments ?? []) {
+    const id = String(a?.id ?? "");
+    const gid = String(a?.grade_item_id ?? "");
+    if (!/^\d{1,20}$/.test(id) || gradedIds.has(id) || (gid && gradedIds.has(gid))) continue;
+    if (String(a?.published ?? "1") === "0" || String(a?.count_in_grade ?? "1") === "0") continue;
+    const pts = num(a?.max_points);
+    if (pts === null || pts <= 0) continue;
+    const cat = String(a?.grading_category ?? "");
+    const k = weighted ? (cats.has(cat) ? cat : "?") : "";
+    remaining.set(k, (remaining.get(k) ?? 0) + pts);
+  }
+  if (!remaining.size) {
+    // nothing listed (or not asked): the next 4 assignments, shaped like the work so far
+    const avgPts = graded.reduce((n, g) => n + g.p, 0) / graded.length;
+    for (const [k, list] of byCat) remaining.set(k, avgPts * 4 * (list.length / graded.length));
+  }
+
+  const grade = (withRemaining: boolean) => {
+    const keys = new Set([...byCat.keys(), ...remaining.keys()]);
+    if (!weighted) {
+      let e = 0, p = 0;
+      for (const k of keys) {
+        for (const g of byCat.get(k) ?? []) { e += g.e; p += g.p; }
+        if (withRemaining) { const r = remaining.get(k) ?? 0; e += rate(k) * r; p += r; }
+      }
+      return p > 0 ? e / p : null;
+    }
+    let sum = 0, wsum = 0;
+    for (const k of keys) {
+      const w = cats.get(k) ?? 0;
+      if (!(w > 0)) continue;   // work outside the weighted categories doesn't count, as in Schoology
+      let e = 0, p = 0;
+      for (const g of byCat.get(k) ?? []) { e += g.e; p += g.p; }
+      if (withRemaining) { const r = remaining.get(k) ?? 0; e += rate(k) * r; p += r; }
+      if (p <= 0) continue;
+      sum += w * (e / p); wsum += w;
+    }
+    return wsum > 0 ? sum / wsum : null;
+  };
+  const now = grade(false), then = grade(true);
+  if (now === null || then === null) return null;
+  const move = (then - now) * 100;
+  const base = input.reportedPct !== null && input.reportedPct > 0 ? input.reportedPct : now * 100;
+  const predictedPct = Math.max(0, Math.min(110, Math.round(base + move)));
+  const trend = move > 0.5 ? "up" : move < -0.5 ? "down" : "flat";
+  return { predictedPct, trend };
 }
 
 export function isOutsideTool(raw: Raw): boolean {

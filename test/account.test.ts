@@ -97,6 +97,15 @@ console.log("\ndelete your account");
   check("signed out: 401", out.res.status, 401);
 }
 
+console.log("\nstatus page");
+{
+  const r = await call("/status", { cookie: null, origin: null });
+  check("200, ok, the same flat shape", [r.res.status, r.data.service, r.data.status, typeof r.data.connections, typeof r.data.features], [200, "averages-api", "ok", "object", "object"]);
+  const text = JSON.stringify(r.data);
+  check("no client ids or keys in it", /apps\.googleusercontent|AIza|secret/i.test(text.replace("SESSION_SECRET", "")), false);
+  check("every answer is true or false", [r.data.signIn, r.data.connections, r.data.features].every((o: any) => Object.values(o).every((v) => typeof v === "boolean")), true);
+}
+
 console.log("\ndelete your account: everything, or it says so");
 {
   // pictures in R2: all gone

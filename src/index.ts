@@ -170,6 +170,7 @@ import { hasPlusNow, plusRequired } from "./plus.ts";
 import { liveCourses, liveEvery } from "./liveGrades.ts";
 import { billingRoutes, stripeWebhookRoutes, type BillingRouteEnv, type BillingStoreApi } from "./billingRoutes.ts";
 import type { PushStore } from "./pushStore.ts";
+import { pushConfigured } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
 import { submitRoutes } from "./submitRoutes.ts";
 import { deleteAllMedia, mediaRoutes, type MediaBucket } from "./media.ts";
@@ -434,6 +435,53 @@ app.get("/", (c) => {
         ? "Ready. SESSION_SECRET is set as a runtime secret."
         : "SESSION_SECRET is NOT reaching the Worker at runtime. Set it under the Worker's Settings -> Variables and Secrets (type: Secret), or run: npx wrangler secret put SESSION_SECRET. A value entered in Build settings does not count.",
     docs: "https://github.com/averages-io/averages.api",
+  });
+});
+
+/**
+ * api.averages.io/status (2026-11-09, Martin): everything the public routes say, on one page, in the same flat
+ * shape as "/". Whether each part of Averages.io is on and set up, with the maintenance message when there is one.
+ * Booleans only: no client ids, keys or anyone's data.
+ */
+app.get("/status", async (c) => {
+  const env = c.env as any;
+  const on = (k: FeatureKey) => featureOn(c.env, k);
+  const cloud = cloudConfig(c.env);
+  const consumer = consumerFrom(c.env);
+  const maintenance = on("maintenance-banner");
+  const msg = typeof c.env.MAINTENANCE_MESSAGE === "string" ? c.env.MAINTENANCE_MESSAGE.trim().slice(0, 300) : "";
+  c.header("Cache-Control", "public, max-age=30");
+  return c.json({
+    service: "averages-api",
+    status: maintenance ? "degraded" : "ok",
+    message: maintenance ? msg || "Averages.io is experiencing degraded performance right now. Some things may be slow or not work." : "Everything is working normally.",
+    checked: new Date().toISOString(),
+    configured: (c.env.SESSION_SECRET ?? "").length > 0,
+    signIn: {
+      schoology: !!consumer && on("schoology-oauth") && (!isSandboxConsumer(consumer) || on("test-signin")),
+      schoologyApiKey: on("schoology-signin"),
+    },
+    connections: {
+      canva: canvaConfigured(c.env) && on("canva-integration"),
+      googleDrive: !!cloud.google && on("drive-integration"),
+      oneDrive: !!cloud.microsoft && on("onedrive-integration"),
+    },
+    features: {
+      fullscreen: fullscreenPublic(c.env) && on("fullscreen"),
+      liveGrades: on("live-grades"),
+      turnIn: on("turnin-feature"),
+      messages: on("messaging-features"),
+      notifications: on("notifications-features") && pushConfigured(env),
+      calendarSync: on("calendar-sync"),
+      averagesPlus: on("billing"),
+      fileViewer: on("coursematerialpreview-feature"),
+    },
+    links: {
+      app: "https://app.averages.io",
+      website: "https://averages.io",
+      support: "https://averages.io/support",
+      docs: "https://github.com/averages-io/averages.api",
+    },
   });
 });
 
@@ -1666,7 +1714,7 @@ app.get("/config/features", async (c) => {
   return c.json({
     features,
     early: FEATURE_KEYS.filter((k) => !features[k] && earlyKey(c.env, k)),
-    maintenance: featureOn(c.env, "maintenance-banner") ? { message: msg || "Averages.io is having some trouble right now. Some things may not work." } : null,
+    maintenance: featureOn(c.env, "maintenance-banner") ? { message: msg || "Averages.io is experiencing degraded performance right now. Some things may be slow or not work." } : null,
   });
 });
 
