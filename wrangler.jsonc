@@ -30,7 +30,9 @@
       // Averages Plus (src/billing.ts): Stripe customer / subscription per student, US jurisdiction.
       { "name": "BILLING", "class_name": "BillingStore" },
       // Calendar sync, an Averages Plus perk (src/calendar.ts, 2026-10-21): one per student link and one per feed, US jurisdiction.
-      { "name": "CALENDAR", "class_name": "CalendarStore" }
+      { "name": "CALENDAR", "class_name": "CalendarStore" },
+      // The automatic outage check (src/health.ts, 2026-11-10): one record for the whole app, US jurisdiction.
+      { "name": "HEALTH", "class_name": "HealthStore" }
     ]
   },
   "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
@@ -77,6 +79,9 @@
     { "tag": "v7", "deleted_classes": ["SchoolsStore"] },
     { "tag": "v8", "new_sqlite_classes": ["BillingStore"] },
     { "tag": "v9", "new_sqlite_classes": ["CalendarStore"] },
-    { "tag": "v10", "deleted_classes": ["Converter"] }
-  ]
+    { "tag": "v10", "deleted_classes": ["Converter"] },
+    { "tag": "v11", "new_sqlite_classes": ["HealthStore"] }
+  ],
+  // Every 15 minutes: the automatic outage check (src/health.ts). Martin, 2026-11-10: "auto refresh on the server every 15 min".
+  "triggers": { "crons": ["*/15 * * * *"] }
 }

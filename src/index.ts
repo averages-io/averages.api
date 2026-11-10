@@ -185,6 +185,7 @@ import {
   type SubmittedFile,
 } from "./submit.ts";
 import { canvaExportRoutes, contentDisposition } from "./canvaExport.ts";
+import { downNow, healthMessage, healthStore, HEALTH_SERVICES, nextRecord, readHealth, runChecks, type HealthAnswer } from "./health.ts";
 import { capStream, DRIVE_FILE_ID_RE, DriveExportError, isDriveExportType, openDriveExport } from "./driveExport.ts";
 import { canvaFolderRoutes, createFolder, moveItem } from "./canvaFolders.ts";
 import { answerUnlessSame, FP_HEADER } from "./fingerprint.ts";
@@ -198,6 +199,7 @@ export { CloudStore } from "./cloudStore.ts";
 export { BillingStore } from "./billingStore.ts";
 export { PushStore } from "./pushStore.ts";
 export { CalendarStore } from "./calendar.ts";
+export { HealthStore } from "./healthStore.ts";
 
 type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
@@ -237,6 +239,8 @@ type Bindings = {
   EARLY?: FeatureKey[];
   CALENDAR?: DurableObjectNamespace;
   MAINTENANCE_MESSAGE?: string;
+  /** The automatic outage check's one record (src/health.ts, src/healthStore.ts). */
+  HEALTH?: DurableObjectNamespace;
   /** "1": Fullscreen for everyone (while its switch is on). "0": only testers (fullscreenTester). Unset counts as "1". */
   FULLSCREEN_PUBLIC?: string;
   /** More school addresses (comma-separated) that see Fullscreen while FULLSCREEN_PUBLIC is "0". */
@@ -450,12 +454,24 @@ app.get("/status", async (c) => {
   const consumer = consumerFrom(c.env);
   const maintenance = on("maintenance-banner");
   const msg = typeof c.env.MAINTENANCE_MESSAGE === "string" ? c.env.MAINTENANCE_MESSAGE.trim().slice(0, 300) : "";
+  // the automatic check every 15 minutes (src/health.ts): each part's last answer
+  const now = Date.now();
+  const rec = await readHealth(env, isLocalRequest(c.req.url));
+  const down = downNow(rec, now);
+  const fresh = down.length > 0 || (!!rec && now - rec.checked <= 45 * 60_000);
+  const health: Record<string, string> = {};
+  for (const s of HEALTH_SERVICES) health[s] = fresh && rec ? (rec.services?.[s] ?? "unknown") : "unknown";
+  const downSince: Record<string, string> = {};
+  for (const s of down) if (rec?.since?.[s]) downSince[s] = new Date(rec.since[s]!).toISOString();
   c.header("Cache-Control", "public, max-age=30");
   return c.json({
     service: "averages-api",
-    status: maintenance ? "degraded" : "ok",
-    message: maintenance ? msg || "Averages.io is experiencing degraded performance right now. Some things may be slow or not work." : "Everything is working normally.",
+    status: maintenance || down.length ? "degraded" : "ok",
+    message: maintenance ? msg || "Averages.io is experiencing degraded performance right now. Some things may be slow or not work." : down.length ? healthMessage(down) : "Everything is working normally.",
     checked: new Date().toISOString(),
+    lastHealthCheck: rec && fresh ? new Date(rec.checked).toISOString() : null,
+    health,
+    ...(Object.keys(downSince).length ? { downSince } : {}),
     configured: (c.env.SESSION_SECRET ?? "").length > 0,
     signIn: {
       schoology: !!consumer && on("schoology-oauth") && (!isSandboxConsumer(consumer) || on("test-signin")),
@@ -1706,6 +1722,8 @@ app.get("/config/features", async (c) => {
   const everyone = !plusRequired(c.env as any);
   if (everyone) for (const k of FEATURE_KEYS) if (!features[k] && earlyKey(c.env, k)) features[k] = true;
   const msg = typeof c.env.MAINTENANCE_MESSAGE === "string" ? c.env.MAINTENANCE_MESSAGE.trim().slice(0, 300) : "";
+  // the switch's message wins; else what the 15-minute check found down (src/health.ts)
+  const auto = featureOn(c.env, "maintenance-banner") ? "" : healthMessage(downNow(await readHealth(c.env as any, isLocalRequest(c.req.url)), Date.now()));
   // Fullscreen only for testers until FULLSCREEN_PUBLIC is "1": then the answer depends on who's asking.
   const perStudent = !fullscreenPublic(c.env) && features.fullscreen;
   if (perStudent) features.fullscreen = fullscreenTester(await sessionFrom(c), c.env.FULLSCREEN_SCHOOLS ?? "");
@@ -1714,7 +1732,7 @@ app.get("/config/features", async (c) => {
   return c.json({
     features,
     early: FEATURE_KEYS.filter((k) => !features[k] && earlyKey(c.env, k)),
-    maintenance: featureOn(c.env, "maintenance-banner") ? { message: msg || "Averages.io is experiencing degraded performance right now. Some things may be slow or not work." } : null,
+    maintenance: featureOn(c.env, "maintenance-banner") ? { message: msg || "Averages.io is experiencing degraded performance right now. Some things may be slow or not work." } : auto ? { message: auto, automatic: true } : null,
   });
 });
 
@@ -2485,5 +2503,41 @@ export default {
   // Flagship switches (src/flags.ts) are read once per request, before the app sees env.
   fetch: async (request: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(request, await withFlags(env), ctx),
   queue: async (batch: MessageBatch<unknown>, env: Bindings) => handleRetryBatch(batch, retryHandlers(env)),
+  // Every 15 minutes (wrangler.jsonc triggers): the automatic outage check (src/health.ts)
+  scheduled: async (_event: unknown, env: Bindings, ctx: ExecutionContext) => { ctx.waitUntil(checkHealth(await withFlags(env))); },
 };
+
+/** One round of the outage check, kept in HealthStore. Never throws. */
+export async function checkHealth(env: Bindings, fetcher?: (url: string, init?: RequestInit) => Promise<Response>): Promise<void> {
+  try {
+    const on = (k: FeatureKey) => featureOn(env, k);
+    const us = (ns: any) => { try { return typeof ns?.jurisdiction === "function" ? ns.jurisdiction("us") : ns; } catch { return ns; } };
+    const stub = (ns: any, name: string) => { const n = us(ns); return n.get(n.idFromName(name)); };
+    const consumer = consumerFrom(env);
+    const cloud = cloudConfig(env);
+    const services = await runChecks({
+      fetcher,
+      signin: consumer && on("schoology-oauth") && !isSandboxConsumer(consumer)
+        ? () => requestToken(consumer, fetcher ?? fetch).then((): HealthAnswer => "ok", (): HealthAnswer => "down")
+        : null,
+      // our own pieces each read a test record that holds nothing ("health-check" is never a student)
+      sync: env.SYNC ? () => stub(env.SYNC, "health-check").getRecord("health") : null,
+      notifications: (env as any).PUSH ? () => stub((env as any).PUSH, "health-check").status() : null,
+      calendar: (env as any).CALENDAR ? () => stub((env as any).CALENDAR, "health-check").read() : null,
+      pictures: (env as any).MEDIA ? () => (env as any).MEDIA.list({ prefix: "health/", limit: 1 }) : null,
+      canva: canvaConfigured(env) && on("canva-integration"),
+      gdrive: !!cloud.google && on("drive-integration"),
+      onedrive: !!cloud.microsoft && on("onedrive-integration"),
+    });
+    const store = healthStore(env as any, false);
+    if (!store) return;
+    const prev = await store.read().catch(() => null);
+    const rec = nextRecord(prev, services, Date.now());
+    await store.write(rec);
+    const down = Object.entries(services).filter(([, v]) => v === "down").map(([k]) => k);
+    if (down.length) console.error("health_down", down.join(","));
+  } catch (err) {
+    console.error("health_check_failed", err instanceof Error ? err.message : String(err));
+  }
+}
 
