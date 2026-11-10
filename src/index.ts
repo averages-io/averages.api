@@ -2212,7 +2212,7 @@ app.get("/cloud/:app/connect", async (c) => {
       write: c.req.query("write") === "1",
       loginHint: c.req.query("login_hint") ?? null,
       // This Worker's own address as the browser reached it, so wrangler dev
-      // works too. It must be listed with Google / Microsoft (see README).
+      // works too. It must be listed with Google / Microsoft (see DEVELOPMENT.md).
       redirectUri: `${new URL(c.req.url).origin}/cloud/${cloudApp}/callback`,
     });
     return c.redirect(url);
