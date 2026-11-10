@@ -12,20 +12,20 @@ function check(name: string, actual: unknown, expected: unknown) {
   else { failed++; console.log(`  FAIL  ${name}\n        expected: ${e}\n        actual:   ${a}`); }
 }
 
-check("15 switches, in Martin's order (billing and calendar-sync added 2026-10-21, live-grades 2026-10-27, fullscreen 2026-10-28, schoology-oauth 2026-10-29)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "coursematerialpreview-feature", "turnin-feature", "messaging-features", "notifications-features", "billing", "calendar-sync", "live-grades", "fullscreen", "schoology-oauth"]);
+check("14 switches, in Martin's order (billing and calendar-sync added 2026-10-21, live-grades 2026-10-27, fullscreen 2026-10-28, schoology-oauth 2026-10-29; coursematerialpreview-feature removed 2026-11-10)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "turnin-feature", "messaging-features", "notifications-features", "billing", "calendar-sync", "live-grades", "fullscreen", "schoology-oauth"]);
 check("live grades need live-grades; the bundle never does", [featureForRoute("GET", "/data/grades"), featureForRoute("GET", "/data/bundle")], [["live-grades"], []]);
 check("calendar routes need calendar-sync, except turning it off", [featureForRoute("GET", "/calendar/status"), featureForRoute("POST", "/calendar"), featureForRoute("GET", "/calendar/abc.ics"), featureForRoute("DELETE", "/calendar")], [["calendar-sync"], ["calendar-sync"], ["calendar-sync"], []]);
 {
-  const early = await readEarly({ FEATURES_EARLY: "coursematerialpreview-feature, nonsense" });
-  check("early access from FEATURES_EARLY (unknown keys ignored)", early, ["coursematerialpreview-feature"]);
+  const early = await readEarly({ FEATURES_EARLY: "messaging-features, nonsense" });
+  check("early access from FEATURES_EARLY (unknown keys ignored)", early, ["messaging-features"]);
   const fromFlagship = await readEarly({ FLAGS: { getBooleanValue: async (_k: string, d: boolean) => d, getStringValue: async (k: string) => (k === "early-access" ? "messaging-features" : "") } });
   check("early access from Flagship's early-access string flag", fromFlagship, ["messaging-features"]);
   const slow = await readEarly({ FLAGS: { getBooleanValue: async (_k: string, d: boolean) => d, getStringValue: () => new Promise<string>(() => {}) } }, 20);
   check("Flagship too slow: no early keys", slow, []);
-  const env = await withFlags({ FEATURES_EARLY: "coursematerialpreview-feature" });
-  check("withFlags carries EARLY; earlyKey reads it", [earlyKey(env, "coursematerialpreview-feature"), earlyKey(env, "billing")], [true, false]);
+  const env = await withFlags({ FEATURES_EARLY: "messaging-features" });
+  check("withFlags carries EARLY; earlyKey reads it", [earlyKey(env, "messaging-features"), earlyKey(env, "billing")], [true, false]);
 }
-check("defaults: everything on except the banner, previews, billing and Fullscreen", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "coursematerialpreview-feature", "billing", "fullscreen"]);
+check("defaults: everything on except the banner, billing and Fullscreen", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "billing", "fullscreen"]);
 check("billing routes: checkout and portal need the switch; status and the webhook never do", [featureForRoute("POST", "/billing/checkout"), featureForRoute("POST", "/billing/portal"), featureForRoute("GET", "/billing/status"), featureForRoute("POST", "/stripe/webhook")], [["billing"], ["billing"], [], []]);
 check("no Flagship: the defaults", await readFeatures({}), DEFAULTS);
 const vars = fallbackFeatures({ FEATURES_OFF: " Messaging-Features, turnin-feature,nonsense", FEATURES_ON: "maintenance-banner,turnin-feature" });

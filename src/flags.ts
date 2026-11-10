@@ -7,7 +7,6 @@ export const DEFAULTS = {
   "schoology-signin": true,
   "test-signin": true,
   "maintenance-banner": false,
-  "coursematerialpreview-feature": false,
   "turnin-feature": true,
   "messaging-features": true,
   "notifications-features": true,

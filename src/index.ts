@@ -490,7 +490,6 @@ app.get("/status", async (c) => {
       notifications: on("notifications-features") && pushConfigured(env),
       calendarSync: on("calendar-sync"),
       averagesPlus: on("billing"),
-      fileViewer: on("coursematerialpreview-feature"),
     },
     links: {
       app: "https://app.averages.io",
