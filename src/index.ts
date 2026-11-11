@@ -1428,6 +1428,7 @@ app.get("/data/attachment", async (c) => {
     const parent = assignment ? await getAssignment(section, assignment, session) : await getDocument(section, documentId, session);
     const file = findAttachment(parent, fileId);
     if (!file || !file.downloadPath) return c.json({ error: "file_not_found" }, 404);
+    if (c.req.query("as") === "pdf") return await previewResponse(file, session);
     const upstream = await openAttachment(file.downloadPath, session);
     if (c.req.query("view") === "1") {
       const viewed = viewResponse(upstream, file.name);
@@ -1507,6 +1508,18 @@ function viewResponse(upstream: Response, name: string): Response | null {
   const length = upstream.headers.get("Content-Length");
   if (length) headers.set("Content-Length", length);
   return new Response(upstream.body, { status: 200, headers });
+}
+
+/**
+ * `?as=pdf`: Schoology's PDF copy of the file (pdfPreviewPath in adapt.ts), shown inline under the
+ * file's own name with ".pdf", so the Files page can draw a Word, PowerPoint or Excel file's first
+ * page. 404 no_preview when Schoology has no copy.
+ */
+async function previewResponse(file: { name: string; previewPath: string }, session: SessionData): Promise<Response> {
+  if (!file.previewPath) return Response.json({ error: "no_preview" }, { status: 404, headers: { "Cache-Control": "private, no-store" } });
+  const upstream = await openAttachment(file.previewPath, session);
+  const base = file.name.replace(/\.[a-z0-9]{1,8}$/i, "") || "Preview";
+  return viewResponse(upstream, `${base}.pdf`)!;
 }
 
 /** The two forms of a file name for Content-Disposition: plain ASCII, and RFC 5987 UTF-8. */
@@ -1672,6 +1685,7 @@ app.get("/data/submission-file", async (c) => {
     }
     const file = findSubmittedFile(history, session.uid, revision, fileId);
     if (!file || !file.downloadPath) return c.json({ error: "not_found" }, 404);
+    if (c.req.query("as") === "pdf") return await previewResponse(file, session);
     const upstream = await openAttachment(file.downloadPath, session);
     if (c.req.query("view") === "1") {
       const viewed = viewResponse(upstream, file.name);

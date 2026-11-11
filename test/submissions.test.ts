@@ -31,6 +31,8 @@ const unix = (ms: number) => String(Math.floor(ms / 1000));
 /** "YYYY-MM-DD HH:MM:SS", `days` from now (UTC), the way Schoology writes due dates. */
 const due = (days: number) => new Date(NOW + days * DAY).toISOString().slice(0, 19).replace("T", " ");
 const DL = (id: string) => `https://api.schoology.com/v1/attachment/${id}/source/x`;
+/** Schoology's PDF copy of a Word file, made for its viewer. */
+const CONVERTED = (id: string) => ({ converted_status: "1", converted_extension: "pdf", converted_download_path: `https://api.schoology.com/v1/attachment/${id}/conversion/file.pdf` });
 const file = (id: string, title: string, extra: Record<string, unknown> = {}) => ({ id, type: "file", title, filename: title, filesize: 1234, download_path: DL(id), ...extra });
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
@@ -74,7 +76,7 @@ console.log("\nhelpers");
   check("a file's entry", files[0], { id: "901", name: "Essay.DOCX", ext: "docx", size: 1234, course: "101", assignment: "601", assignmentTitle: "Essay", revision: "71", at: Math.floor((NOW - DAY) / 1000) * 1000, late: true });
   check("named with the extension Schoology gives, like /data/files", [files[1].name, files[1].ext], ["Notes.pdf", "pdf"]);
   check("no download path in an entry", JSON.stringify(files).includes("download"), false);
-  check("findSubmittedFile: the raw download path", findSubmittedFile(history, ME, "71", "902"), { name: "Notes.pdf", downloadPath: DL("902"), size: 1234 });
+  check("findSubmittedFile: the raw download path", findSubmittedFile(history, ME, "71", "902"), { name: "Notes.pdf", downloadPath: DL("902"), size: 1234, previewPath: "" });
   check("findSubmittedFile: a bare single file object", findSubmittedFile(history, ME, "72", "903")?.downloadPath, DL("903"));
   check("findSubmittedFile: someone else's revision: null", findSubmittedFile(history, ME, "73", "904"), null);
   check("findSubmittedFile: a file from another revision: null", findSubmittedFile(history, ME, "74", "901"), null);
@@ -128,6 +130,14 @@ globalThis.fetch = (async (input: any, init: RequestInit = {}) => {
       if (h === undefined) return reply({ error: "none" }, 404);
       return typeof h === "number" ? reply({ error: "x" }, h) : reply(h);
     }
+    m = path.match(/^\/sections\/(\d+)\/assignments\/(\d+)$/);
+    if (m) {
+      const a = world.assignments[m[1]];
+      const one = Array.isArray(a) ? a.find((x) => String(x.id) === m![2]) : null;
+      return one ? reply(one) : reply({ error: "none" }, 404);
+    }
+    m = path.match(/^\/attachment\/(\d+)\/conversion\/file\.pdf$/);
+    if (m) return new Response(`%PDF-1.4 copy of ${m[1]}`, { status: 200, headers: { "Content-Type": "application/pdf" } });
     m = path.match(/^\/attachment\/(\d+)\/source\/x$/);
     if (m) {
       // Schoology sends the student on to its file storage.
@@ -157,7 +167,7 @@ function resetWorld() {
     ],
     "102": [
       { id: 701, title: "Essay", type: "assignment", allow_dropbox: "1", due: due(-3) },
-      { id: 702, title: "Poem", type: "assignment", allow_dropbox: "1", due: due(-4) },
+      { id: 702, title: "Poem", type: "assignment", allow_dropbox: "1", due: due(-4), attachments: { files: { file: [file("951", "Rubric.pptx", CONVERTED("951")), file("952", "Example.pdf", CONVERTED("952")), file("953", "Data.xlsx")] } } },
     ],
     "103": [],
   };
@@ -171,7 +181,7 @@ function resetWorld() {
       ],
     },
     "101/605": 500,
-    "102/701": { revision: { revision_id: 85, uid: ME, created: unix(NOW - 4 * DAY), late: 1, attachments: { files: [file("905", "Essay final.docx")] } } },
+    "102/701": { revision: { revision_id: 85, uid: ME, created: unix(NOW - 4 * DAY), late: 1, attachments: { files: [file("905", "Essay final.docx", CONVERTED("905"))] } } },
     // 102/702: nothing turned in (404)
   };
 }
@@ -256,8 +266,30 @@ resetWorld();
   resetWorld();
 }
 
+const q2 = (s: string, a: string, r: string, f: string) => `/data/submission-file?section=${s}&assignment=${a}&revision=${r}&file=${f}`;
+console.log("\nPDF previews of Word, PowerPoint and Excel files (?as=pdf)");
+{
+  fresh();
+  const list = await call("/data/submissions", student);
+  const essay = list.data.files.find((f: any) => f.id === "905");
+  check("the list marks a file Schoology made a PDF copy of", [essay?.preview, list.data.files.filter((f: any) => f.preview).map((f: any) => f.id)], [true, ["905"]]);
+  const pv = await call(q2("102", "701", "85", "905") + "&as=pdf", student);
+  check("turned-in file: Schoology's PDF copy, shown inline under its own name",
+    [pv.res.status, await pv.res.text(), pv.res.headers.get("Content-Type"), pv.res.headers.get("Content-Disposition"), pv.res.headers.get("Cache-Control")],
+    [200, "%PDF-1.4 copy of 905", "application/pdf", `inline; filename="Essay final.pdf"; filename*=UTF-8''Essay%20final.pdf`, "private, no-store"]);
+  check("the copy is fetched signed, from api.schoology.com", calls.filter((c) => c.url.pathname.includes("/conversion/")).map((c) => [c.url.hostname, c.auth.startsWith("OAuth ")]), [["api.schoology.com", true]]);
+  check("a PDF has no copy to show: 404 no_preview", (await call(q2("101", "601", "81", "902") + "&as=pdf", student)).data, { error: "no_preview" });
+  check("without as=pdf: the original file, as before", (await call(q2("102", "701", "85", "905"), student)).res.headers.get("Content-Disposition")?.startsWith('attachment; filename="Essay final.docx"'), true);
+
+  const att = (f: string) => `/data/attachment?section=102&assignment=702&file=${f}&as=pdf`;
+  const ppt = await call(att("951"), student);
+  check("class file: PowerPoint's PDF copy", [ppt.res.status, await ppt.res.text(), ppt.res.headers.get("Content-Disposition")], [200, "%PDF-1.4 copy of 951", `inline; filename="Rubric.pdf"; filename*=UTF-8''Rubric.pdf`]);
+  check("class file that's already a PDF: no_preview", (await call(att("952"), student)).data, { error: "no_preview" });
+  check("class file Schoology didn't convert: no_preview", (await call(att("953"), student)).data, { error: "no_preview" });
+  check("a file that isn't on that assignment: still 404 file_not_found", (await call(att("905"), student)).data, { error: "file_not_found" });
+}
 console.log("\nGET /data/submission-file");
-const q = (s: string, a: string, r: string, f: string) => `/data/submission-file?section=${s}&assignment=${a}&revision=${r}&file=${f}`;
+const q = q2;
 {
   fresh();
   const { res } = await call(q("101", "601", "81", "902"), student);

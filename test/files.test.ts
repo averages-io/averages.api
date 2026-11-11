@@ -8,7 +8,7 @@
  * names are made up.
  */
 
-import { adaptCourseFiles, findAttachment, MAX_COURSE_FILES } from "../src/adapt.ts";
+import { adaptCourseFiles, findAttachment, MAX_COURSE_FILES, pdfPreviewPath } from "../src/adapt.ts";
 
 let passed = 0;
 let failed = 0;
@@ -79,6 +79,30 @@ const doc = (id: string, title: string, files: unknown) => ({ id, title, attachm
 {
   const full = Array.from({ length: 200 }, (_, i) => ({ id: String(i + 1), title: "A" }));
   check("a full page of 200 from Schoology is marked partial", adaptCourseFiles({ "111": { documents: [], assignments: full } }).partial, true);
+}
+
+{
+  // Schoology's PDF copy of an uploaded file (made for its viewer), used to preview Office files.
+  const CONV = (id: string, extra: Record<string, unknown> = {}) => ({ converted_status: "1", converted_extension: "pdf", converted_download_path: `https://api.schoology.com/v1/attachment/${id}/conversion/file.pdf`, ...extra });
+  const f = (id: string, filename: string, extra: Record<string, unknown> = {}) => ({ id, filename, title: filename, download_path: `https://api.schoology.com/v1/attachment/${id}/source/x`, ...extra });
+  const raw = { attachments: { files: { file: [
+    f("21", "Essay.docx", CONV("21")),
+    f("22", "Slides.pptx", CONV("22", { converted_status: 1 })),
+    f("23", "Scan.pdf", CONV("23")),
+    f("24", "Data.xlsx", CONV("24", { converted_status: "0" })),
+    f("25", "Notes.docx", CONV("25", { converted_extension: "png" })),
+    f("26", "Old.doc", CONV("26", { converted_download_path: "https://evil.example/x.pdf" })),
+    f("27", "Plain.docx"),
+  ] } } };
+  check("pdfPreviewPath: a converted Word file", pdfPreviewPath(raw.attachments.files.file[0]), "https://api.schoology.com/v1/attachment/21/conversion/file.pdf");
+  check("pdfPreviewPath: status as a number works too", pdfPreviewPath(raw.attachments.files.file[1]) !== "", true);
+  check("pdfPreviewPath: none for a PDF, an unfinished or non-PDF copy, another host, or no copy",
+    ["23", "24", "25", "26", "27"].map((id) => pdfPreviewPath(raw.attachments.files.file.find((x) => x.id === id))), ["", "", "", "", ""]);
+  check("findAttachment carries the preview path", [findAttachment(raw, "21")?.previewPath, findAttachment(raw, "27")?.previewPath], ["https://api.schoology.com/v1/attachment/21/conversion/file.pdf", ""]);
+  const { files } = adaptCourseFiles({ "111": { documents: [{ id: "5", title: "Unit 1", ...raw }], assignments: [] } });
+  check("the list marks only files with a PDF copy", files.filter((x) => x.preview).map((x) => x.id).sort(), ["21", "22"]);
+  check("preview is left out (not false) when there's none", "preview" in files.find((x) => x.id === "27")!, false);
+  check("no paths in the list", JSON.stringify(files).includes("conversion"), false);
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

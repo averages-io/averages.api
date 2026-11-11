@@ -829,12 +829,26 @@ function pointsOf(value: unknown): number | null {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Schoology's own PDF copy of an uploaded file, made for its viewer (Word, PowerPoint, Excel and
+ * the like): `converted_download_path` once `converted_status` is 1 and the copy is a PDF. Only
+ * for files that aren't PDFs already, and only on api.schoology.com (the one host our signature
+ * goes to). "" when there's none.
+ */
+export function pdfPreviewPath(f: Raw): string {
+  const done = ["1", 1].includes(f?.converted_status);
+  const isPdf = String(f?.converted_extension ?? "").toLowerCase().replace(/^\./, "") === "pdf";
+  const path = String(f?.converted_download_path ?? "");
+  if (!done || !isPdf || fileNameOf(f).ext === "pdf") return "";
+  return /^https:\/\/api\.schoology\.com\//.test(path) ? path : "";
+}
+
 /** The raw file entry for an attachment id, with its Schoology download path (Worker only). */
-export function findAttachment(raw: Raw, fileId: string): { name: string; downloadPath: string; size: number } | null {
+export function findAttachment(raw: Raw, fileId: string): { name: string; downloadPath: string; size: number; previewPath: string } | null {
   for (const f of nestedList(raw?.attachments?.files, "file")) {
     if (String(f?.id ?? "") !== fileId) continue;
     // Same name as the Files list shows, with the real extension even when the title has none.
-    return { name: fileNameOf(f).name, downloadPath: String(f?.download_path ?? ""), size: num(f?.filesize) ?? 0 };
+    return { name: fileNameOf(f).name, downloadPath: String(f?.download_path ?? ""), size: num(f?.filesize) ?? 0, previewPath: pdfPreviewPath(f) };
   }
   return null;
 }
@@ -857,6 +871,8 @@ export interface CourseFile {
   parentTitle: string;
   /** Upload time in ms, 0 when unknown. */
   at: number;
+  /** Schoology has a PDF copy to preview it with (GET /data/attachment?as=pdf). Only sent when true. */
+  preview?: true;
 }
 
 export const MAX_COURSE_FILES = 1000;
@@ -878,12 +894,12 @@ function fileNameOf(f: Raw): { name: string; ext: string } {
 }
 
 /** The file attachments on one document or assignment, named with their extension. */
-function attachedFiles(raw: Raw): { id: string; name: string; ext: string; size: number; at: number }[] {
+function attachedFiles(raw: Raw): { id: string; name: string; ext: string; size: number; at: number; preview?: true }[] {
   return nestedList(raw?.attachments?.files, "file")
     .map((f) => {
       const { name, ext } = fileNameOf(f);
       const at = toDate(f?.timestamp ?? undefined)?.getTime() ?? 0;
-      return { id: String(f?.id ?? ""), name, ext, size: num(f?.filesize) ?? 0, at };
+      return { id: String(f?.id ?? ""), name, ext, size: num(f?.filesize) ?? 0, at, ...(pdfPreviewPath(f) ? { preview: true as const } : {}) };
     })
     .filter((f) => /^\d{1,20}$/.test(f.id));
 }

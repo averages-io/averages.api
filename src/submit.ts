@@ -315,7 +315,8 @@ export interface Revision {
   when: string;
   late: boolean;
   draft: boolean;
-  files: { id: string; name: string; size: number }[];
+  /** `preview`: Schoology has a PDF copy to preview it with (?as=pdf). Only sent when true. */
+  files: { id: string; name: string; size: number; preview?: true }[];
   /** The text answer as plain text, at most 2000 characters. */
   text: string;
 }
@@ -345,9 +346,10 @@ function revisionFiles(rev: Raw): Revision["files"] {
     const id = String(f?.id ?? "");
     if (!ID_RE.test(id)) continue;
     // Named the same way as the Files page and downloads (adapt.ts), extension included.
-    const name = shownSubmissionName(findAttachment({ attachments: { files: [f] } }, id)?.name ?? "File");
+    const found = findAttachment({ attachments: { files: [f] } }, id);
+    const name = shownSubmissionName(found?.name ?? "File");
     const size = Number(f?.filesize ?? 0);
-    out.push({ id, name, size: Number.isFinite(size) && size > 0 ? Math.floor(size) : 0 });
+    out.push({ id, name, size: Number.isFinite(size) && size > 0 ? Math.floor(size) : 0, ...(found?.previewPath ? { preview: true as const } : {}) });
   }
   return out.slice(0, 50);
 }
@@ -411,7 +413,7 @@ export function findSubmittedFile(
   uid: string,
   revisionId: string,
   fileId: string,
-): { name: string; downloadPath: string; size: number } | null {
+): { name: string; downloadPath: string; size: number; previewPath: string } | null {
   if (!ID_RE.test(revisionId) || !ID_RE.test(fileId)) return null;
   for (const raw of listOf<Raw>(payload, "revision")) {
     if (!raw || typeof raw !== "object" || !isTheirs(raw, uid)) continue;
@@ -519,6 +521,8 @@ export interface SubmittedFile {
   /** When that revision was turned in, epoch ms (0 when Schoology didn't say). */
   at: number;
   late: boolean;
+  /** Schoology has a PDF copy to preview it with (GET /data/submission-file?as=pdf). Only sent when true. */
+  preview?: true;
 }
 
 /** The files in one assignment's history: only this student's revisions (adaptHistory), never drafts. */
@@ -538,6 +542,7 @@ export function submittedFiles(payload: unknown, uid: string, assignment: TurnIn
         revision: rev.id,
         at: rev.created,
         late: rev.late,
+        ...(f.preview ? { preview: true as const } : {}),
       });
     }
   }
