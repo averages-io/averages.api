@@ -25,7 +25,7 @@ check("calendar routes need calendar-sync, except turning it off", [featureForRo
   const env = await withFlags({ FEATURES_EARLY: "messaging-features" });
   check("withFlags carries EARLY; earlyKey reads it", [earlyKey(env, "messaging-features"), earlyKey(env, "billing")], [true, false]);
 }
-check("defaults: everything on except the banner, billing and Fullscreen", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "billing", "fullscreen"]);
+check("defaults: everything on except the banner and billing (Fullscreen on since 2026-11-13)", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "billing"]);
 check("billing routes: checkout and portal need the switch; status and the webhook never do", [featureForRoute("POST", "/billing/checkout"), featureForRoute("POST", "/billing/portal"), featureForRoute("GET", "/billing/status"), featureForRoute("POST", "/stripe/webhook")], [["billing"], ["billing"], [], []]);
 check("no Flagship: the defaults", await readFeatures({}), DEFAULTS);
 const vars = fallbackFeatures({ FEATURES_OFF: " Messaging-Features, turnin-feature,nonsense", FEATURES_ON: "maintenance-banner,turnin-feature" });

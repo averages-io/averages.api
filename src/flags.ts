@@ -13,7 +13,7 @@ export const DEFAULTS = {
   billing: false,
   "calendar-sync": true,
   "live-grades": true,
-  fullscreen: false,
+  fullscreen: true,
   "schoology-oauth": true,
 } as const;
 
