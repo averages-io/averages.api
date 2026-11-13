@@ -96,7 +96,7 @@ console.log("\n/auth/me on a new session");
   const { res, data } = await call("/auth/me", { cookie: `${SESSION_COOKIE}=${session}`, origin: APP });
   check("200 with the same answer as before", [res.status, data], [200, ANSWER]);
   check("no call to Schoology", calls, []);
-  check("Server-Timing says it came from the cookie", /^auth;desc="cookie";dur=\d+$/.test(res.headers.get("Server-Timing") ?? ""), true);
+  check("Server-Timing says it came from the cookie", /(^|, )auth;desc="cookie";dur=\d+(,|$)/.test(res.headers.get("Server-Timing") ?? ""), true);
   check("Timing-Allow-Origin lets the app's DevTools show it", res.headers.get("Timing-Allow-Origin"), APP);
   check("no cookies set", setCookies(res), []);
 }
@@ -127,7 +127,7 @@ let profile = "";
   calls.length = 0;
   const { res, data } = await call("/auth/me", { cookie: `${SESSION_COOKIE}=${oldToken}` });
   check("first visit: asks Schoology once, same answer", [res.status, data, calls], [200, ANSWER, ["/v1/users/me"]]);
-  check("Server-Timing says Schoology", /^auth;desc="schoology";dur=\d+$/.test(res.headers.get("Server-Timing") ?? ""), true);
+  check("Server-Timing says Schoology", /(^|, )auth;desc="schoology";dur=\d+(,|$)/.test(res.headers.get("Server-Timing") ?? ""), true);
   check("the session cookie is NOT rewritten", cookieValue(res, SESSION_COOKIE), null);
   profile = cookieValue(res, PROFILE_COOKIE) ?? "";
   const kept: any = await openValue(profile, SECRET, PROFILE_PURPOSE);

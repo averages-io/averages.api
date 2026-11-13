@@ -6,6 +6,7 @@
  * index.ts that has already resolved a valid session.
  */
 
+import { noteSchoology, noteReused, noteWait } from "./timing.ts";
 import { buildAuthHeader, type Credentials } from "./oauth.ts";
 import { isSandboxCreds, sandboxFetch } from "./reviewSandbox.ts";
 
@@ -46,6 +47,15 @@ function schoologyUrl(path: string, query: Record<string, string | number | unde
  * no credential material: `path` is one of our own constants.
  */
 async function signedFetch(method: string, url: URL, path: string, creds: Credentials, init: { body?: string; redirect: "follow" | "manual" }): Promise<Response> {
+  const started = Date.now();
+  try {
+    return await signedFetchOnce(method, url, path, creds, init);
+  } finally {
+    noteSchoology(started, Date.now(), path);
+  }
+}
+
+async function signedFetchOnce(method: string, url: URL, path: string, creds: Credentials, init: { body?: string; redirect: "follow" | "manual" }): Promise<Response> {
   // The reviewer account (reviewSandbox.ts): answered here, never sent to Schoology.
   if (isSandboxCreds(creds)) return sandboxFetch(method, url.toString(), init.body);
   const auth = await buildAuthHeader(method, url.toString(), creds);
@@ -102,7 +112,7 @@ export async function schoologyGet<T = unknown>(
   const k = `${whoOf(creds)}\u0001${url.href}`;
   const hit = shared.get(k);
   // Kept as text and parsed for each caller, so no request can change another's copy.
-  if (hit && Date.now() - hit.at < READS.shareMs) return JSON.parse(hit.text) as T;
+  if (hit && Date.now() - hit.at < READS.shareMs) { noteReused(); return JSON.parse(hit.text) as T; }
   const value = await schoologyGetFresh<T>(path, creds, query);
   const now = Date.now();
   try { shared.set(k, { at: now, text: JSON.stringify(value) }); } catch { /* not worth keeping */ }
@@ -134,7 +144,9 @@ async function signedGet(url: URL, path: string, creds: Credentials): Promise<Re
     if (res.status !== 429 || wait === undefined) return res;
     await res.body?.cancel().catch(() => {});
     // A little jitter, so the calls that were refused together don't all come back together.
-    await sleep(wait + Math.floor(Math.random() * 400));
+    const ms = wait + Math.floor(Math.random() * 400);
+    noteWait(ms);
+    await sleep(ms);
   }
 }
 

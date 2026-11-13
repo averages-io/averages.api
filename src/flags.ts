@@ -104,10 +104,11 @@ export const FLAG_KEEP_MS = 15_000;
 const kept = new WeakMap<object, { at: number; answer: Promise<[Features, FeatureKey[]]> }>();
 
 /** env plus FEATURES (the answers for this request) and EARLY (the early-access keys). */
-export async function withFlags<E extends object>(env: E, ms = FLAG_WAIT_MS, now = Date.now()): Promise<E & { FEATURES: Features; EARLY: FeatureKey[] }> {
+export async function withFlags<E extends object>(env: E, ms = FLAG_WAIT_MS, now = Date.now(), info?: { kept: boolean }): Promise<E & { FEATURES: Features; EARLY: FeatureKey[] }> {
   const flags = (env as any).FLAGS;
   let answer: Promise<[Features, FeatureKey[]]>;
   const hit = flags && typeof flags === "object" ? kept.get(flags) : undefined;
+  if (info) info.kept = !!(hit && now - hit.at >= 0 && now - hit.at < FLAG_KEEP_MS);
   if (hit && now - hit.at >= 0 && now - hit.at < FLAG_KEEP_MS) answer = hit.answer;
   else {
     // requests arriving together share one lookup

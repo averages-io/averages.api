@@ -112,7 +112,8 @@ import {
   OAUTH_COOKIE,
 } from "./schoologySignin.ts";
 import { enqueueMany, enqueueRetry, handleRetryBatch, type RetryHandlers, type RetryMessage } from "./retryQueue.ts";
-import { withFlags, featureOn, featureForRoute, earlyKey, FEATURE_KEYS, type FeatureKey, type Features } from "./flags.ts";
+import { withFlags, featureOn, featureForRoute, earlyKey, FEATURE_KEYS, FLAG_WAIT_MS, type FeatureKey, type Features } from "./flags.ts";
+import { newTiming, runTimed, withServerTiming } from "./timing.ts";
 import { REVIEW_UID, SANDBOX_KEY, SANDBOX_SECRET } from "./reviewSandbox.ts";
 import {
   accessCookie,
@@ -2533,7 +2534,19 @@ export function retryHandlers(env: Bindings): RetryHandlers {
 
 export default {
   // Flagship switches (src/flags.ts) are read once per request, before the app sees env.
-  fetch: async (request: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(request, await withFlags(env), ctx),
+  fetch: (request: Request, env: Bindings, ctx: ExecutionContext) => {
+    // Server-Timing on every answer (src/timing.ts): our time, the switches', and Schoology's
+    const t = newTiming(Date.now(), String((request as any).cf?.colo ?? ""));
+    return runTimed(t, async () => {
+      const info = { kept: false };
+      const f0 = Date.now();
+      const withEnv = await withFlags(env, FLAG_WAIT_MS, f0, info);
+      t.flagsMs = Date.now() - f0;
+      t.flagsFrom = (env as any).FLAGS ? (info.kept ? "kept" : "asked") : "none";
+      const res = await app.fetch(request, withEnv, ctx);
+      return withServerTiming(res, t, request.headers.get("Origin"), allowedOrigins(request.url));
+    });
+  },
   queue: async (batch: MessageBatch<unknown>, env: Bindings) => handleRetryBatch(batch, retryHandlers(env)),
   // Every 15 minutes (wrangler.jsonc triggers): the automatic outage check (src/health.ts)
   scheduled: async (_event: unknown, env: Bindings, ctx: ExecutionContext) => { ctx.waitUntil(checkHealth(await withFlags(env))); },
