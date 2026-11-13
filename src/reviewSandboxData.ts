@@ -8,6 +8,7 @@ export const STUDENT = {
   name_display: "Alex Rivera",
   primary_email: "reviewer@averages.io",
   grad_year: "2029",
+  school_uid: "100245",
 };
 
 /** [days from today, hour, minute] in SANDBOX_ZONE. */

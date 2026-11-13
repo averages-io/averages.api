@@ -580,6 +580,7 @@ function me(): Raw {
     primary_email: STUDENT.primary_email,
     picture_url: "",
     grad_year: STUDENT.grad_year,
+    school_uid: STUDENT.school_uid,
     tz_name: SANDBOX_ZONE,
   };
 }

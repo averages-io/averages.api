@@ -226,6 +226,8 @@ export interface SchoologyUser {
   primary_email?: string;
   picture_url?: string;
   role_id?: string | number;
+  /** The school's own ID for this person (often the student number). Not every school fills it in. */
+  school_uid?: string | number;
 }
 
 export async function getMe(creds: Credentials): Promise<SchoologyUser> {

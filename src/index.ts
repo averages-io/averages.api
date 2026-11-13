@@ -848,6 +848,9 @@ app.get("/auth/me", requireSession, async (c) => {
       firstName: p.f,
       email: p.em ?? "",
       pictureUrl: p.pic ?? "",
+      // The school's ID for the student, for the report card PDF (2026-11-12). "" when the school has none,
+      // and for a session sealed before this field existed (it fills in at the next sign-in).
+      studentId: p.sid ?? "",
       incognito: isIncognito(session),
       provider: "schoology",
     });

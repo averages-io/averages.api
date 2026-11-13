@@ -29,6 +29,8 @@ export interface SessionProfile {
   f: string;
   em?: string;
   pic?: string;
+  /** The school's own ID for the student (Schoology's school_uid, usually the student number), for the report card. */
+  sid?: string;
 }
 
 /** Caps so a strange profile can never push the cookie past what browsers keep (~4 KB). */
@@ -41,6 +43,7 @@ export function profileFrom(me: {
   name_first?: string;
   primary_email?: string;
   picture_url?: string;
+  school_uid?: string | number;
 }): SessionProfile {
   const text = (v: unknown) => (typeof v === "string" ? v.slice(0, PROFILE_TEXT_MAX) : "");
   const p: SessionProfile = { n: text(me.name_display) || text(me.name_first) || "Student", f: text(me.name_first) };
@@ -48,8 +51,17 @@ export function profileFrom(me: {
   if (em) p.em = em;
   const pic = typeof me.picture_url === "string" ? me.picture_url : "";
   if (pic && pic.length <= PROFILE_PIC_MAX && /^https:\/\//.test(pic)) p.pic = pic;
+  const sid = studentIdFrom(me.school_uid);
+  if (sid) p.sid = sid;
   return p;
 }
+
+/** Schoology's school_uid as a short, plain ID (letters, digits and - _ . only), or "" when there isn't a usable one. */
+export function studentIdFrom(v: unknown): string {
+  const t = typeof v === "number" && Number.isFinite(v) ? String(v) : typeof v === "string" ? v.trim() : "";
+  return t && t.length <= STUDENT_ID_MAX && /^[A-Za-z0-9._-]+$/.test(t) ? t : "";
+}
+const STUDENT_ID_MAX = 40;
 
 export function validProfile(p: unknown): p is SessionProfile {
   if (!p || typeof p !== "object") return false;
@@ -59,7 +71,8 @@ export function validProfile(p: unknown): p is SessionProfile {
     str(v.n, PROFILE_TEXT_MAX) && (v.n as string).length > 0 &&
     str(v.f, PROFILE_TEXT_MAX) &&
     (v.em === undefined || str(v.em, PROFILE_TEXT_MAX)) &&
-    (v.pic === undefined || str(v.pic, PROFILE_PIC_MAX))
+    (v.pic === undefined || str(v.pic, PROFILE_PIC_MAX)) &&
+    (v.sid === undefined || str(v.sid, STUDENT_ID_MAX))
   );
 }
 

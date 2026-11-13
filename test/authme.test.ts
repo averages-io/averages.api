@@ -74,7 +74,7 @@ function cookieValue(res: Response, name: string): string | null {
   }
   return null;
 }
-const ANSWER = { uid: "4242", name: "Martin Volkov", firstName: "Martin", email: "martin@school.example", pictureUrl: ME.picture_url, incognito: false, provider: "schoology" };
+const ANSWER = { uid: "4242", name: "Martin Volkov", firstName: "Martin", email: "martin@school.example", pictureUrl: ME.picture_url, studentId: "", incognito: false, provider: "schoology" };
 
 /* ── Signing in seals the name ─────────────────────────────────────────── */
 console.log("signing in with a Schoology key");
@@ -191,6 +191,10 @@ console.log("\nsigning out and the edges");
   check("profileFrom: nothing at all is still a name", profileFrom({}), { n: "Student", f: "" });
   const long = profileFrom({ name_display: "y".repeat(500), picture_url: "https://x.example/" + "z".repeat(900) });
   check("profileFrom: long values are cut so the cookie stays small", [long.n.length, long.pic], [200, undefined]);
+  // The student ID for the report card (2026-11-12): kept when it's a plain short ID, dropped otherwise.
+  check("profileFrom: keeps the school's student ID", profileFrom({ name_display: "Sam", school_uid: " 178-A.23 " }).sid, "178-A.23");
+  check("profileFrom: a numeric school_uid works too", profileFrom({ name_display: "Sam", school_uid: 100245 }).sid, "100245");
+  check("profileFrom: odd or long IDs are left out", [profileFrom({ school_uid: "<b>1</b>" }).sid, profileFrom({ school_uid: "9".repeat(41) }).sid, profileFrom({ school_uid: "" }).sid], [undefined, undefined, undefined]);
 }
 
 /* ── The reviewer account ──────────────────────────────────────────────── */
@@ -203,6 +207,7 @@ console.log("\nthe reviewer account");
   check("reviewer sign-in seals the sandbox name", [opened?.uid, opened?.p?.n, opened?.p?.f], [REVIEW_UID, "Alex Rivera", "Alex"]);
   const me = await call("/auth/me", { cookie: `${SESSION_COOKIE}=${token}` });
   check("reviewer /auth/me from the cookie", [me.res.status, me.data.name, /desc="cookie"/.test(me.res.headers.get("Server-Timing") ?? "")], [200, "Alex Rivera", true]);
+  check("reviewer /auth/me has the sample student ID", me.data.studentId, "100245");
   check("still nothing left the Worker for the reviewer", calls, []);
 }
 
