@@ -1,7 +1,9 @@
 // Feature switches: src/flags.ts and the Worker's use of it.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/flags.test.ts
 import worker from "../src/index.ts";
-import { withFlags, readFeatures, readEarly, earlyKey, fallbackFeatures, featureForRoute, DEFAULTS, FEATURE_KEYS } from "../src/flags.ts";
+import { withFlags, readFeatures, readEarly, earlyKey, fallbackFeatures, featureForRoute, DEFAULTS, FEATURE_KEYS, FLAG_KEEP_MS } from "../src/flags.ts";
+import { sectionIds } from "../src/index.ts";
+import { adaptCourses } from "../src/adapt.ts";
 
 let passed = 0;
 let failed = 0;
@@ -85,6 +87,28 @@ const signIn = (env: any, key: string, secret: string) => call("/auth/session", 
 check("reviewer sign-in off → 503 test-signin", await json(await signIn(OFF("test-signin"), "k".repeat(20), "r".repeat(20))), [503, { error: "feature_off", feature: "test-signin" }]);
 check("Schoology sign-in off → 503 schoology-signin", await json(await signIn(OFF("schoology-signin"), "abcdefghijklmnop", "abcdefghijklmnopqrstuvwxyz")), [503, { error: "feature_off", feature: "schoology-signin" }]);
 check("Schoology sign-in off doesn't stop the reviewer", (await signIn(OFF("schoology-signin"), "k".repeat(20), "r".repeat(20))).status !== 503, true);
+
+// Flagship is asked at most every FLAG_KEEP_MS per Worker; requests in between use that answer (2026-11-13)
+{
+  let asks = 0, drive = true;
+  const F = { getBooleanValue: async (k: string, d: boolean) => { asks++; return k === "drive-integration" ? drive : d; }, getStringValue: async () => "" };
+  const env = { FLAGS: F };
+  const t = 1_000_000;
+  const a = await withFlags(env, 400, t);
+  const n1 = asks;
+  drive = false;
+  const b = await withFlags(env, 400, t + 5_000);
+  const c = await withFlags(env, 400, t + FLAG_KEEP_MS + 1);
+  check("Flagship answer kept for FLAG_KEEP_MS, then asked again", [n1 > 0, asks === n1 * 2, a.FEATURES["drive-integration"], b.FEATURES["drive-integration"], c.FEATURES["drive-integration"]], [true, true, true, true, false]);
+  await Promise.all([withFlags(env, 400, t + 3 * FLAG_KEEP_MS), withFlags(env, 400, t + 3 * FLAG_KEEP_MS)]);
+  check("requests arriving together share one lookup", asks, n1 * 3);
+  const other = await withFlags({ FLAGS: { getBooleanValue: async (_k: string, d: boolean) => d } }, 400, t + 1);
+  check("a different Flagship binding isn't given another's answer", other.FEATURES["drive-integration"], true);
+}
+{
+  const secs: any[] = [{ id: 5 }, { section_id: "7" }, {}, { id: "", section_id: 9 }, null, { id: "12" }];
+  check("sectionIds: same ids and order as adaptCourses", sectionIds(secs), adaptCourses(secs, []).COURSES.map((c) => c.id));
+}
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);

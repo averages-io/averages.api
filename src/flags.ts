@@ -95,9 +95,26 @@ export async function readEarly(env: object, ms = FLAG_WAIT_MS): Promise<Feature
   return FEATURE_KEYS.filter((k) => keys.has(k));
 }
 
+/**
+ * How long one Flagship answer is used for. Every request used to wait on Flagship (15 lookups, up to 400 ms) before
+ * it started; now a Worker asks at most every 15 seconds and the requests in between start straight away. A switch
+ * flipped in Flagship takes effect within 15 seconds.
+ */
+export const FLAG_KEEP_MS = 15_000;
+const kept = new WeakMap<object, { at: number; answer: Promise<[Features, FeatureKey[]]> }>();
+
 /** env plus FEATURES (the answers for this request) and EARLY (the early-access keys). */
-export async function withFlags<E extends object>(env: E, ms = FLAG_WAIT_MS): Promise<E & { FEATURES: Features; EARLY: FeatureKey[] }> {
-  const [FEATURES, EARLY] = await Promise.all([readFeatures(env, ms), readEarly(env, ms)]);
+export async function withFlags<E extends object>(env: E, ms = FLAG_WAIT_MS, now = Date.now()): Promise<E & { FEATURES: Features; EARLY: FeatureKey[] }> {
+  const flags = (env as any).FLAGS;
+  let answer: Promise<[Features, FeatureKey[]]>;
+  const hit = flags && typeof flags === "object" ? kept.get(flags) : undefined;
+  if (hit && now - hit.at >= 0 && now - hit.at < FLAG_KEEP_MS) answer = hit.answer;
+  else {
+    // requests arriving together share one lookup
+    answer = Promise.all([readFeatures(env, ms), readEarly(env, ms)]);
+    if (flags && typeof flags === "object") kept.set(flags, { at: now, answer });
+  }
+  const [FEATURES, EARLY] = await answer;
   return { ...env, FEATURES, EARLY };
 }
 

@@ -1083,6 +1083,16 @@ app.delete("/account", requireSession, async (c) => {
  * page-by-page fetch would mean the same sections call repeated on every
  * navigation.
  */
+/** The class ids adaptCourses makes COURSES from, in the same order (section.id, else section_id; blanks skipped). */
+export function sectionIds(sections: unknown): string[] {
+  const out: string[] = [];
+  for (const section of Array.isArray(sections) ? sections : []) {
+    const id = String((section as any)?.id ?? (section as any)?.section_id ?? "");
+    if (id) out.push(id);
+  }
+  return out;
+}
+
 app.get("/data/bundle", requireSession, async (c) => {
   const session = c.get("session");
 
@@ -1096,33 +1106,39 @@ app.get("/data/bundle", requireSession, async (c) => {
   if (isGoogle(session)) return classroomBundle(c, session);
 
   try {
+    // Assignments are per-section, so this fans out. Capped and failure-
+    // tolerant: one section erroring (a teacher restricting access, say)
+    // must not take down the whole payload. It starts as soon as the class
+    // list is in, without waiting for grades, the inbox and the names
+    // (the same first 12 classes adaptCourses keeps, in Schoology's order).
+    const assignmentsBySection: Record<string, any[]> = {};
+    const sectionsP = getSections(session.uid, session);
+    const assignmentsP = sectionsP.then((list) =>
+      Promise.all(
+        sectionIds(list).slice(0, 12).map(async (id) => {
+          try {
+            const [items, discussions] = await Promise.all([
+              getAssignments(id, session),
+              getDiscussions(id, session).catch(() => []),
+            ]);
+            assignmentsBySection[id] = items.concat(discussionsAsWork(discussions));
+          } catch (error) {
+            console.error("bundle_assignments_failed", error instanceof SchoologyError ? error.status : "", error instanceof SchoologyError ? String(error.body ?? "").slice(0, 160) : String(error).slice(0, 160));
+            assignmentsBySection[id] = [];
+          }
+        })
+      )
+    );
+    assignmentsP.catch(() => {});
     const [sections, grades, inbox, recipients] = await Promise.all([
-      getSections(session.uid, session),
+      sectionsP,
       getGrades(session.uid, session),
       getMessages("inbox", session).catch(() => null),
       getRecipients(session).catch(() => null),
     ]);
 
     const { COURSES, HISTORY } = adaptCourses(sections, grades);
-
-    // Assignments are per-section, so this fans out. Capped and failure-
-    // tolerant: one section erroring (a teacher restricting access, say)
-    // must not take down the whole payload.
-    const assignmentsBySection: Record<string, any[]> = {};
-    await Promise.all(
-      COURSES.slice(0, 12).map(async (course) => {
-        try {
-          const [list, discussions] = await Promise.all([
-            getAssignments(course.id, session),
-            getDiscussions(course.id, session).catch(() => []),
-          ]);
-          assignmentsBySection[course.id] = list.concat(discussionsAsWork(discussions));
-        } catch (error) {
-          console.error("bundle_assignments_failed", error instanceof SchoologyError ? error.status : "", error instanceof SchoologyError ? String(error.body ?? "").slice(0, 160) : String(error).slice(0, 160));
-          assignmentsBySection[course.id] = [];
-        }
-      })
-    );
+    await assignmentsP;
 
     const { OVERDUE, UPCOMING, TODAY } = adaptAssignments(assignmentsBySection, studentTimeZone(c));
     try {
