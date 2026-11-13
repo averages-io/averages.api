@@ -1,5 +1,5 @@
 // The Schoology client's reads: redirects are re-signed, and the 50-calls-per-5-seconds limit (429) waits and tries again.
-import { getMe, getAssignments, RATE_LIMIT_WAITS_MS } from "../src/schoology.ts";
+import { getMe, getAssignments, RATE_LIMIT_WAITS_MS, retryAfterMs } from "../src/schoology.ts";
 import { sendNewMessage, deleteThread } from "../src/messages.ts";
 
 let passed = 0, failed = 0;
@@ -45,6 +45,18 @@ answer = () => new Response("limit", { status: 429 });
 let code = 0;
 await getAssignments("5", CREDS).catch((e) => { code = e.status; });
 check("still limited after every wait: gives up with the 429 (4 tries)", [code, calls.length], [429, 4]);
+// Schoology's Retry-After is what we wait (2026-11-13), not our own guess
+check("retryAfterMs: seconds, a date, nothing", [retryAfterMs("2"), retryAfterMs("0.5"), retryAfterMs(new Date(10_000).toUTCString(), 7_000), retryAfterMs(null), retryAfterMs("soon")], [2000, 500, 3000, null, null]);
+{
+  RATE_LIMIT_WAITS_MS.splice(0, RATE_LIMIT_WAITS_MS.length, 3000, 3000, 3000);   // a wait it must NOT use
+  calls = [];
+  answer = (_p, n) => n <= 1 ? new Response("limit", { status: 429, headers: { "Retry-After": "0" } }) : json({ assignment: [{ id: 2, title: "Lab" }] });
+  const t0 = Date.now();
+  const got = await getAssignments("5", CREDS);
+  const ms = Date.now() - t0;
+  check("a 429 that says when: waits that long (at least 0.1 s), not the 3 s guess", [got.length, calls.length, ms >= 100, ms < 1500], [1, 2, true, true]);
+  RATE_LIMIT_WAITS_MS.splice(0, RATE_LIMIT_WAITS_MS.length, 5, 5, 5);
+}
 calls = [];
 answer = () => new Response("nope", { status: 403 });
 await getAssignments("5", CREDS).catch(() => {});

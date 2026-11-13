@@ -137,14 +137,30 @@ async function schoologyGetFresh<T = unknown>(
 export const RATE_LIMIT_WAITS_MS = [1200, 2500, 4500];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * How long Schoology's 429 says to wait (its Retry-After header: seconds, or a date), in ms; null when it doesn't say.
+ * Schoology gives each student 50 API calls that refill every 5 seconds, so this is never more than about 5 s.
+ */
+export function retryAfterMs(header: string | null, now = Date.now()): number | null {
+  if (!header) return null;
+  const v = header.trim();
+  if (/^\d+(\.\d+)?$/.test(v)) return Math.round(parseFloat(v) * 1000);
+  const at = Date.parse(v);
+  return Number.isFinite(at) ? Math.max(0, at - now) : null;
+}
+
 async function signedGet(url: URL, path: string, creds: Credentials): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     const res = await signedGetOnce(url, path, creds);
-    const wait = RATE_LIMIT_WAITS_MS[attempt];
-    if (res.status !== 429 || wait === undefined) return res;
+    const fallback = RATE_LIMIT_WAITS_MS[attempt];
+    if (res.status !== 429 || fallback === undefined) return res;
     await res.body?.cancel().catch(() => {});
+    // Schoology's own "try again in": exactly when the calls refill, instead of a guess (2026-11-13). Between
+    // 0.1 and 6 s; the old guesses (1.2, 2.5, 4.5 s) when it doesn't say.
+    const told = retryAfterMs(res.headers.get("Retry-After"));
+    const wait = told === null ? fallback : Math.min(6000, Math.max(100, told));
     // A little jitter, so the calls that were refused together don't all come back together.
-    const ms = wait + Math.floor(Math.random() * 400);
+    const ms = wait + Math.floor(Math.random() * (told === null ? 400 : 250));
     noteWait(ms);
     await sleep(ms);
   }
