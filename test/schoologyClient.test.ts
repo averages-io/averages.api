@@ -1,5 +1,5 @@
 // The Schoology client's reads: redirects are re-signed, and the 50-calls-per-5-seconds limit (429) waits and tries again.
-import { getMe, getAssignments, RATE_LIMIT_WAITS_MS, retryAfterMs } from "../src/schoology.ts";
+import { getMe, getAssignments, postedInDiscussion, RATE_LIMIT_WAITS_MS, retryAfterMs } from "../src/schoology.ts";
 import { sendNewMessage, deleteThread } from "../src/messages.ts";
 
 let passed = 0, failed = 0;
@@ -61,6 +61,28 @@ calls = [];
 answer = () => new Response("nope", { status: 403 });
 await getAssignments("5", CREDS).catch(() => {});
 check("other refusals aren't retried", calls.length, 1);
+
+console.log("assignments are paged; discussion replies (2026-11-14)");
+{
+  calls = [];
+  const page = (start: number, n: number) => Array.from({ length: n }, (_, i) => ({ id: String(1000 + start + i), title: "A" + (start + i) }));
+  answer = (p) => {
+    const u = calls[calls.length - 1];
+    return json({ assignment: calls.length === 1 ? page(0, 200) : page(200, 30), total: 230 });
+  };
+  const all = await getAssignments("5", CREDS);
+  check("a class with 230 assignments: two pages, all 230", [all.length, calls.length], [230, 2]);
+  calls = [];
+  answer = () => json({ assignment: page(0, 12), total: 12 });
+  check("one short page: one call", [(await getAssignments("5", CREDS)).length, calls.length], [12, 1]);
+  calls = [];
+  answer = () => json({ comment: [{ id: 1, uid: "900", comment: "first" }, { id: 2, uid: "77", comment: "mine" }], total: 2 });
+  check("posted: a reply with the student's uid", [await postedInDiscussion("5", "9", "77", CREDS), calls.map((c) => c.path)], [true, ["/v1/sections/5/discussions/9/comments"]]);
+  answer = () => json({ comment: [{ id: 1, uid: "900", comment: "someone else" }], total: 1 });
+  check("not posted: only others' replies", await postedInDiscussion("5", "9", "77", CREDS), false);
+  answer = () => json({ total: 0 });
+  check("no replies at all: not posted", await postedInDiscussion("5", "9", "77", CREDS), false);
+}
 
 console.log("new messages (who they may go to)");
 // Schoology's recipients list empty (seen in the sandbox): the teachers of the student's own classes are allowed.

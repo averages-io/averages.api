@@ -675,13 +675,10 @@ export function adaptAssignments(
         id: String(assignment?.id ?? ""),
         ...(isOutsideTool(assignment) ? { outside: true } : {}),
         ...(["0", 0, false, "false"].includes(assignment?.allow_dropbox) ? { noDropbox: true } : {}),
-        // Schoology's own "done" for this student (2026-11-14): its To Do leaves these out of Overdue. Posted in a
-        // discussion, marked done, and so on. Not in Schoology's field list, but it's in every assignment it sends.
-        ...(["1", 1, true, "true"].includes(assignment?.completed) ? { done: true } : {}),
       };
 
       if (dayIn(dueMs, tz) === today) {
-        TODAY.push({ title: item.title, courseId, id: item.id, ...(item.outside ? { outside: true } : {}), ...(item.noDropbox ? { noDropbox: true } : {}), ...(item.done ? { done: true } : {}) });
+        TODAY.push({ title: item.title, courseId, id: item.id, ...(item.outside ? { outside: true } : {}), ...(item.noDropbox ? { noDropbox: true } : {}) });
       }
 
       // "Completed" is deliberately not inferred here — Schoology reports
@@ -1030,8 +1027,8 @@ export function adaptRecentGrades(grades: Raw[], assignmentsBySection: Record<st
   return out.slice(0, 10).map((x) => x.grade);
 }
 
-function gradeExtras(graded: Raw | undefined, assignment: Raw | undefined): { gradedAt?: number; due?: number; comment?: string; missing?: boolean } {
-  const out: { gradedAt?: number; due?: number; comment?: string; missing?: boolean } = {};
+function gradeExtras(graded: Raw | undefined, assignment: Raw | undefined): { gradedAt?: number; due?: number; comment?: string; missing?: boolean; excused?: boolean } {
+  const out: { gradedAt?: number; due?: number; comment?: string; missing?: boolean; excused?: boolean } = {};
   const at = graded ? schoologyTime(graded.timestamp) : null;
   if (at) out.gradedAt = at;
   const due = assignment ? schoologyTime(assignment.due) : null;
@@ -1039,6 +1036,8 @@ function gradeExtras(graded: Raw | undefined, assignment: Raw | undefined): { gr
   const comment = graded && String(graded.comment_status ?? "1") !== "0" ? clip(toPlainText(graded.comment ?? ""), 400).trim() : "";
   if (comment) out.comment = comment;
   if (graded && num(graded.exception) === 3) out.missing = true;
+  // exception 1 = excused (Schoology's grade docs): the teacher let the student off, so it's never overdue
+  if (graded && num(graded.exception) === 1) out.excused = true;
   return out;
 }
 

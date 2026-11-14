@@ -324,11 +324,43 @@ export async function getDocuments(sectionId: string, creds: Credentials) {
 }
 
 export async function getAssignmentsWithAttachments(sectionId: string, creds: Credentials) {
-  const payload = await schoologyGet(`/sections/${sectionId}/assignments`, creds, {
-    limit: COURSE_FILE_PAGE,
-    with_attachments: "true",
-  });
-  return listOf(payload, "assignment");
+  // Paged (Schoology's assignment docs: start/limit, with a `total`): a class with more than one page of
+  // assignments gets the rest too, up to 3 pages (600), each assignment once (2026-11-14).
+  const out: Record<string, any>[] = [];
+  const seen = new Set<string>();
+  for (let page = 0; page < 3; page++) {
+    const payload: any = await schoologyGet(`/sections/${sectionId}/assignments`, creds, {
+      start: page * COURSE_FILE_PAGE,
+      limit: COURSE_FILE_PAGE,
+      with_attachments: "true",
+    });
+    const list = listOf<Record<string, any>>(payload, "assignment");
+    for (const a of list) {
+      const id = String(a?.id ?? "");
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      out.push(a);
+    }
+    const total = Number(payload?.total);
+    if (list.length < COURSE_FILE_PAGE || (Number.isFinite(total) && out.length >= total)) break;
+  }
+  return out;
+}
+
+/**
+ * Whether the student has posted in a discussion: its replies (GET /sections/{id}/discussions/{id}/comments,
+ * Schoology's discussion-reply docs) include one with their uid. Up to 2 pages of 200. Schoology's own To Do
+ * leaves a discussion out of Overdue once the student has posted in it (2026-11-14).
+ */
+export async function postedInDiscussion(sectionId: string, discussionId: string, uid: string, creds: Credentials): Promise<boolean> {
+  for (let page = 0; page < 2; page++) {
+    const payload: any = await schoologyGet(`/sections/${sectionId}/discussions/${discussionId}/comments`, creds, { start: page * COURSE_FILE_PAGE, limit: COURSE_FILE_PAGE });
+    const list = listOf<Record<string, any>>(payload, "comment");
+    if (list.some((c) => String(c?.uid ?? "") === String(uid))) return true;
+    const total = Number(payload?.total);
+    if (list.length < COURSE_FILE_PAGE || (Number.isFinite(total) && (page + 1) * COURSE_FILE_PAGE >= total)) return false;
+  }
+  return false;
 }
 
 export async function getDiscussions(sectionId: string, creds: Credentials) {

@@ -203,17 +203,6 @@ console.log("\ndue times in the student's zone (2026-10-07)");
   check("today is the student's today", r.TODAY.map((x: any) => x.title).sort(), ["This morning", "Tonight"]);
 }
 
-console.log("\nSchoology's own done (completed), 2026-11-14");
-{
-  const now = Date.parse("2026-10-10T00:00:00Z");
-  const r = adaptAssignments({ "101": [
-    { id: 1, title: "Posted in it", due: "2026-10-01 23:59:00", type: "discussion", completed: "1" },
-    { id: 2, title: "Not yet", due: "2026-10-01 23:59:00", type: "assignment", completed: "0" },
-    { id: 3, title: "No field", due: "2026-10-01 23:59:00", type: "assignment" },
-  ] }, "America/Los_Angeles", now);
-  check("completed 1 carries done; 0 or missing don't", r.OVERDUE.map((x: any) => [x.title, x.done === true]), [["Posted in it", true], ["Not yet", false], ["No field", false]]);
-}
-
 console.log("\noutside-tool assignments: Google Assignments, Turnitin (2026-10-16)");
 {
   check("basic, missing or junk: not an outside tool", [isOutsideTool({ assignment_type: "basic" }), isOutsideTool({}), isOutsideTool(null), isOutsideTool({ assignment_type: 7 })], [false, false, false, false]);
@@ -366,6 +355,13 @@ console.log("\ndiscussions, new quizzes and Updated (2026-11-06)");
   check("Updated counts work posted after the last grade", courses[0].updated, "2h ago");
   const gb = adaptSchoologyGradebook({ categories: null, assignments: d, gradeEntry: { period: [{ assignment: [{ assignment_id: 702, grade: 9, max_points: 10, timestamp: 1793000000 }] }] } });
   check("a discussion's grade is found under its grade item", gb.categories[0].assignments.map((a: any) => [a.title, a.score ?? null]), [["Was George right?", 9]]);
+}
+{
+  // excused (exception 1, Schoology's grade docs): marked, so the app never calls it overdue (2026-11-14)
+  const work = [{ id: 801, title: "Excused one", type: "assignment", due: "2026-10-20 23:59:00", max_points: "10", grading_category: "1" }, { id: 802, title: "Missing one", type: "assignment", due: "2026-10-20 23:59:00", max_points: "10", grading_category: "1" }];
+  const gb2 = adaptSchoologyGradebook({ categories: null, assignments: work, gradeEntry: { period: [{ assignment: [{ assignment_id: 801, grade: null, exception: 1, max_points: 10 }, { assignment_id: 802, grade: null, exception: 3, max_points: 10 }] }] } });
+  const rows = gb2.categories.flatMap((c: any) => c.assignments).map((a: any) => [a.title, !!a.excused, !!a.missing]);
+  check("excused and missing are told apart", rows, [["Excused one", true, false], ["Missing one", false, true]]);
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

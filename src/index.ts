@@ -35,6 +35,7 @@ import {
   getAssignments,
   getDiscussion,
   getDiscussions,
+  postedInDiscussion,
   getGrades,
   getMe, isFacultyAccount,
   getMessages,
@@ -1633,10 +1634,20 @@ app.get("/data/submissions", async (c) => {
   c.header("Cache-Control", "private, no-store");
   if (isGoogle(session)) return c.json({ platform: "classroom", courses: [], files: [], partial: false });
   const forList = c.req.query("for");
-  if (typeof forList === "string") {
-    // at most 20 (the app asks for 20 since 2026-11-14: Home's overdue list can be that long)
-    const pairs = [...new Set(forList.split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 20)
+  const postedList = c.req.query("posted");
+  if (typeof forList === "string" || typeof postedList === "string") {
+    const pairsOf = (v: string | undefined, most: number) => [...new Set(String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean))].slice(0, most)
       .map((x) => x.split(":")).filter((p) => p.length === 2 && ID_RE.test(p[0]) && ID_RE.test(p[1]));
+    // at most 20 (the app asks for 20 since 2026-11-14: Home's overdue list can be that long)
+    const pairs = pairsOf(forList, 20);
+    // ?posted=section:discussion,...: which of these discussions the student has posted in (at most 10)
+    const discussions = pairsOf(postedList, 10);
+    const posted: string[] = [];
+    const postedP = eachAtMost(discussions, 4, async ([section, id]) => {
+      try {
+        if (await postedInDiscussion(section, id, session.uid, session)) posted.push(`${section}:${id}`);
+      } catch { /* not readable: left as it was */ }
+    });
     const found: SubmittedFile[] = [];
     let partial = false;
     await eachAtMost(pairs, 5, async ([course, id]) => {
@@ -1647,8 +1658,9 @@ app.get("/data/submissions", async (c) => {
         partial = true;
       }
     });
+    await postedP;
     const { files, cut } = newestSubmittedFiles(found);
-    return c.json({ platform: "schoology", courses: [], files, partial: partial || cut });
+    return c.json({ platform: "schoology", courses: [], files, posted, partial: partial || cut });
   }
   try {
     const { COURSES } = adaptCourses(await getSections(session.uid, session), []);
