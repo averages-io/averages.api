@@ -1634,7 +1634,8 @@ app.get("/data/submissions", async (c) => {
   if (isGoogle(session)) return c.json({ platform: "classroom", courses: [], files: [], partial: false });
   const forList = c.req.query("for");
   if (typeof forList === "string") {
-    const pairs = [...new Set(forList.split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 15)
+    // at most 20 (the app asks for 20 since 2026-11-14: Home's overdue list can be that long)
+    const pairs = [...new Set(forList.split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 20)
       .map((x) => x.split(":")).filter((p) => p.length === 2 && ID_RE.test(p[0]) && ID_RE.test(p[1]));
     const found: SubmittedFile[] = [];
     let partial = false;
