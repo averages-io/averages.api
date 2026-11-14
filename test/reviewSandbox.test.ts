@@ -276,6 +276,12 @@ console.log("\nmessages");
   check("the thread the student started is with its teacher", data.CONVERSATIONS[2].personId, "8100000002");
 }
 {
+  // the Messages list reading the newest message in the background (?peek=1) leaves it unread (2026-11-13)
+  const peek = await call(`/messages/thread?id=7800000001&peek=1&tz=${TZ}`, { cookie });
+  const still = await call("/messages", { cookie });
+  check("peek: the messages come back, and it stays unread", [peek.res.status, peek.data.messages.length > 0, still.data.CONVERSATIONS.find((c: any) => c.id === "7800000001").unread], [200, true, true]);
+}
+{
   const { res, data } = await call(`/messages/thread?id=7800000001&tz=${TZ}`, { cookie });
   check("a thread with replies", [res.status, data.subject, data.participants, data.messages.map((m: any) => m.from)], [200, "Lab Report #4 rubric", ["8100000001"], ["them", "me", "them"]]);
   check("text and time", [data.messages[1].text.startsWith("Thanks Dr. Park!"), /^[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2} · \d{1,2}:\d{2} [AP]M$/.test(data.messages[0].time)], [true, true]);

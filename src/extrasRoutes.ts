@@ -246,8 +246,11 @@ export function messagesRoutes(deps: ExtrasDeps) {
     const session = c.get("session");
     const id = c.req.query("id") ?? "";
     if (!ID_RE.test(id)) return c.json({ error: "bad_request" }, 400);
+    // ?peek=1: the Messages list reading a conversation's newest message in the background (2026-11-13). Schoology
+    // marks a thread read when it's viewed; a peek leaves it as it was.
+    const peek = c.req.query("peek") === "1";
     try {
-      const rows = await getThread(id, session);
+      const rows = await getThread(id, session, { keepUnread: peek });
       if (!rows) return c.json({ error: "not_found" }, 404);
       return c.json(adaptThread(id, rows, session.uid, deps.studentTimeZone(c)));
     } catch (error) {
