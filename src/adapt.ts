@@ -675,10 +675,13 @@ export function adaptAssignments(
         id: String(assignment?.id ?? ""),
         ...(isOutsideTool(assignment) ? { outside: true } : {}),
         ...(["0", 0, false, "false"].includes(assignment?.allow_dropbox) ? { noDropbox: true } : {}),
+        // Schoology's own "done" for this student (2026-11-14): its To Do leaves these out of Overdue. Posted in a
+        // discussion, marked done, and so on. Not in Schoology's field list, but it's in every assignment it sends.
+        ...(["1", 1, true, "true"].includes(assignment?.completed) ? { done: true } : {}),
       };
 
       if (dayIn(dueMs, tz) === today) {
-        TODAY.push({ title: item.title, courseId, id: item.id, ...(item.outside ? { outside: true } : {}), ...(item.noDropbox ? { noDropbox: true } : {}) });
+        TODAY.push({ title: item.title, courseId, id: item.id, ...(item.outside ? { outside: true } : {}), ...(item.noDropbox ? { noDropbox: true } : {}), ...(item.done ? { done: true } : {}) });
       }
 
       // "Completed" is deliberately not inferred here — Schoology reports

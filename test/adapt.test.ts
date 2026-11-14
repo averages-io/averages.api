@@ -203,6 +203,17 @@ console.log("\ndue times in the student's zone (2026-10-07)");
   check("today is the student's today", r.TODAY.map((x: any) => x.title).sort(), ["This morning", "Tonight"]);
 }
 
+console.log("\nSchoology's own done (completed), 2026-11-14");
+{
+  const now = Date.parse("2026-10-10T00:00:00Z");
+  const r = adaptAssignments({ "101": [
+    { id: 1, title: "Posted in it", due: "2026-10-01 23:59:00", type: "discussion", completed: "1" },
+    { id: 2, title: "Not yet", due: "2026-10-01 23:59:00", type: "assignment", completed: "0" },
+    { id: 3, title: "No field", due: "2026-10-01 23:59:00", type: "assignment" },
+  ] }, "America/Los_Angeles", now);
+  check("completed 1 carries done; 0 or missing don't", r.OVERDUE.map((x: any) => [x.title, x.done === true]), [["Posted in it", true], ["Not yet", false], ["No field", false]]);
+}
+
 console.log("\noutside-tool assignments: Google Assignments, Turnitin (2026-10-16)");
 {
   check("basic, missing or junk: not an outside tool", [isOutsideTool({ assignment_type: "basic" }), isOutsideTool({}), isOutsideTool(null), isOutsideTool({ assignment_type: 7 })], [false, false, false, false]);
