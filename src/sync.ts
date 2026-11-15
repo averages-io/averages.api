@@ -11,9 +11,22 @@ export interface SyncRecord {
   updatedAt: string;
   settingsUpdatedAt: string;
   seen?: SeenLists;
+  /** The day (days since 1970, UTC) each seen id was first marked seen. See SEEN_DAYS. */
+  seenAt?: SeenDays;
 }
 
 export type SeenLists = Partial<Record<(typeof SEEN_KINDS)[number], string[]>>;
+export type SeenDays = Partial<Record<(typeof SEEN_KINDS)[number], Record<string, number>>>;
+/**
+ * Only the last 15 days of seen ids are kept (2026-11-14). Anything older counts as seen on every device
+ * anyway (the app treats an update, grade, message, assignment or file over 15 days old as not new), so its
+ * id is dropped. Something can't be seen before it's posted, so an id marked seen 15+ days ago belongs to
+ * something at least that old. Ids that come without a day (older records, the Windowed bell) start today.
+ */
+export const SEEN_DAYS = 15;
+export function dayOf(ms: number = Date.now()): number {
+  return Math.floor(ms / 86_400_000);
+}
 export const SEEN_KINDS = ["u", "g", "m", "a", "f"] as const;
 export const SEEN_CAP = 300;
 const SEEN_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
@@ -39,6 +52,35 @@ export function mergeSeen(stored: unknown, incoming: unknown): SeenLists {
     if (ids.length) out[k] = ids.slice(-SEEN_CAP);
   }
   return out;
+}
+
+/** A day for every seen id: the one given (if it's a sensible day, not in the future), else today. The later of two wins. */
+export function seenDays(seen: SeenLists, ...given: unknown[]): SeenDays {
+  const today = dayOf(), out: SeenDays = {};
+  for (const k of SEEN_KINDS) {
+    const ids = seen[k];
+    if (!ids || !ids.length) continue;
+    const m: Record<string, number> = {};
+    for (const id of ids) {
+      let best = -1;
+      for (const g of given) {
+        const v = g && typeof g === "object" ? (g as Record<string, Record<string, unknown>>)[k]?.[id] : undefined;
+        if (typeof v === "number" && Number.isInteger(v) && v <= today && v > today - 3650 && v > best) best = v;
+      }
+      m[id] = best >= 0 ? best : today;
+    }
+    out[k] = m;
+  }
+  return out;
+}
+/** The seen ids and their days without anything marked seen more than SEEN_DAYS ago. */
+export function pruneSeen(seen: SeenLists, at: SeenDays, today: number = dayOf()): { seen: SeenLists; seenAt: SeenDays } {
+  const out: SeenLists = {}, outAt: SeenDays = {};
+  for (const k of SEEN_KINDS) {
+    const keep = (seen[k] ?? []).filter((id) => (at[k]?.[id] ?? today) >= today - SEEN_DAYS);
+    if (keep.length) { out[k] = keep; outAt[k] = Object.fromEntries(keep.map((id) => [id, at[k]?.[id] ?? today])); }
+  }
+  return { seen: out, seenAt: outAt };
 }
 
 /** Minimal shape of a Cloudflare Workers KV namespace binding. */
@@ -98,7 +140,7 @@ export async function loadSyncRecord(kv: KVLike, uid: string): Promise<SyncRecor
     // treats as untrustworthy rather than something to adopt. See the
     // field's own comment above.
     settingsUpdatedAt: typeof record.settingsUpdatedAt === "string" ? record.settingsUpdatedAt : "",
-    seen: cleanSeen(record.seen),
+    ...(() => { const seen = cleanSeen(record.seen); return pruneSeen(seen, seenDays(seen, record.seenAt)); })(),
   };
 }
 
@@ -108,7 +150,8 @@ export async function saveSyncRecord(
   record: SyncRecord
 ): Promise<void> {
   // Exactly these fields, whatever else the object passed in carries.
-  const clean: SyncRecord = { settings: record.settings, updatedAt: record.updatedAt, settingsUpdatedAt: record.settingsUpdatedAt, seen: cleanSeen(record.seen) };
+  const seen = cleanSeen(record.seen), kept = pruneSeen(seen, seenDays(seen, record.seenAt));
+  const clean: SyncRecord = { settings: record.settings, updatedAt: record.updatedAt, settingsUpdatedAt: record.settingsUpdatedAt, seen: kept.seen, seenAt: kept.seenAt };
   await kv.put(syncKey(uid), JSON.stringify(clean));
 }
 

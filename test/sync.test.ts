@@ -2,6 +2,7 @@
 // Run: node --experimental-strip-types test/sync.test.ts
 
 import {
+  dayOf, pruneSeen, seenDays,
   cleanSeen,
   deleteSyncRecord,
   loadSyncRecord,
@@ -104,14 +105,14 @@ console.log("\nan old record's GPA snapshot (weekly email, removed 2026-10-06) i
     })
   );
   const loaded = await loadSyncRecord(kv, "u4");
-  check("loads only settings and the two timestamps", Object.keys(loaded), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]);
+  check("loads only settings and the two timestamps", Object.keys(loaded), ["settings", "updatedAt", "settingsUpdatedAt", "seen", "seenAt"]);
   check("the timestamps come through as they were", [loaded.updatedAt, loaded.settingsUpdatedAt], ["2026-10-01T00:00:00.000Z", "2026-09-30T00:00:00.000Z"]);
   await saveSyncRecord(kv, "u4", { ...loaded, updatedAt: "2026-10-06T00:00:00.000Z" });
   const stored = JSON.parse(kv.store.get("sync:u4")!);
-  check("the next save writes the record without gpaSnapshot or gpaHistory", Object.keys(stored), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]);
+  check("the next save writes the record without gpaSnapshot or gpaHistory", Object.keys(stored), ["settings", "updatedAt", "settingsUpdatedAt", "seen", "seenAt"]);
   // Even when something passes a record that still has one (a caller spreading an old object).
   await saveSyncRecord(kv, "u4", { ...(loaded as any), gpaSnapshot: { current: 1 } });
-  check("saveSyncRecord writes exactly the three fields, whatever it's given", Object.keys(JSON.parse(kv.store.get("sync:u4")!)), ["settings", "updatedAt", "settingsUpdatedAt", "seen"]); // + the seen notifications (2026-11-03)
+  check("saveSyncRecord writes exactly the three fields, whatever it's given", Object.keys(JSON.parse(kv.store.get("sync:u4")!)), ["settings", "updatedAt", "settingsUpdatedAt", "seen", "seenAt"]); // + the seen notifications (2026-11-03)
 }
 
 function fakeStore(): SyncStoreLike & { data: Map<string, string> } {
@@ -131,7 +132,7 @@ console.log("\nkvFromSyncStore (Durable Object storage)");
   check("nothing saved yet reads as an empty record", await loadSyncRecord(kv, "77"), {
     settings: null, updatedAt: "", settingsUpdatedAt: "",
   });
-  const rec = { settings: { theme: "dark" }, updatedAt: "t1", settingsUpdatedAt: "t1", seen: {} };
+  const rec = { settings: { theme: "dark" }, updatedAt: "t1", settingsUpdatedAt: "t1", seen: {}, seenAt: {} };
   await saveSyncRecord(kv, "77", rec);
   check("a saved record comes back exactly as written", await loadSyncRecord(kv, "77"), rec);
   checkTrue("it's stored as a JSON string, same as KV was", typeof [...store.data.values()][0] === "string");
@@ -163,6 +164,15 @@ console.log("\nseen notifications (2026-11-03)");
   await saveSyncRecord(kv, "77", { settings: { a: 1 }, updatedAt: "t", settingsUpdatedAt: "t", seen: { g: ["1"] } });
   const back = await loadSyncRecord(kv, "77");
   check("saved and read back with the record", [back.settings, back.seen], [{ a: 1 }, { g: ["1"] }]);
+  console.log("\nseen: the last 15 days only (2026-11-14)");
+  const today = dayOf();
+  check("an id without a day starts today", seenDays({ g: ["1"] }), { g: { "1": today } });
+  check("the later day wins; a future or silly day is ignored", seenDays({ g: ["1", "2"] }, { g: { "1": today - 3, "2": today + 5 } }, { g: { "1": today - 1 } }), { g: { "1": today - 1, "2": today } });
+  check("marked seen 16 days ago: dropped; 15: kept", pruneSeen({ u: ["old", "edge", "new"] }, { u: { old: today - 16, edge: today - 15, new: today } }), { seen: { u: ["edge", "new"] }, seenAt: { u: { edge: today - 15, new: today } } });
+  await saveSyncRecord(kv, "78", { settings: null, updatedAt: "t", settingsUpdatedAt: "t", seen: { m: ["a", "b"] }, seenAt: { m: { a: today - 20, b: today - 2 } } });
+  check("saving drops what's over 15 days", JSON.parse(store.get("sync:78")!).seen, { m: ["b"] });
+  store.set("sync:79", JSON.stringify({ settings: null, updatedAt: "t", settingsUpdatedAt: "t", seen: { g: ["5"] } }));
+  check("an older record without days: its ids start today", (await loadSyncRecord(kv, "79")).seenAt, { g: { "5": today } });
 }
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

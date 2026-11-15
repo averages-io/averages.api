@@ -88,6 +88,8 @@ import {
 import {
   deleteSyncRecord,
   mergeSeen,
+  pruneSeen,
+  seenDays,
   loadSyncRecord,
   saveSyncRecord,
   kvFromSyncStore,
@@ -954,6 +956,7 @@ app.put("/sync/settings", requireSession, async (c) => {
   const record = {
     settings: body.settings,
     seen: before.seen,
+    seenAt: before.seenAt,
     updatedAt: now,
     // See SyncRecord's own comment in sync.ts for why settings.html's pull
     // logic compares this rather than updatedAt.
@@ -969,7 +972,7 @@ app.get("/sync/seen", requireSession, async (c) => {
   if (isIncognito(session)) return c.json({ error: "incognito_mode" }, 403);
   c.header("Cache-Control", "private, no-store");
   const record = await loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
-  return c.json({ seen: record.seen ?? {} });
+  return c.json({ seen: record.seen ?? {}, seenAt: record.seenAt ?? {} });
 });
 // Advanced translation's server fallback (2026-11-15, src/translate.ts): Plus only, and only used when
 // the student's browser can't translate on its own and they turned this on. Nothing is kept or logged.
@@ -999,7 +1002,7 @@ app.post("/sync/seen", requireSession, async (c) => {
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
   if (isIncognito(session)) return c.json({ error: "incognito_mode" }, 403);
   c.header("Cache-Control", "private, no-store");
-  let body: { seen?: unknown };
+  let body: { seen?: unknown; seenAt?: unknown };
   try {
     body = await c.req.json();
   } catch {
@@ -1007,9 +1010,11 @@ app.post("/sync/seen", requireSession, async (c) => {
   }
   const kv = syncKV(c.env, session.uid, c.req.url);
   const record = await loadSyncRecord(kv, session.uid);
-  const seen = mergeSeen(record.seen, body && body.seen);
-  await saveSyncRecord(kv, session.uid, { ...record, seen });
-  return c.json({ seen });
+  // both lists together, each id with the later day either side knows (sync.ts SEEN_DAYS), the last 15 days only
+  const merged = mergeSeen(record.seen, body && body.seen);
+  const { seen, seenAt } = pruneSeen(merged, seenDays(merged, record.seenAt, body && body.seenAt));
+  await saveSyncRecord(kv, session.uid, { ...record, seen, seenAt });
+  return c.json({ seen, seenAt });
 });
 
 app.delete("/sync/settings", requireSession, async (c) => {
