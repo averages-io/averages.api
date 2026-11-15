@@ -15,6 +15,11 @@ export const DEFAULTS = {
   "live-grades": true,
   fullscreen: true,
   "schoology-oauth": true,
+  // Advanced translation's "Translate on our server" (2026-11-14). Off until PowerSchool says in writing that
+  // Workers AI may process Schoology data (Developer Terms §3.2.1: not outside the US without permission, and
+  // Workers AI doesn't promise a region). On-device translation doesn't need it. Turn on in Flagship, or with
+  // FEATURES_ON="server-translate" in wrangler.jsonc.
+  "server-translate": false,
 } as const;
 
 export type FeatureKey = keyof typeof DEFAULTS;
@@ -153,5 +158,6 @@ export function featureForRoute(method: string, path: string): FeatureKey[] {
   // Turning the calendar link off stays open, like notifications.
   if ((path === "/calendar" || path.startsWith("/calendar/")) && m !== "DELETE") need.push("calendar-sync");
   if (path === "/data/grades") need.push("live-grades");
+  if (path === "/translate") need.push("server-translate");
   return need;
 }

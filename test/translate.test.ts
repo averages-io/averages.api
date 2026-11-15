@@ -18,7 +18,7 @@ globalThis.fetch = (async (input: RequestInfo | URL) => { throw new Error(`unexp
 const calls: any[] = [];
 const AI = { async run(model: string, input: any) { calls.push({ model, input }); if (input.text === "boom") throw new Error("model error"); return { translated_text: `[${input.target_lang}] ${input.text}` }; } };
 const SECRET = "translate-test-session-secret";
-const ENV: any = { SESSION_SECRET: SECRET, AI };
+const ENV: any = { SESSION_SECRET: SECRET, AI, FEATURES_ON: "server-translate" };
 const CTX: any = { waitUntil() {}, passThroughOnException() {} };
 const cookieFor = async (uid: string) => `${SESSION_COOKIE}=${await sealSession({ key: "k", secret: "s", uid } as any, SECRET)}`;
 async function call(json: unknown, cookie: string, env: any = ENV, origin = "https://app.averages.io") {
@@ -57,9 +57,11 @@ check("translates, not cached", [ok.status, ok.data, ok.cache], [200, { texts: [
 check("signed out: 401", (await call({ to: "es", texts: ["x"] }, "")).status, 401);
 check("from another site: refused", (await call({ to: "es", texts: ["x"] }, cookie, ENV, "https://evil.example")).status >= 400, true);
 check("bad request: 400", [(await call({ to: "xx", texts: ["x"] }, cookie)).data?.error], ["unknown_language"]);
-check("no Workers AI: 503", [(await call({ to: "es", texts: ["x"] }, cookie, { SESSION_SECRET: SECRET })).data?.error], ["translation_unavailable"]);
+check("no Workers AI: 503", [(await call({ to: "es", texts: ["x"] }, cookie, { SESSION_SECRET: SECRET, FEATURES_ON: "server-translate" })).data?.error], ["translation_unavailable"]);
+const off = await call({ to: "es", texts: ["x"] }, cookie, { SESSION_SECRET: SECRET, AI });
+check("switch off (the default): 503 feature_off, the model isn't asked", [off.status, off.data?.error, off.data?.feature], [503, "feature_off", "server-translate"]);
 const storeSays = (status: string) => { const ns: any = { idFromName: (n: string) => n, get: () => ({ status: async () => ({ status }) }), jurisdiction: () => ns }; return ns; };
-const BILLING_ON = { ...ENV, FEATURES_ON: "billing", STRIPE_SECRET_KEY: "sk_test_" + "x".repeat(24) };
+const BILLING_ON = { ...ENV, FEATURES_ON: "billing,server-translate", STRIPE_SECRET_KEY: "sk_test_" + "x".repeat(24) };
 const noPlus = await call({ to: "es", texts: ["x"] }, cookie, { ...BILLING_ON, BILLING: storeSays("canceled") });
 check("billing on, no Plus: 403 plus_required, model not asked", [noPlus.status, noPlus.data?.error], [403, "plus_required"]);
 const withPlus = await call({ to: "es", texts: ["x"] }, cookie, { ...BILLING_ON, BILLING: storeSays("active") });
