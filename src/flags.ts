@@ -22,7 +22,14 @@ export const DEFAULTS = {
   // promise a region). On-device translation doesn't need it. Turn on in Flagship, or with
   // FEATURES_ON="server-translate" in wrangler.jsonc. Not in featureForRoute: /translate checks it itself.
   "server-translate": false,
+  // A.I. search on the student's own device (2026-11-15, the app's averages-ai.js). Off = only the Averages.io
+  // school sees it (same list as server-translate); on = every student. Nothing is sent to us or anyone: the model
+  // runs in the browser. Turn on in Flagship, or with FEATURES_ON="ai-search".
+  "ai-search": false,
 } as const;
+
+/** Switches that, while off, still answer "on" for the Averages.io school (src/index.ts schoolFeature). */
+export const SCHOOL_WHEN_OFF: readonly FeatureKey[] = ["server-translate", "ai-search"];
 
 export type FeatureKey = keyof typeof DEFAULTS;
 export type Features = Record<FeatureKey, boolean>;

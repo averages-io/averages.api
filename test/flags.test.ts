@@ -14,7 +14,7 @@ function check(name: string, actual: unknown, expected: unknown) {
   else { failed++; console.log(`  FAIL  ${name}\n        expected: ${e}\n        actual:   ${a}`); }
 }
 
-check("15 switches, in Martin's order (billing and calendar-sync added 2026-10-21, live-grades 2026-10-27, fullscreen 2026-10-28, schoology-oauth 2026-10-29; coursematerialpreview-feature removed 2026-11-10; server-translate 2026-11-14)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "turnin-feature", "messaging-features", "notifications-features", "billing", "calendar-sync", "live-grades", "fullscreen", "schoology-oauth", "server-translate"]);
+check("16 switches, in Martin's order (billing and calendar-sync added 2026-10-21, live-grades 2026-10-27, fullscreen 2026-10-28, schoology-oauth 2026-10-29; coursematerialpreview-feature removed 2026-11-10; server-translate 2026-11-14, ai-search 2026-11-15)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "turnin-feature", "messaging-features", "notifications-features", "billing", "calendar-sync", "live-grades", "fullscreen", "schoology-oauth", "server-translate", "ai-search"]);
 check("server translation: off by default, and /translate checks it itself (off = the Averages.io school only)", [featureForRoute("POST", "/translate"), DEFAULTS["server-translate"]], [[], false]);
 check("live grades need live-grades; the bundle never does", [featureForRoute("GET", "/data/grades"), featureForRoute("GET", "/data/bundle")], [["live-grades"], []]);
 check("calendar routes need calendar-sync, except turning it off", [featureForRoute("GET", "/calendar/status"), featureForRoute("POST", "/calendar"), featureForRoute("GET", "/calendar/abc.ics"), featureForRoute("DELETE", "/calendar")], [["calendar-sync"], ["calendar-sync"], ["calendar-sync"], []]);
@@ -28,7 +28,7 @@ check("calendar routes need calendar-sync, except turning it off", [featureForRo
   const env = await withFlags({ FEATURES_EARLY: "messaging-features" });
   check("withFlags carries EARLY; earlyKey reads it", [earlyKey(env, "messaging-features"), earlyKey(env, "billing")], [true, false]);
 }
-check("defaults: everything on except the banner, billing and server translation (Fullscreen on since 2026-11-13)", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "billing", "server-translate"]);
+check("defaults: everything on except the banner, billing, server translation and A.I. search (Fullscreen on since 2026-11-13)", FEATURE_KEYS.filter((k) => !DEFAULTS[k]), ["maintenance-banner", "billing", "server-translate", "ai-search"]);
 check("billing routes: checkout and portal need the switch; status and the webhook never do", [featureForRoute("POST", "/billing/checkout"), featureForRoute("POST", "/billing/portal"), featureForRoute("GET", "/billing/status"), featureForRoute("POST", "/stripe/webhook")], [["billing"], ["billing"], [], []]);
 check("no Flagship: the defaults", await readFeatures({}), DEFAULTS);
 const vars = fallbackFeatures({ FEATURES_OFF: " Messaging-Features, turnin-feature,nonsense", FEATURES_ON: "maintenance-banner,turnin-feature" });

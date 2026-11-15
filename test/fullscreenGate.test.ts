@@ -61,7 +61,19 @@ check("server-translate off: signed out no, another school no, the Averages.io s
 check("server-translate off: answer kept per browser", [t3.cache, /Cookie/.test(t3.vary ?? "")], ["private, max-age=30", true]);
 const t4 = await tr({ ...PUB, FEATURES_ON: "server-translate" }, school("9", "exampleusd.schoology.com"));
 console.log("  (server-translate on reads as", JSON.stringify(t4), ")");
-if (t4.on) check("server-translate on: every school, cached publicly", [t4.on, t4.cache], [true, "public, max-age=30"]);
+if (t4.on) check("server-translate on (ai-search still off): every school, still per browser", [t4.on, t4.cache], [true, "private, max-age=30"]);
+// ai-search: the same rule
+async function ai(env: any, session?: any) {
+  const headers = new Headers({ Origin: "https://app.averages.io" });
+  if (session) headers.set("Cookie", `${SESSION_COOKIE}=${await sealSession(session, SECRET)}`);
+  const res = await worker.fetch(new Request("https://api.averages.io/config/features", { headers }), env, CTX);
+  return { on: (await res.json() as any).features["ai-search"], cache: res.headers.get("Cache-Control") };
+}
+const a1 = await ai(PUB, school("10", "exampleusd.schoology.com")), a2 = await ai(PUB, school("11", "app.schoology.com"));
+check("ai-search off: another school no, the Averages.io school yes", [a1.on, a2.on], [false, true]);
+const a3 = await ai({ ...PUB, FEATURES_ON: "server-translate,ai-search" }, school("12", "exampleusd.schoology.com"));
+console.log("  (both on reads as", JSON.stringify(a3), ")");
+if (a3.on) check("both on: every school, cached publicly", [a3.on, a3.cache], [true, "public, max-age=30"]);
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
