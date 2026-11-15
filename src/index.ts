@@ -982,6 +982,8 @@ app.post("/translate", requireSession, async (c) => {
   if (foreign) return foreign;
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
   c.header("Cache-Control", "private, no-store");
+  // Switch off: only the Averages.io school; on: everyone.
+  if (!serverTranslateFor(c.env, session)) return c.json({ error: "feature_off", feature: "server-translate" }, 503);
   let plus = !plusRequired(c.env as any);
   if (!plus) {
     try { plus = await hasPlusNow(c.env as any, session.uid, c.req.url); } catch { plus = false; }
@@ -1788,6 +1790,10 @@ export function fullscreenTester(session: SessionData | null, extra = ""): boole
   const testers = ["app.schoology.com", "www.schoology.com", "schoology.com", ...String(extra).split(",").map((d) => d.trim().toLowerCase()).filter(Boolean)];
   return testers.includes(session.sd.toLowerCase());
 }
+/** The "server-translate" switch: on = every student; off = only the Averages.io school (fullscreenTester). */
+export function serverTranslateFor(env: any, session: SessionData | null): boolean {
+  return featureOn(env, "server-translate") || fullscreenTester(session, env.FULLSCREEN_SCHOOLS ?? "");
+}
 export function fullscreenPublic(env: { FULLSCREEN_PUBLIC?: string }): boolean {
   return String(env.FULLSCREEN_PUBLIC ?? "1").trim() !== "0";
 }
@@ -1800,9 +1806,15 @@ app.get("/config/features", async (c) => {
   // the switch's message wins; else what the 15-minute check found down (src/health.ts)
   const auto = featureOn(c.env, "maintenance-banner") ? "" : healthMessage(downNow(await readHealth(c.env as any, isLocalRequest(c.req.url)), Date.now()));
   // Fullscreen only for testers until FULLSCREEN_PUBLIC is "1": then the answer depends on who's asking.
-  const perStudent = !fullscreenPublic(c.env) && features.fullscreen;
-  if (perStudent) features.fullscreen = fullscreenTester(await sessionFrom(c), c.env.FULLSCREEN_SCHOOLS ?? "");
-  c.header("Cache-Control", perStudent ? "private, no-store" : "public, max-age=30");
+  const fsPerStudent = !fullscreenPublic(c.env) && features.fullscreen;
+  // Server translation while its switch is off: only the Averages.io school.
+  const trPerStudent = !features["server-translate"];
+  const perStudent = fsPerStudent || trPerStudent;
+  const who = perStudent ? await sessionFrom(c) : null;
+  if (fsPerStudent) features.fullscreen = fullscreenTester(who, c.env.FULLSCREEN_SCHOOLS ?? "");
+  if (trPerStudent) features["server-translate"] = serverTranslateFor(c.env, who);
+  // Fullscreen's answer is never kept (it decides a redirect); the translate one alone can be, in this browser only.
+  c.header("Cache-Control", fsPerStudent ? "private, no-store" : perStudent ? "private, max-age=30" : "public, max-age=30");
   if (perStudent) c.header("Vary", "Cookie");
   return c.json({
     features,

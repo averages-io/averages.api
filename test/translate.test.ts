@@ -20,7 +20,7 @@ const AI = { async run(model: string, input: any) { calls.push({ model, input })
 const SECRET = "translate-test-session-secret";
 const ENV: any = { SESSION_SECRET: SECRET, AI, FEATURES_ON: "server-translate" };
 const CTX: any = { waitUntil() {}, passThroughOnException() {} };
-const cookieFor = async (uid: string) => `${SESSION_COOKIE}=${await sealSession({ key: "k", secret: "s", uid } as any, SECRET)}`;
+const cookieFor = async (uid: string, sd?: string) => `${SESSION_COOKIE}=${await sealSession({ key: "k", secret: "s", uid, ...(sd ? { sd } : {}) } as any, SECRET)}`;
 async function call(json: unknown, cookie: string, env: any = ENV, origin = "https://app.averages.io") {
   resetRateLimits();
   const headers = new Headers({ "Content-Type": "application/json", Cookie: cookie, Origin: origin });
@@ -58,8 +58,16 @@ check("signed out: 401", (await call({ to: "es", texts: ["x"] }, "")).status, 40
 check("from another site: refused", (await call({ to: "es", texts: ["x"] }, cookie, ENV, "https://evil.example")).status >= 400, true);
 check("bad request: 400", [(await call({ to: "xx", texts: ["x"] }, cookie)).data?.error], ["unknown_language"]);
 check("no Workers AI: 503", [(await call({ to: "es", texts: ["x"] }, cookie, { SESSION_SECRET: SECRET, FEATURES_ON: "server-translate" })).data?.error], ["translation_unavailable"]);
-const off = await call({ to: "es", texts: ["x"] }, cookie, { SESSION_SECRET: SECRET, AI });
-check("switch off (the default): 503 feature_off, the model isn't asked", [off.status, off.data?.error, off.data?.feature], [503, "feature_off", "server-translate"]);
+// Switch off (the default): only the Averages.io school (app.schoology.com, FULLSCREEN_SCHOOLS, API-key sign-ins).
+const OFF = { SESSION_SECRET: SECRET, AI };
+const otherSchool = await cookieFor("5002", "district.schoology.com");
+calls.length = 0;
+const off = await call({ to: "es", texts: ["x"] }, otherSchool, OFF);
+check("switch off, another school: 503 feature_off, the model isn't asked", [off.status, off.data?.error, off.data?.feature, calls.length], [503, "feature_off", "server-translate", 0]);
+check("switch off, the Averages.io school: translated", [(await call({ to: "es", texts: ["x"] }, await cookieFor("5003", "app.schoology.com"), OFF)).data?.texts], [["[spanish] x"]]);
+check("switch off, API-key sign-in (no school): translated", [(await call({ to: "es", texts: ["x"] }, cookie, OFF)).status], [200]);
+check("switch off, a school in FULLSCREEN_SCHOOLS: translated", [(await call({ to: "es", texts: ["x"] }, otherSchool, { ...OFF, FULLSCREEN_SCHOOLS: "district.schoology.com" })).status], [200]);
+check("switch on: every school", [(await call({ to: "es", texts: ["x"] }, otherSchool)).status], [200]);
 const storeSays = (status: string) => { const ns: any = { idFromName: (n: string) => n, get: () => ({ status: async () => ({ status }) }), jurisdiction: () => ns }; return ns; };
 const BILLING_ON = { ...ENV, FEATURES_ON: "billing,server-translate", STRIPE_SECRET_KEY: "sk_test_" + "x".repeat(24) };
 const noPlus = await call({ to: "es", texts: ["x"] }, cookie, { ...BILLING_ON, BILLING: storeSays("canceled") });

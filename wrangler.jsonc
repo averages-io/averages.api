@@ -36,8 +36,9 @@
     ]
   },
   // Workers AI (2026-11-15): Advanced translation's server fallback, a Plus perk (src/translate.ts).
-  // It stays unused until the "server-translate" switch is on (src/flags.ts, off by default): ask PowerSchool first,
-  // since Workers AI doesn't promise to process in the US. To turn it on without Flagship, add to "vars":
+  // The "server-translate" switch (src/flags.ts, off by default): off = only the Averages.io school can use it
+  // (app.schoology.com, FULLSCREEN_SCHOOLS, API-key sign-ins); on = every student. Ask PowerSchool before turning
+  // it on, since Workers AI doesn't promise to process in the US. To turn it on without Flagship, add to "vars":
   //   "FEATURES_ON": "server-translate"
   "ai": { "binding": "AI" },
   "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
