@@ -29,8 +29,11 @@ async function call(json: unknown, cookie: string, env: any = ENV, origin = "htt
 }
 
 console.log("\nchecking the request");
-check("good", checkTranslateBody({ to: "es", texts: ["Unit 3 test"] }), { to: "es", texts: ["Unit 3 test"] });
-check("unknown language", checkTranslateBody({ to: "en", texts: ["x"] }), { error: "unknown_language" });
+check("good, English when from is left out", checkTranslateBody({ to: "es", texts: ["Unit 3 test"] }), { to: "es", texts: ["Unit 3 test"], from: ["en"] });
+check("into English, from Spanish", checkTranslateBody({ to: "en", texts: ["Examen"], from: ["es"] }), { to: "en", texts: ["Examen"], from: ["es"] });
+check("from must match the texts", checkTranslateBody({ to: "en", texts: ["a", "b"], from: ["es"] }), { error: "unknown_language" });
+check("from must be a known language", checkTranslateBody({ to: "en", texts: ["a"], from: ["xx"] }), { error: "unknown_language" });
+check("unknown language", checkTranslateBody({ to: "it", texts: ["x"] }), { error: "unknown_language" });
 check("not a language code", checkTranslateBody({ to: "__proto__", texts: ["x"] }), { error: "unknown_language" });
 check("no texts", checkTranslateBody({ to: "es", texts: [] }), { error: "no_texts" });
 check("too many", checkTranslateBody({ to: "es", texts: Array(MAX_TEXTS + 1).fill("a") }), { error: "too_many_texts" });
@@ -41,6 +44,10 @@ check("too much in all", checkTranslateBody({ to: "es", texts: Array(13).fill("a
 console.log("\ntranslating");
 calls.length = 0;
 check("in order, a failure comes back blank", await translateAll(AI, "fr", ["Lab report", "boom", "  ", "Quiz"]), ["[french] Lab report", "", "", "[french] Quiz"]);
+calls.length = 0;
+check("each from its own language; one already in the target isn't sent", await translateAll(AI, "en", ["Examen", "Quiz"], ["es", "en"]), ["[english] Examen", ""]);
+check("Spanish to English", [calls.length, calls[0].input.source_lang, calls[0].input.target_lang], [1, "spanish", "english"]);
+calls.length = 0; await translateAll(AI, "fr", ["Lab report", "boom", "  ", "Quiz"]);
 check("the m2m100 model, English to the language's name, blanks not sent", [calls.length, calls[0].model, calls[0].input.source_lang, calls[0].input.target_lang], [3, TRANSLATE_MODEL, "english", "french"]);
 
 console.log("\nPOST /translate");

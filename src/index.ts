@@ -989,7 +989,7 @@ app.post("/translate", requireSession, async (c) => {
   try { body = await c.req.json(); } catch { return c.json({ error: "invalid_body" }, 400); }
   const req = checkTranslateBody(body);
   if ("error" in req) return c.json({ error: req.error }, 400);
-  return c.json({ texts: await translateAll(c.env.AI, req.to, req.texts) });
+  return c.json({ texts: await translateAll(c.env.AI, req.to, req.texts, req.from) });
 });
 
 app.post("/sync/seen", requireSession, async (c) => {

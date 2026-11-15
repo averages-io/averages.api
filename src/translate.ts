@@ -6,7 +6,8 @@
 
 export const TRANSLATE_MODEL = "@cf/meta/m2m100-1.2b";
 /** The app's languages, as the model names them. */
-export const TARGETS: Record<string, string> = { es: "spanish", fr: "french", pt: "portuguese", de: "german", zh: "chinese" };
+/** The app's languages, as the model names them: any of them to any other (2026-11-14: English too, for school content written in another language). */
+export const TARGETS: Record<string, string> = { en: "english", es: "spanish", fr: "french", pt: "portuguese", de: "german", zh: "chinese" };
 export const MAX_TEXTS = 40;
 export const MAX_CHARS = 1000;
 export const MAX_TOTAL = 12000;
@@ -15,13 +16,18 @@ export interface AiBinding {
   run(model: string, input: Record<string, unknown>): Promise<unknown>;
 }
 
-export type TranslateBody = { to: string; texts: string[] };
+export type TranslateBody = { to: string; texts: string[]; from: string[] };
 
-/** The request, checked: a known language and up to 40 texts of up to 1,000 characters (12,000 in all). */
+const known = (l: unknown): l is string => typeof l === "string" && Object.prototype.hasOwnProperty.call(TARGETS, l);
+
+/**
+ * The request, checked: a known language and up to 40 texts of up to 1,000 characters (12,000 in all).
+ * `from` is each text's language, as the browser found it (English when left out).
+ */
 export function checkTranslateBody(body: unknown): TranslateBody | { error: string } {
-  const b = body as { to?: unknown; texts?: unknown } | null;
+  const b = body as { to?: unknown; texts?: unknown; from?: unknown } | null;
   if (!b || typeof b !== "object") return { error: "invalid_body" };
-  if (typeof b.to !== "string" || !Object.prototype.hasOwnProperty.call(TARGETS, b.to)) return { error: "unknown_language" };
+  if (!known(b.to)) return { error: "unknown_language" };
   if (!Array.isArray(b.texts) || !b.texts.length) return { error: "no_texts" };
   if (b.texts.length > MAX_TEXTS) return { error: "too_many_texts" };
   let total = 0;
@@ -31,11 +37,15 @@ export function checkTranslateBody(body: unknown): TranslateBody | { error: stri
     total += t.length;
   }
   if (total > MAX_TOTAL) return { error: "too_much_text" };
-  return { to: b.to, texts: b.texts as string[] };
+  let from: string[];
+  if (b.from === undefined) from = b.texts.map(() => "en");
+  else if (!Array.isArray(b.from) || b.from.length !== b.texts.length || !b.from.every(known)) return { error: "unknown_language" };
+  else from = b.from as string[];
+  return { to: b.to, texts: b.texts as string[], from };
 }
 
-/** Each text translated, in order. A text that fails (or is blank) comes back as "", and the app keeps the original. */
-export async function translateAll(ai: AiBinding, to: string, texts: string[], concurrency = 6): Promise<string[]> {
+/** Each text translated, in order. A text that fails, is blank or is already in that language comes back as "", and the app keeps the original. */
+export async function translateAll(ai: AiBinding, to: string, texts: string[], from: string[] = texts.map(() => "en"), concurrency = 6): Promise<string[]> {
   const target = TARGETS[to];
   const out: string[] = new Array(texts.length).fill("");
   let next = 0;
@@ -43,9 +53,10 @@ export async function translateAll(ai: AiBinding, to: string, texts: string[], c
     while (next < texts.length) {
       const i = next++;
       const text = texts[i].trim();
-      if (!text) continue;
+      const source = TARGETS[from[i]] ?? "english";
+      if (!text || source === target) continue;
       try {
-        const r = (await ai.run(TRANSLATE_MODEL, { text, source_lang: "english", target_lang: target })) as { translated_text?: unknown } | null;
+        const r = (await ai.run(TRANSLATE_MODEL, { text, source_lang: source, target_lang: target })) as { translated_text?: unknown } | null;
         if (r && typeof r.translated_text === "string") out[i] = r.translated_text.trim();
       } catch {
         // leave this one untranslated
