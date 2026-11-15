@@ -35,6 +35,8 @@
       { "name": "HEALTH", "class_name": "HealthStore" }
     ]
   },
+  // Workers AI (2026-11-15): Advanced translation's server fallback, a Plus perk (src/translate.ts)
+  "ai": { "binding": "AI" },
   "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
   // "Verify your email" codes (2026-11-06, src/emailCode.ts): Cloudflare Email Service, from averages.io only.
   // averages.io must be onboarded once in the dashboard: Compute > Email Service > Email Sending > Onboard Domain.

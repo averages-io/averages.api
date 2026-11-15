@@ -4,7 +4,7 @@ import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
 
 export interface RateRule {
-  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "billing" | "apply" | "applyCode" | "applyVerify" | "emailCode" | "emailVerify";
+  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "billing" | "apply" | "applyCode" | "applyVerify" | "emailCode" | "emailVerify" | "translate";
   limit: number;
   windowMs: number;
   by: "ip" | "student";
@@ -31,6 +31,8 @@ export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   applyVerify: { name: "applyVerify", limit: 20, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY_VERIFY" },
   emailCode: { name: "emailCode", limit: 5, windowMs: 10 * MINUTE, by: "student", binding: "RATE_LIMIT_APPLY_CODE" },
   emailVerify: { name: "emailVerify", limit: 20, windowMs: 10 * MINUTE, by: "student", binding: "RATE_LIMIT_APPLY_VERIFY" },
+  // Advanced translation's server fallback (src/translate.ts): up to 40 texts a request
+  translate: { name: "translate", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_TRANSLATE" },
 };
 
 function under(path: string, prefix: string): boolean {
@@ -61,6 +63,7 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (under(path, "/cloud")) return RATE_RULES.cloud;
   if (under(path, "/media")) return RATE_RULES.media;
   if (under(path, "/billing")) return RATE_RULES.billing;
+  if (path === "/translate") return RATE_RULES.translate;
   if (under(path, "/calendar")) return method === "GET" && path.endsWith(".ics") ? null : RATE_RULES.billing;
   return null;
 }

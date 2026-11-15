@@ -163,6 +163,7 @@ import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
 import { cleanEmail, codeHash, codeMessage, DEFAULT_EMAIL_FROM, EMAIL_CODE_PURPOSE, EMAIL_CODE_TTL, newCode, sameHash, sendFailure, type SendEmailBinding } from "./emailCode.ts";
 import { getLinkImage, getLinkPreview, parseTarget } from "./linkPreview.ts";
 import { rateLimit } from "./rateLimit.ts";
+import { checkTranslateBody, translateAll, type AiBinding } from "./translate.ts";
 import type { SyncStore } from "./syncStore.ts";
 import type { CanvaStore } from "./canvaStore.ts";
 import type { CloudStore } from "./cloudStore.ts";
@@ -262,6 +263,8 @@ type Bindings = {
    * bound yet; the in-memory limits apply without them.
    */
   RATE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  /** Workers AI, for Advanced translation's server fallback (src/translate.ts). */
+  AI?: AiBinding;
 };
 
 /** True only when this Worker is being reached on localhost (`wrangler dev`). */
@@ -968,6 +971,27 @@ app.get("/sync/seen", requireSession, async (c) => {
   const record = await loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
   return c.json({ seen: record.seen ?? {} });
 });
+// Advanced translation's server fallback (2026-11-15, src/translate.ts): Plus only, and only used when
+// the student's browser can't translate on its own and they turned this on. Nothing is kept or logged.
+app.post("/translate", requireSession, async (c) => {
+  const session = c.get("session");
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
+  if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
+  c.header("Cache-Control", "private, no-store");
+  let plus = !plusRequired(c.env as any);
+  if (!plus) {
+    try { plus = await hasPlusNow(c.env as any, session.uid, c.req.url); } catch { plus = false; }
+  }
+  if (!plus) return c.json({ error: "plus_required" }, 403);
+  if (!c.env.AI) return c.json({ error: "translation_unavailable" }, 503);
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: "invalid_body" }, 400); }
+  const req = checkTranslateBody(body);
+  if ("error" in req) return c.json({ error: req.error }, 400);
+  return c.json({ texts: await translateAll(c.env.AI, req.to, req.texts) });
+});
+
 app.post("/sync/seen", requireSession, async (c) => {
   const session = c.get("session");
   const foreign = notFromOurApp(c);
