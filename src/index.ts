@@ -190,7 +190,7 @@ import {
   type SubmittedFile,
 } from "./submit.ts";
 import { canvaExportRoutes, contentDisposition } from "./canvaExport.ts";
-import { downNow, healthMessage, healthStore, HEALTH_SERVICES, nextRecord, readHealth, runChecks, type HealthAnswer } from "./health.ts";
+import { aiSearchCheck, downNow, healthMessage, healthStore, HEALTH_SERVICES, nextRecord, readHealth, runChecks, type HealthAnswer } from "./health.ts";
 import { capStream, DRIVE_FILE_ID_RE, DriveExportError, isDriveExportType, openDriveExport } from "./driveExport.ts";
 import { canvaFolderRoutes, createFolder, moveItem } from "./canvaFolders.ts";
 import { answerUnlessSame, FP_HEADER } from "./fingerprint.ts";
@@ -211,6 +211,8 @@ type Bindings = {
   SESSION_SECRET: string;
   SYNC: DurableObjectNamespace<SyncStore>;
   MEDIA?: R2Bucket;
+  /** A.I. search's files (bucket averages-ai): only checked to be there (src/health.ts). */
+  AI_FILES?: R2Bucket;
   EMAIL?: SendEmailBinding;
   EMAIL_FROM?: string;
   CANVA: DurableObjectNamespace<CanvaStore>;
@@ -497,6 +499,8 @@ app.get("/status", async (c) => {
       notifications: on("notifications-features") && pushConfigured(env),
       calendarSync: on("calendar-sync"),
       averagesPlus: on("billing"),
+      // on for everyone; while off, only the Averages.io school has it
+      aiSearch: on("ai-search"),
     },
     links: {
       app: "https://app.averages.io",
@@ -1807,7 +1811,7 @@ app.get("/config/features", async (c) => {
   if (everyone) for (const k of FEATURE_KEYS) if (!features[k] && earlyKey(c.env, k)) features[k] = true;
   const msg = typeof c.env.MAINTENANCE_MESSAGE === "string" ? c.env.MAINTENANCE_MESSAGE.trim().slice(0, 300) : "";
   // the switch's message wins; else what the 15-minute check found down (src/health.ts)
-  const auto = featureOn(c.env, "maintenance-banner") ? "" : healthMessage(downNow(await readHealth(c.env as any, isLocalRequest(c.req.url)), Date.now()));
+  const downList = featureOn(c.env, "maintenance-banner") ? [] : downNow(await readHealth(c.env as any, isLocalRequest(c.req.url)), Date.now());
   // Fullscreen only for testers until FULLSCREEN_PUBLIC is "1": then the answer depends on who's asking.
   const fsPerStudent = !fullscreenPublic(c.env) && features.fullscreen;
   // Server translation and A.I. search while their switch is off: only the Averages.io school.
@@ -1817,6 +1821,8 @@ app.get("/config/features", async (c) => {
   const who = perStudent ? await sessionFrom(c) : null;
   if (fsPerStudent) features.fullscreen = fullscreenTester(who, c.env.FULLSCREEN_SCHOOLS ?? "");
   for (const k of schoolKeys) features[k] = schoolFeature(c.env, k, who);
+  // A.I. search's trouble is only news to students who have A.I. search
+  const auto = healthMessage(downList.filter((s) => s !== "ai-search" || features["ai-search"]));
   // Fullscreen's answer is never kept (it decides a redirect); the per-school ones alone can be, in this browser only.
   c.header("Cache-Control", fsPerStudent ? "private, no-store" : perStudent ? "private, max-age=30" : "public, max-age=30");
   if (perStudent) c.header("Vary", "Cookie");
@@ -2631,6 +2637,8 @@ export async function checkHealth(env: Bindings, fetcher?: (url: string, init?: 
       canva: canvaConfigured(env) && on("canva-integration"),
       gdrive: !!cloud.google && on("drive-integration"),
       onedrive: !!cloud.microsoft && on("onedrive-integration"),
+      // checked even while its switch is off: the Averages.io school uses it then (SCHOOL_WHEN_OFF)
+      aiSearch: aiSearchCheck((env as any).AI_FILES, fetcher),
     });
     const store = healthStore(env as any, false);
     if (!store) return;

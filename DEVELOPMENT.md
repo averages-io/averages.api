@@ -91,7 +91,10 @@ only.
 **Outage banner:** with `maintenance-banner` on, the banner shows that message. With it
 off, the 15-minute check (`*/15 * * * *` cron, `HealthStore`) shows a banner by itself
 when Schoology, sign-in, a connection or one of our own stores is down. `/status` reads
-`unknown` until the first check after a deploy.
+`unknown` until the first check after a deploy. It also checks A.I. search (`ai-search`): its model
+and runtime files must be in the R2 bucket `averages-ai` (read-only `AI_FILES` binding; the file
+list is `AI_SEARCH_FILES` in `src/health.ts`, kept in step with the app's `averages-ai.js`). Its
+banner line only goes to students who have A.I. search.
 
 ## One-time setup
 

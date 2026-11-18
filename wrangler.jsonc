@@ -73,7 +73,10 @@
   //   "consumers": [{ "queue": "averages-retry", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 8 }]
   // },
   "r2_buckets": [
-    { "binding": "MEDIA", "bucket_name": "averages-media", "jurisdiction": "us" }
+    { "binding": "MEDIA", "bucket_name": "averages-media", "jurisdiction": "us" },
+    // A.I. search's files (the app serves them at /ai/): only the 15-minute check reads it, asking whether they're
+    // there (size only), for api.averages.io/status and the banner (src/health.ts)
+    { "binding": "AI_FILES", "bucket_name": "averages-ai" }
   ],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SyncStore"] },

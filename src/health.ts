@@ -9,6 +9,9 @@
 //    "Sign in with Schoology" takes, so a broken key shows too.
 //  - our own pieces: Sync, notifications and calendar sync each read their own test record; profile pictures list
 //    the picture storage. An error means it's down.
+//  - A.I. search (2026-11-17): the files every browser downloads to run it (both models and the ONNX Runtime) must
+//    be in the R2 bucket averages-ai (the API's read-only AI_FILES binding, asked for their size only). Without the
+//    binding, they're asked for from app.averages.io/ai/ (HEAD). A missing file is down too: the download fails there.
 // While anything is down, the pages' banner says what (unless the maintenance switch is on: its message wins), and
 // api.averages.io/status shows each part. No student data is touched: the test records hold nothing.
 
@@ -22,6 +25,7 @@ export const HEALTH_SERVICES = [
   "notifications",
   "calendar",
   "pictures",
+  "ai-search",
 ] as const;
 export type HealthService = (typeof HEALTH_SERVICES)[number];
 
@@ -31,6 +35,15 @@ export const HEALTH_STALE_MS = 2 * HEALTH_EVERY_MS + 5 * 60_000;
 export const HEALTH_TIMEOUT_MS = 8000;
 
 export type HealthAnswer = "ok" | "down" | "off";
+
+/** What A.I. search downloads (app.averages.io/ai/, R2 bucket averages-ai). Keep in step with VARIANTS in the app's
+ *  public/js/averages-ai.js (a new model gets a new folder name). The big files: if those are there, the rest are. */
+export const AI_SEARCH_ORIGIN = "https://app.averages.io";
+export const AI_SEARCH_FILES = [
+  "/ai/models/averages-search-q4-r10/onnx/model_q4f16.onnx_data",
+  "/ai/models/averages-search-q8-r17/onnx/model_quantized.onnx_data",
+  "/ai/runtime/ort-1.31.0-dev.20260914/ort-wasm-simd-threaded.asyncify.wasm",
+] as const;
 export interface HealthRecord {
   /** When the check ran (epoch ms). */
   checked: number;
@@ -72,6 +85,7 @@ export const HEALTH_MESSAGES: Record<HealthService, string> = {
   notifications: "Notifications may be late right now.",
   calendar: "Calendar sync isn't updating right now.",
   pictures: "Profile pictures and backgrounds may not load right now.",
+  "ai-search": "A.I. search can't download right now. Search works as before.",
 };
 const HEALTH_NAMES: Record<HealthService, string> = {
   "schoology-signin": "signing in",
@@ -83,6 +97,7 @@ const HEALTH_NAMES: Record<HealthService, string> = {
   notifications: "notifications",
   calendar: "calendar sync",
   pictures: "profile pictures",
+  "ai-search": "A.I. search",
 };
 
 /** The banner's line for what's down, or "" when nothing is. */
@@ -111,6 +126,28 @@ export async function reachable(url: string, f: Fetcher = fetch, init: RequestIn
   }
 }
 
+/** Files that must be there: every one answers 2xx to a HEAD (a 404 counts: nothing to download). */
+export async function present(urls: readonly string[], f: Fetcher = fetch): Promise<HealthAnswer> {
+  try {
+    const answers = await Promise.all(urls.map((u) => f(u, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
+      .then((r) => { r.body?.cancel().catch(() => {}); return r.ok; }, () => false)));
+    return answers.every(Boolean) ? "ok" : "down";
+  } catch {
+    return "down";
+  }
+}
+
+/** The same files straight from the bucket (R2 head: size only, nothing read). */
+export async function inBucket(bucket: { head(key: string): Promise<unknown> }, files: readonly string[] = AI_SEARCH_FILES): Promise<HealthAnswer> {
+  const run = Promise.all(files.map((p) => bucket.head(p.replace(/^\/ai\//, ""))));
+  const got = await Promise.race([run, new Promise<null>((_, no) => setTimeout(() => no(new Error("timeout")), HEALTH_TIMEOUT_MS))]);
+  return Array.isArray(got) && got.every(Boolean) ? "ok" : "down";
+}
+/** A.I. search's check: the bucket when the API has it, else the app's own /ai/. */
+export function aiSearchCheck(bucket: { head(key: string): Promise<unknown> } | undefined, f?: Fetcher): () => Promise<HealthAnswer> {
+  return bucket ? () => inBucket(bucket) : () => present(AI_SEARCH_FILES.map((p) => AI_SEARCH_ORIGIN + p), f);
+}
+
 /** A check that's up when it finishes without an error (our own pieces), within the time limit. */
 export async function works(run: () => Promise<unknown>): Promise<HealthAnswer> {
   try {
@@ -134,13 +171,15 @@ export interface HealthChecks {
   canva: boolean;
   gdrive: boolean;
   onedrive: boolean;
+  /** A.I. search's files (null: not checked, "off"). */
+  aiSearch?: (() => Promise<HealthAnswer>) | null;
 }
 
 /** One round: every part at once. */
 export async function runChecks(c: HealthChecks): Promise<Partial<Record<HealthService, HealthAnswer>>> {
   const f = c.fetcher ?? fetch;
   const own = (run: (() => Promise<unknown>) | null) => (run ? works(run) : Promise.resolve<HealthAnswer>("off"));
-  const [signin, schoology, canva, gdrive, onedrive, sync, notifications, calendar, pictures] = await Promise.all([
+  const [signin, schoology, canva, gdrive, onedrive, sync, notifications, calendar, pictures, aiSearch] = await Promise.all([
     c.signin ? c.signin().catch((): HealthAnswer => "down") : Promise.resolve<HealthAnswer>("off"),
     reachable("https://api.schoology.com/v1/users/me", f),
     c.canva ? reachable("https://api.canva.com/rest/v1/users/me", f) : Promise.resolve<HealthAnswer>("off"),
@@ -150,8 +189,9 @@ export async function runChecks(c: HealthChecks): Promise<Partial<Record<HealthS
     own(c.notifications),
     own(c.calendar),
     own(c.pictures),
+    c.aiSearch ? c.aiSearch().catch((): HealthAnswer => "down") : Promise.resolve<HealthAnswer>("off"),
   ]);
-  return { "schoology-signin": signin, schoology, canva, gdrive, onedrive, sync, notifications, calendar, pictures };
+  return { "schoology-signin": signin, schoology, canva, gdrive, onedrive, sync, notifications, calendar, pictures, "ai-search": aiSearch };
 }
 
 /* ── where it's kept: HealthStore, one for the whole app ───────────────── */
