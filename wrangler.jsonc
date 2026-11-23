@@ -19,6 +19,11 @@
     "CANVA_PERMISSION_PROBE": "0",
     // 1 = Fullscreen for everyone (while the fullscreen switch is on); 0 = only app.schoology.com sign-ins and API keys.
     "FULLSCREEN_PUBLIC": "1",
+    // Invisible Turnstile on the sign-in page (src/turnstile.ts, 2026-11-23). The secret is TURNSTILE_SECRET
+    // (npx wrangler secret put TURNSTILE_SECRET); until it's set, the check stays off. Tokens are only taken from
+    // TURNSTILE_HOSTNAMES (never localhost here; wrangler dev on this machine adds it by itself).
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAGPcp9YvLlPAQg1C",
+    "TURNSTILE_HOSTNAMES": "app.averages.io",
     "VAPID_PUBLIC_KEY": "BOiujaTWwvcGdegG6HdCOCkyuYqKK-WgOMx8HAde1XZP4jN9wPfnDvjlLdjOFKNImJWzR3GHRf8vvsAmVZXyGg0"
   },
   "durable_objects": {

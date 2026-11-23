@@ -172,6 +172,7 @@ import type { CloudStore } from "./cloudStore.ts";
 import type { BillingStore } from "./billingStore.ts";
 import { calendarRoutes, forgetCalendar } from "./calendar.ts";
 import { forgetPlus, hasPlusNow, plusRequired } from "./plus.ts";
+import { checkTurnstile, turnstileHosts, turnstileOn } from "./turnstile.ts";
 import { liveCourses, liveEvery } from "./liveGrades.ts";
 import { billingRoutes, stripeWebhookRoutes, type BillingRouteEnv, type BillingStoreApi } from "./billingRoutes.ts";
 import { customerEmail } from "./billing.ts";
@@ -210,6 +211,10 @@ export { HealthStore } from "./healthStore.ts";
 type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
   SESSION_SECRET: string;
+  /** The sign-in page's invisible Turnstile widget (src/turnstile.ts): public site key (a var) and its secret. Both or neither. */
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET?: string;
+  TURNSTILE_HOSTNAMES?: string;
   SYNC: DurableObjectNamespace<SyncStore>;
   MEDIA?: R2Bucket;
   /** A.I. search's files (bucket averages-ai): only checked to be there (src/health.ts). */
@@ -554,7 +559,7 @@ function reviewSecretsMatch(env: Bindings, key: string, secret: string): boolean
 app.post("/auth/session", async (c) => {
   const blocked = notFromOurApp(c);
   if (blocked) return blocked;
-  let body: { key?: string; secret?: string; under13?: unknown };
+  let body: { key?: string; secret?: string; under13?: unknown; turnstile?: unknown };
   try {
     body = await c.req.json();
   } catch {
@@ -571,6 +576,9 @@ app.post("/auth/session", async (c) => {
     // Fail loudly rather than silently issuing sessions sealed with "undefined".
     return c.json({ error: "server_misconfigured" }, 500);
   }
+
+  const human = await humanCheck(c, (body as { turnstile?: unknown }).turnstile);
+  if (human) return c.json({ error: human }, 400);
 
   if (key === SANDBOX_KEY || secret === SANDBOX_SECRET) return c.json({ error: "invalid_credentials" }, 401);
   const reviewer = reviewSecretsMatch(c.env, key, secret);
@@ -678,8 +686,17 @@ app.get("/auth/schoology/status", (c) => {
   const sandbox = isSandboxConsumer(consumer);
   const on = !!consumer && featureOn(c.env, "schoology-oauth") && (!sandbox || featureOn(c.env, "test-signin"));
   c.header("Cache-Control", "no-store");
-  return c.json({ on });
+  // the sign-in page's invisible Turnstile check (src/turnstile.ts): its public site key, when it's on
+  return c.json({ on, ...(turnstileOn(c.env as any) ? { turnstile: (c.env as any).TURNSTILE_SITE_KEY } : {}) });
 });
+
+/** The sign-in page's Turnstile token (src/turnstile.ts): null when it's fine (or Turnstile is off), else the error code. */
+async function humanCheck(c: any, token: unknown): Promise<string | null> {
+  if (!turnstileOn(c.env)) return null;
+  const r = await checkTurnstile(token, c.env.TURNSTILE_SECRET, { ip: c.req.header("CF-Connecting-IP") ?? null, hosts: turnstileHosts(c.env, isLocalRequest(c.req.url)) });
+  if (r === "unavailable") console.error("turnstile_unavailable");
+  return r === "ok" ? null : r === "unavailable" ? "verify_unavailable" : "verify_failed";
+}
 
 function signinBack(c: any, code: string, detail?: unknown) {
   const status = detail instanceof SchoologyError || detail instanceof OAuthError ? detail.status : undefined;
@@ -703,6 +720,8 @@ app.get("/auth/schoology/start", async (c) => {
   if (!c.env.SESSION_SECRET) return signinBack(c, "server_misconfigured");
   const domain = schoolDomain(c.req.query("domain"));
   if (!domain) return signinBack(c, "unknown_school");
+  const human = await humanCheck(c, c.req.query("ts"));
+  if (human) return signinBack(c, human);
   try {
     const req = await requestToken(consumer, sandbox ? (url) => sandboxTokens(url) : undefined);
     const secure = !isLocalRequest(c.req.url);
