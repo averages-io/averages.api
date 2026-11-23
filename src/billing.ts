@@ -166,6 +166,13 @@ export async function createCheckoutSession(
   return { id: String(session.id ?? ""), url: session.url };
 }
 
+/** The email on a Stripe customer (what they paid with), or null. Read only to fill in the student's email for them. */
+export async function customerEmail(env: BillingEnv, customerId: string): Promise<string | null> {
+  if (!/^cus_[A-Za-z0-9]+$/.test(customerId) || !env.STRIPE_SECRET_KEY) return null;
+  const c = await stripeRequest(env, "GET", `/v1/customers/${customerId}`, {});
+  return c && !c.deleted && typeof c.email === "string" ? c.email : null;
+}
+
 /** Stripe's customer page (cancel, change card, invoices). Returns its URL. */
 export async function createPortalSession(env: BillingEnv, input: { customerId: string; appOrigin: string }): Promise<string> {
   if (!/^cus_[A-Za-z0-9]+$/.test(input.customerId)) throw new BillingError("billing_no_account");

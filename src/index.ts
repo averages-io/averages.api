@@ -162,7 +162,7 @@ import {
 import { findMessageFile, getRecipients, getThread, namesFrom } from "./messages.ts";
 import { getFolder, getSectionGrades, parseFolder } from "./extras.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
-import { cleanEmail, codeHash, codeMessage, DEFAULT_EMAIL_FROM, EMAIL_CODE_PURPOSE, EMAIL_CODE_TTL, newCode, sameHash, sendFailure, type SendEmailBinding } from "./emailCode.ts";
+import { addressProblem, cleanEmail, codeHash, codeMessage, DEFAULT_EMAIL_FROM, EMAIL_CODE_PURPOSE, EMAIL_CODE_TTL, newCode, sameHash, sendFailure, type SendEmailBinding } from "./emailCode.ts";
 import { getLinkImage, getLinkPreview, parseTarget } from "./linkPreview.ts";
 import { rateLimit } from "./rateLimit.ts";
 import { checkTranslateBody, translateAll, type AiBinding } from "./translate.ts";
@@ -174,6 +174,7 @@ import { calendarRoutes, forgetCalendar } from "./calendar.ts";
 import { hasPlusNow, plusRequired } from "./plus.ts";
 import { liveCourses, liveEvery } from "./liveGrades.ts";
 import { billingRoutes, stripeWebhookRoutes, type BillingRouteEnv, type BillingStoreApi } from "./billingRoutes.ts";
+import { customerEmail } from "./billing.ts";
 import type { PushStore } from "./pushStore.ts";
 import { pushConfigured } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
@@ -2461,9 +2462,13 @@ app.post("/email/code", requireSession, async (c) => {
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
   if (session.inc) return c.json({ error: "not_in_incognito" }, 403);
   if (!c.env.SESSION_SECRET) return c.json({ error: "server_misconfigured" }, 500);
-  const body = (await c.req.json().catch(() => null)) as { email?: unknown } | null;
+  const body = (await c.req.json().catch(() => null)) as { email?: unknown; force?: unknown } | null;
   const email = cleanEmail(body?.email);
   if (!email) return c.json({ error: "bad_email" }, 400);
+  // not a throwaway, not a typo of a big provider (unless sent again on purpose), and a domain that gets email:
+  // checked before a code (and one of the month's emails) is spent
+  const problem = await addressProblem(email, { force: body?.force === true });
+  if (problem) return c.json(problem, 400);
   if (!c.env.EMAIL) return c.json({ error: "email_not_configured" }, 503);
   const code = newCode();
   const { subject, text, html } = codeMessage(code);
@@ -2477,6 +2482,31 @@ app.post("/email/code", requireSession, async (c) => {
   const token = await sealValue({ u: session.uid, e: email, h: await codeHash(c.env.SESSION_SECRET, session.uid, email, code) }, c.env.SESSION_SECRET, EMAIL_CODE_PURPOSE, EMAIL_CODE_TTL);
   return c.json({ ok: true, token, expiresIn: EMAIL_CODE_TTL });
 });
+/** The same checks as /email/code, without sending anything: the app asks as the student finishes typing. */
+app.post("/email/check", requireSession, async (c) => {
+  c.header("Cache-Control", "no-store");
+  const body = (await c.req.json().catch(() => null)) as { email?: unknown; force?: unknown } | null;
+  const email = cleanEmail(body?.email);
+  if (!email) return c.json({ error: "bad_email" }, 400);
+  const problem = await addressProblem(email, { force: body?.force === true });
+  return problem ? c.json(problem, 400) : c.json({ ok: true });
+});
+
+/** The email on the student's Averages Plus account (Stripe), to fill in for them; they can change it. */
+app.get("/email/suggested", requireSession, async (c) => {
+  const session = c.get("session");
+  c.header("Cache-Control", "private, no-store");
+  if (isDemo(session) || session.inc) return c.json({ email: null });
+  try {
+    if (!(c.env as any).BILLING) return c.json({ email: null });
+    const id = await (billingStore(c.env as any, session.uid, c.req.url) as any).customerId();
+    const email = id ? cleanEmail(await customerEmail(c.env as any, id)) : null;
+    return c.json(email ? { email, from: "plus" } : { email: null });
+  } catch {
+    return c.json({ email: null });
+  }
+});
+
 app.post("/email/verify", requireSession, async (c) => {
   const session = c.get("session");
   c.header("Cache-Control", "no-store");
