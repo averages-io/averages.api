@@ -269,6 +269,12 @@ freshCalls();
   check("recipients refused: still a bundle, sender is Teacher (never the id)", refusedNames.MESSAGES.map((m: any) => m.from), ["Teacher"]);
   const demo = await call("/data/bundle", { cookie: demoSession });
   check("demo bundle unchanged (not caught by the extras' demo refusal)", [demo.status, (await json(demo)).demo], [200, true]);
+  // Schoology refuses the sign-in itself (app removed in Schoology, or the token ran out): signed out, not "couldn't load"
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init?: RequestInit) => String(input?.url ?? input).includes(`/users/${ME}/sections`) ? new Response('{"error":"unauthorized"}', { status: 401 }) : realFetch(input, init)) as typeof fetch;
+  const dead = await call("/data/bundle", { cookie: schoologySession });
+  globalThis.fetch = realFetch;
+  check("Schoology 401: 401 session_expired, and the session cookie is cleared", [dead.status, (await json(dead)).error, /averages_session=;/.test(dead.headers.get("Set-Cookie") ?? "")], [401, "session_expired", true]);
 }
 
 console.log("\n/data/grades (live grades, 2026-10-27)");

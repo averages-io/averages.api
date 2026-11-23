@@ -5,7 +5,7 @@ import worker from "../src/index.ts";
 import { pushRoutes, type PushStoreApi } from "../src/push.ts";
 import { PushStore, PUSH_PURPOSE } from "../src/pushStore.ts";
 import { generateVapidKeys } from "../src/webpush.ts";
-import { notificationsPlus, plusRequired } from "../src/plus.ts";
+import { forgetPlus, notificationsPlus, plusRequired } from "../src/plus.ts";
 import {
   buildIcs,
   calendarRoutes,
@@ -192,6 +192,7 @@ section("The background check stops without Plus");
     const { store, storage } = make(BILLING_ON);
     await store.subscribe({ subscription: browser("b"), types: { grades: true } as any, ...cred });
     billingDown = true;
+    forgetPlus();   // the Worker keeps answers for a minute (src/plus.ts); this case is about the store being down
     const realFetch = globalThis.fetch;
     let called = false;
     globalThis.fetch = (async () => { called = true; throw new Error("no network in this test"); }) as any;
@@ -376,6 +377,9 @@ section("Worker: early access and Plus ending");
   const plain = await go("/messages", { cookie: zoe });
   check("early feature without Plus: 503 feature_off", [plain.status, (await plain.json()).error], [503, "feature_off"]);
   await NS.get("9101").apply({ uid: "9101", eventId: "e1", created: 1, customerId: "cus_1", subscriptionId: "sub_1", status: "active" });
+  const kept = await go("/messages", { cookie: zoe });
+  check("a \"no\" is kept a minute (no billing-store request on every call)", kept.status, 503);
+  forgetPlus("9101");   // a minute later
   const early = await go("/messages", { cookie: zoe });
   check("early feature with Plus: let through (no longer feature_off)", early.status !== 503, true);
   {

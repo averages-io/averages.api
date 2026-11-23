@@ -171,7 +171,7 @@ import type { CanvaStore } from "./canvaStore.ts";
 import type { CloudStore } from "./cloudStore.ts";
 import type { BillingStore } from "./billingStore.ts";
 import { calendarRoutes, forgetCalendar } from "./calendar.ts";
-import { hasPlusNow, plusRequired } from "./plus.ts";
+import { forgetPlus, hasPlusNow, plusRequired } from "./plus.ts";
 import { liveCourses, liveEvery } from "./liveGrades.ts";
 import { billingRoutes, stripeWebhookRoutes, type BillingRouteEnv, type BillingStoreApi } from "./billingRoutes.ts";
 import { customerEmail } from "./billing.ts";
@@ -793,6 +793,14 @@ async function googleAccess(c: any, session: SessionData): Promise<string> {
   return fresh.accessToken;
 }
 
+/** Schoology refused the student's own sign-in (401): the session ends, like a Classroom one does below. */
+function schoologySignedOut(c: any) {
+  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN), { append: true });
+  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true });
+  c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
+  return c.json({ error: "session_expired" }, 401);
+}
+
 /**
  * How a failed Google Classroom call is answered. Google saying the sign-in
  * is no good any more (revoked, expired) signs the student out (401 clears
@@ -1235,6 +1243,10 @@ app.get("/data/bundle", requireSession, async (c) => {
     });
   } catch (error) {
     if (error instanceof SchoologyError) {
+      // Schoology no longer takes this sign-in (the student removed Averages.io in Schoology, or the token ran out):
+      // signed out, so they sign in again instead of seeing "couldn't load" until the session ends (2026-11-23,
+      // Schoology's Authentication docs: "If it failed with an HTTP Unauthorized, our token is no longer valid").
+      if (error.status === 401 && !isDemo(session)) return schoologySignedOut(c);
       return c.json({ error: "schoology_error", status: error.status }, 502);
     }
     return c.json({ error: "unexpected_error" }, 500);
@@ -2560,6 +2572,7 @@ app.route("/push", pushRoutes({ requireSession, fromOurApp: notFromOurApp }));
 
 // Plus ended: notifications and the calendar link are deleted (src/plus.ts).
 async function onPlusEnded(env: any, uid: string, requestUrl: string): Promise<void> {
+  forgetPlus(uid);   // this Worker's remembered "yes" goes now (src/plus.ts)
   if (!plusRequired(env)) return;
   await forgetPush(env, uid, requestUrl);
   await forgetCalendar(env, uid, requestUrl);
