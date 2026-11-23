@@ -149,14 +149,15 @@ console.log("\nthe routes (review sandbox)");
   }
 
   let r = await call("/media/photo/share");
-  check("GET share: off to start with", [r.res.status, r.data.on, r.data.available], [200, false, true]);
+  check("GET share: off to start with, no photo saved", [r.res.status, r.data.on, r.data.available, r.data.photo, r.data.classes], [200, false, true, false, 0]);
   r = await call("/media/photo/share", { json: { on: "yes" } });
   check("POST share needs on: true or false", [r.res.status, r.data.error], [400, "bad_request"]);
   r = await call("/media/photo/share", { json: { on: true } });
   const mine = await readShare(MEDIA, REVIEW_UID);
   check("POST share on: the record lists the student's own classes", [r.res.status, r.data.on, Array.isArray(mine) && mine.length > 0], [200, true, true]);
+  check("POST share on says there's no photo saved yet (the app uploads it then)", [r.data.photo, r.data.classes > 0], [false, true]);
   r = await call("/media/photo/share");
-  check("GET share: on", r.data.on, true);
+  check("GET share: on, with how many classes", [r.data.on, r.data.classes === mine!.length], [true, true]);
   r = await call("/media/photo/share", { cookie: kid, json: { on: true } });
   check("Incognito (under 13): never", [r.res.status, r.data.error], [403, "incognito_mode"]);
 

@@ -334,7 +334,9 @@ export function mediaRoutes(deps: MediaDeps) {
     if (kind instanceof Response) return kind;
     if (!deps.sectionsOf) return c.json({ on: false, available: false });
     try {
-      return c.json({ on: (await readShare(c.env.MEDIA!, c.get("session").uid)) !== null, available: true });
+      // photo: whether the account has one saved (without it nothing shows); classes: how many it's shown in
+      const uid = c.get("session").uid, sections = await readShare(c.env.MEDIA!, uid);
+      return c.json({ on: sections !== null, available: true, photo: !!(await photoVersion(c.env.MEDIA!, uid)), classes: sections ? sections.length : 0 });
     } catch (err) {
       console.error("media_share_read_failed", err);
       return c.json({ error: "media_unavailable" }, 503);
@@ -360,7 +362,7 @@ export function mediaRoutes(deps: MediaDeps) {
       const sections = deps.sectionsOf ? await deps.sectionsOf(session) : null;
       if (!sections) return c.json({ error: "not_supported" }, 400);
       await setShare(c.env.MEDIA!, session.uid, sections);
-      return c.json({ ok: true, on: true });
+      return c.json({ ok: true, on: true, photo: !!(await photoVersion(c.env.MEDIA!, session.uid)), classes: Math.min(sections.length, MAX_SHARED_SECTIONS) });
     } catch (err) {
       console.error("media_share_failed", err);
       return c.json({ error: "media_unavailable" }, 503);
