@@ -110,11 +110,11 @@ console.log("\ndelete your account: everything, or it says so");
 {
   // pictures in R2: all gone
   const objs = new Map([["u/r:reviewer/photo", 1], ["u/r:reviewer/background", 1], ["u/someone-else/photo", 1]]);
-  ENV.MEDIA = { async list({ prefix }: any) { return { objects: [...objs.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })), truncated: false }; }, async delete(keys: string[]) { for (const k of keys) objs.delete(k); } };
+  ENV.MEDIA = { async get() { return null; }, async list({ prefix }: any) { return { objects: [...objs.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })), truncated: false }; }, async delete(keys: string[]) { for (const k of keys) objs.delete(k); } };
   let r = await call("/account", { method: "DELETE" });
   check("pictures deleted, nobody else's", [r.res.status, [...objs.keys()]], [200, ["u/someone-else/photo"]]);
   // a store that can't be reached: the app hears it, and stays signed in
-  ENV.MEDIA = { async list() { throw new Error("r2 down"); }, async delete() {} };
+  ENV.MEDIA = { async get() { throw new Error("r2 down"); }, async list() { throw new Error("r2 down"); }, async delete() {} };
   const quiet = console.error; console.error = () => {};
   r = await call("/account", { method: "DELETE" });
   console.error = quiet;

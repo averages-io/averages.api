@@ -37,7 +37,7 @@ export interface ExtraCourse {
 }
 
 /** The student's first 12 classes (same as the bundle), names and colors only. */
-async function schoologyCourses(uid: string, creds: Credentials): Promise<ExtraCourse[]> {
+export async function schoologyCourses(uid: string, creds: Credentials): Promise<ExtraCourse[]> {
   const { COURSES } = adaptCourses(await getSections(uid, creds), []);
   return COURSES.slice(0, MAX_SECTIONS).map((c) => ({ id: c.id, name: c.name, color: c.color }));
 }

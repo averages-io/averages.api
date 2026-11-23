@@ -46,6 +46,8 @@ export interface ExtrasDeps {
   classroomFailure: (c: any, error: unknown) => Response;
   /** The student's time zone (the app's ?tz=, else Cloudflare's guess, else UTC). */
   studentTimeZone: (c: any) => string;
+  /** Classmates' own photos (the ones they show to classmates), added to a classmates answer. */
+  classmatePhotos?: (c: any, answer: any) => Promise<void>;
 }
 
 function schoologyFailure(c: any, error: unknown) {
@@ -113,7 +115,9 @@ export function dataExtrasRoutes(deps: ExtrasDeps) {
       }
     }
     try {
-      return c.json(await fetchSchoologyClassmates(session.uid, session));
+      const answer = await fetchSchoologyClassmates(session.uid, session);
+      if (deps.classmatePhotos) await deps.classmatePhotos(c, answer);
+      return c.json(answer);
     } catch (error) {
       return schoologyFailure(c, error);
     }

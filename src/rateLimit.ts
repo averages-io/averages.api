@@ -4,7 +4,7 @@ import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
 
 export interface RateRule {
-  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "billing" | "apply" | "applyCode" | "applyVerify" | "emailCode" | "emailVerify" | "translate";
+  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "photos" | "billing" | "apply" | "applyCode" | "applyVerify" | "emailCode" | "emailVerify" | "translate";
   limit: number;
   windowMs: number;
   by: "ip" | "student";
@@ -25,6 +25,8 @@ export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   canvaBrowse: { name: "canvaBrowse", limit: 90, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CANVA_BROWSE" },
   cloud: { name: "cloud", limit: 60, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_CLOUD" },
   media: { name: "media", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_MEDIA" },
+  // classmates' photos (GET /media/peer/...): a class page can show a couple hundred at once; browsers keep them after
+  photos: { name: "photos", limit: 400, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_PHOTOS" },
   billing: { name: "billing", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_BILLING" },
   apply: { name: "apply", limit: 5, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY" },
   applyCode: { name: "applyCode", limit: 5, windowMs: 10 * MINUTE, by: "ip", binding: "RATE_LIMIT_APPLY_CODE" },
@@ -61,6 +63,7 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (method === "GET" && /^\/canva\/folders\/[^/]+\/items$/.test(path)) return RATE_RULES.canvaBrowse;
   if (under(path, "/canva")) return RATE_RULES.canva;
   if (under(path, "/cloud")) return RATE_RULES.cloud;
+  if (method === "GET" && path.startsWith("/media/peer/")) return RATE_RULES.photos;
   if (under(path, "/media")) return RATE_RULES.media;
   if (under(path, "/billing")) return RATE_RULES.billing;
   if (path === "/translate") return RATE_RULES.translate;

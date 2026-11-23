@@ -160,7 +160,7 @@ import {
   safeTimeZone,
 } from "./classroom.ts";
 import { findMessageFile, getRecipients, getThread, namesFrom } from "./messages.ts";
-import { getFolder, getSectionGrades, parseFolder } from "./extras.ts";
+import { getFolder, getSectionGrades, parseFolder, schoologyCourses } from "./extras.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
 import { addressProblem, cleanEmail, codeHash, codeMessage, DEFAULT_EMAIL_FROM, EMAIL_CODE_PURPOSE, EMAIL_CODE_TTL, newCode, sameHash, sendFailure, type SendEmailBinding } from "./emailCode.ts";
 import { getLinkImage, getLinkPreview, parseTarget } from "./linkPreview.ts";
@@ -179,7 +179,7 @@ import type { PushStore } from "./pushStore.ts";
 import { pushConfigured } from "./pushStore.ts";
 import { forgetPush, pushRoutes } from "./push.ts";
 import { submitRoutes } from "./submitRoutes.ts";
-import { deleteAllMedia, mediaRoutes, type MediaBucket } from "./media.ts";
+import { addSharedPhotos, deleteAllMedia, mediaRoutes, syncShareSections, type MediaBucket } from "./media.ts";
 import {
   findSubmittedFile,
   getHistory,
@@ -2448,7 +2448,24 @@ app.delete("/cloud/:app/connection", requireSession, async (c) => {
   }
 });
 
-const extrasDeps = { requireSession, fromOurApp: notFromOurApp, googleAccess, classroomFailure, studentTimeZone };
+/**
+ * GET /data/classmates: classmates who show their photo to classmates get it in place of Schoology's (src/media.ts),
+ * and this student's own photo follows their classes when the term changes. Never fails the list.
+ */
+async function classmatePhotos(c: any, answer: { CLASSMATES: Record<string, { id: string; photo: string }[]>; partial?: boolean }): Promise<void> {
+  const session = c.get("session") as SessionData;
+  const bucket = c.env.MEDIA as MediaBucket | undefined;
+  if (!bucket || !c.env.SESSION_SECRET || isDemo(session) || isIncognito(session) || isGoogle(session)) return;
+  try {
+    const sections = Object.keys(answer.CLASSMATES || {});
+    if (!answer.partial && sections.length) await syncShareSections(bucket, session.uid, sections);
+    await addSharedPhotos(bucket, answer.CLASSMATES, { origin: new URL(c.req.url).origin, secret: c.env.SESSION_SECRET, viewer: session.uid });
+  } catch (err) {
+    console.error("classmate_photos_failed", err instanceof Error ? err.message : String(err));
+  }
+}
+
+const extrasDeps = { requireSession, fromOurApp: notFromOurApp, googleAccess, classroomFailure, studentTimeZone, classmatePhotos };
 
 /** GET /data/people, /data/updates, /data/events, /data/folders, /data/gradebook (src/extrasRoutes.ts). */
 app.route("/data", dataExtrasRoutes(extrasDeps));
@@ -2554,7 +2571,13 @@ app.route("/stripe", stripeWebhookRoutes({ storeFor: billingStore, onPlusEnded }
 app.route("/calendar", calendarRoutes({ requireSession, fromOurApp: notFromOurApp }) as any);
 
 /** Profile photo and background for Sync Across Devices, in R2 (src/media.ts). */
-app.route("/media", mediaRoutes({ requireSession, fromOurApp: notFromOurApp }) as any);
+app.route("/media", mediaRoutes({
+  requireSession,
+  fromOurApp: notFromOurApp,
+  // Show my photo to classmates: Schoology classes only for now (Classroom's ids for classmates are Google's)
+  sectionsOf: async (session) => (isDemo(session) || isGoogle(session) ? null : (await schoologyCourses(session.uid, session)).map((x) => x.id)),
+  secret: (c) => c.env.SESSION_SECRET,
+}) as any);
 
 app.route("/submit", submitRoutes({ requireSession, fromOurApp: notFromOurApp }));
 app.route(
