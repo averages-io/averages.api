@@ -53,7 +53,7 @@ async function signOut(query: string, cookie?: string, origin = APP, env = ENV) 
   const res = await worker.fetch(new Request(`${API}/auth/session${query}`, { method: "DELETE", headers }), env, CTX);
   await Promise.allSettled(waits);
   const cookies: string[] = (res.headers as any).getSetCookie?.() ?? [];
-  return { status: res.status, calls: [...calls].sort(), clearsSession: cookies.some((c) => c.startsWith(SESSION_COOKIE + "=;")) };
+  return { status: res.status, calls: [...calls].sort(), clearsSession: cookies.some((c) => c.startsWith(SESSION_COOKIE + "=;")), cf: cookies.filter((c) => c.startsWith("cf_clearance=;")) };
 }
 
 console.log("sign-out with Sync off (?forget=1)");
@@ -91,6 +91,12 @@ console.log("\nrefusals and edges");
   check("no session: just clears cookies", [none.status, none.calls], [200, []]);
   const d = await signOut("?forget=1", demo);
   check("demo: nothing to disconnect", [d.status, d.calls], [200, []]);
+}
+
+console.log("\nCloudflare's bot-check cookie");
+{
+  const r = await signOut("", martin);
+  check("cf_clearance expired twice: partitioned and not", r.cf.map((c) => [c.includes("Max-Age=0"), c.includes("Domain=averages.io"), c.endsWith("; Partitioned")]), [[true, true, true], [true, true, false]]);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

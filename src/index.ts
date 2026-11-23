@@ -661,6 +661,16 @@ app.post("/auth/session", async (c) => {
   }
 });
 
+/** Cloudflare's bot-check cookie (cf_clearance, Domain=averages.io, Partitioned, set by its
+ * JavaScript detections). Firefox keeps partitioned cookies through Clear-Site-Data, so on
+ * sign-out and account deletion it's also expired by name, partitioned and not. */
+function clearCfClearance(c: any) {
+  if (isLocalRequest(c.req.url)) return;
+  for (const part of ["; Partitioned", ""]) {
+    c.header("Set-Cookie", `cf_clearance=; Domain=averages.io; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Secure; HttpOnly; SameSite=None${part}`, { append: true });
+  }
+}
+
 app.delete("/auth/session", async (c) => {
   const session = await sessionFrom(c);
   const forget = c.req.query("forget") === "1";
@@ -677,6 +687,7 @@ app.delete("/auth/session", async (c) => {
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
   // An older Schoology session's name (see /auth/me).
   c.header("Set-Cookie", clearProfileCookie(!isLocalRequest(c.req.url)), { append: true });
+  clearCfClearance(c);
   return c.json({ ok: true });
 });
 
@@ -1136,6 +1147,7 @@ app.delete("/account", requireSession, async (c) => {
   c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
   c.header("Set-Cookie", clearProfileCookie(!isLocalRequest(c.req.url)), { append: true });
+  clearCfClearance(c);
   return c.json({ ok: true });
 });
 
