@@ -400,8 +400,9 @@ export function mediaRoutes(deps: MediaDeps) {
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Content-Security-Policy", "default-src 'none'; sandbox");
     c.header("Cross-Origin-Resource-Policy", "same-site");
-    // only this student's browser, and only this version of the photo, so it can keep it until the address ends
-    c.header("Cache-Control", "private, max-age=604800, immutable");
+    // only this student's browser, only this version of the photo, and only for an hour (2026-11-23 sweep: it was the
+    // week the address lasts, so a photo its owner stopped showing could stay in a classmate's browser that long)
+    c.header("Cache-Control", "private, max-age=3600");
     return c.body(obj.body as any, 200);
   });
 

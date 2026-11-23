@@ -4,7 +4,7 @@ import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
 
 export interface RateRule {
-  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "photos" | "billing" | "apply" | "applyCode" | "applyVerify" | "emailCode" | "emailVerify" | "translate";
+  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "photos" | "billing" | "apply" | "applyCode" | "applyVerify" | "emailCode" | "emailVerify" | "translate" | "links";
   limit: number;
   windowMs: number;
   by: "ip" | "student";
@@ -35,6 +35,9 @@ export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   emailVerify: { name: "emailVerify", limit: 20, windowMs: 10 * MINUTE, by: "student", binding: "RATE_LIMIT_APPLY_VERIFY" },
   // Advanced translation's server fallback (src/translate.ts): up to 40 texts a request
   translate: { name: "translate", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_TRANSLATE" },
+  // link previews and their pictures (src/linkPreview.ts): each one is a fetch of another site, so one account can't
+  // turn the API into a crawler (2026-11-23 sweep). A message thread shows a few at a time.
+  links: { name: "links", limit: 60, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_LINKS" },
 };
 
 function under(path: string, prefix: string): boolean {
@@ -50,6 +53,10 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (method === "POST" && path === "/schools/apply/verify") return RATE_RULES.applyVerify;
   if (method === "POST" && path === "/email/code") return RATE_RULES.emailCode;
   if (method === "POST" && path === "/email/verify") return RATE_RULES.emailVerify;
+  // 2026-11-23 sweep: the email check looks the domain up (DNS); the suggested email asks Stripe
+  if (method === "POST" && path === "/email/check") return RATE_RULES.data;
+  if (path === "/email/suggested") return RATE_RULES.billing;
+  if (under(path, "/links")) return RATE_RULES.links;
   if (path === "/schools/applications") return RATE_RULES.signin;
   if (path === "/auth/me" || under(path, "/sync")) return RATE_RULES.data;
   if (under(path, "/messages")) return method === "POST" ? RATE_RULES.send : RATE_RULES.data;

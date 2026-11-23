@@ -2517,6 +2517,8 @@ app.route("/data", dataExtrasRoutes(extrasDeps));
 app.route("/messages", messagesRoutes(extrasDeps));
 
 app.post("/email/code", requireSession, async (c) => {
+  const foreign = notFromOurApp(c);   // only the app asks (2026-11-23 sweep: the one mutating group without it)
+  if (foreign) return foreign;
   const session = c.get("session");
   c.header("Cache-Control", "no-store");
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
@@ -2544,6 +2546,8 @@ app.post("/email/code", requireSession, async (c) => {
 });
 /** The same checks as /email/code, without sending anything: the app asks as the student finishes typing. */
 app.post("/email/check", requireSession, async (c) => {
+  const foreign = notFromOurApp(c);   // only the app asks (2026-11-23 sweep: the one mutating group without it)
+  if (foreign) return foreign;
   c.header("Cache-Control", "no-store");
   const body = (await c.req.json().catch(() => null)) as { email?: unknown; force?: unknown } | null;
   const email = cleanEmail(body?.email);
@@ -2568,6 +2572,8 @@ app.get("/email/suggested", requireSession, async (c) => {
 });
 
 app.post("/email/verify", requireSession, async (c) => {
+  const foreign = notFromOurApp(c);   // only the app asks (2026-11-23 sweep: the one mutating group without it)
+  if (foreign) return foreign;
   const session = c.get("session");
   c.header("Cache-Control", "no-store");
   if (isDemo(session) || session.inc) return c.json({ error: "not_available" }, 403);

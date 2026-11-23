@@ -176,7 +176,7 @@ console.log("\nthe routes (review sandbox)");
 
   let p = await call(url, { raw: true });
   check("the photo loads for the student it was given to", [p.res.status, p.res.headers.get("Content-Type"), Array.from(p.data as Uint8Array)], [200, "image/jpeg", Array.from(JPEG)]);
-  check("kept by the browser for this version, never anywhere shared", [p.res.headers.get("Cache-Control"), p.res.headers.get("Cross-Origin-Resource-Policy"), p.res.headers.get("X-Content-Type-Options")], ["private, max-age=604800, immutable", "same-site", "nosniff"]);
+  check("kept by this browser only, for an hour (2026-11-23), never anywhere shared", [p.res.headers.get("Cache-Control"), p.res.headers.get("Cross-Origin-Resource-Policy"), p.res.headers.get("X-Content-Type-Options")], ["private, max-age=3600", "same-site", "nosniff"]);
   p = await call(url, { cookie: kid, raw: true });
   check("another student with the same address: 404", p.res.status, 404);
   p = await call(url.replace(/s=[0-9a-f]+/, "s=" + "0".repeat(32)), { raw: true });
