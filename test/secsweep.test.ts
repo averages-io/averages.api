@@ -56,8 +56,8 @@ async function fire(method: string, path: string, opts: { cookie?: string; origi
 const live = (uid: string, extra: any = {}) => sealSession({ key: "ck", secret: "cs", uid, ...extra } as any, SECRET);
 const APP = "https://app.averages.io";
 
-// A tiny valid PNG (8-byte signature + a byte), enough for the magic-byte sniff.
-const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+// A real 4 x 4 PNG: photos are checked for their size in pixels too (2026-11-23).
+const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAFUlEQVR4XmM8EWDDAANMcBYDAx4OAEP4AVzA+QYSAAAAAElFTkSuQmCC"), (ch) => ch.charCodeAt(0));
 
 console.log("key derivation: stores are addressed by the session uid, never request input");
 ok("media key is u/<uid>/<kind>", mediaKey("AAA", "photo" as any) === "u/AAA/photo" && mediaKey("BBB", "photo" as any) === "u/BBB/photo");

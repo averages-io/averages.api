@@ -12,9 +12,60 @@ export type MediaKind = (typeof MEDIA_KINDS)[number];
  * 1600 px crops, a few hundred KB.
  */
 export const MAX_MEDIA_BYTES: Record<MediaKind, number> = {
-  photo: 2 * 1024 * 1024,
+  photo: 1024 * 1024,
   background: 4 * 1024 * 1024,
 };
+
+/**
+ * Photos are kept small (2026-11-23, Martin: "compress pfps automatically when they get inputed into R2"). The app
+ * already makes each one a 256 px square (WebP, or JPEG where the browser can't make WebP), about 10-40 KB, so the API
+ * only has to turn away anything else: a still photo over 512 px a side or over 150 KB. An animated GIF goes up as it
+ * is (re-making every frame on the server would cost far more than it saves), up to 1 MB and 1024 px a side.
+ */
+export const PHOTO_MAX_SIDE = 512;
+export const PHOTO_MAX_STILL_BYTES = 150 * 1024;
+export const GIF_MAX_SIDE = 1024;
+
+/** An image's width and height from its first bytes, without decoding it; null when they can't be found. */
+export function imageSize(b: Uint8Array, type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"): { w: number; h: number } | null {
+  const u16be = (i: number) => (b[i] << 8) | b[i + 1];
+  const u16le = (i: number) => b[i] | (b[i + 1] << 8);
+  const u24le = (i: number) => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16);
+  const u32be = (i: number) => ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3];
+  const ok = (w: number, h: number) => (w > 0 && h > 0 ? { w, h } : null);
+  if (type === "image/png") return b.length >= 24 ? ok(u32be(16), u32be(20)) : null;
+  if (type === "image/gif") return b.length >= 10 ? ok(u16le(6), u16le(8)) : null;
+  if (type === "image/webp") {
+    if (b.length < 30) return null;
+    const chunk = String.fromCharCode(b[12], b[13], b[14], b[15]);
+    if (chunk === "VP8X") return ok(u24le(24) + 1, u24le(27) + 1);
+    if (chunk === "VP8L") { const v = b[21] | (b[22] << 8) | (b[23] << 16) | (b[24] << 24); return ok((v & 0x3fff) + 1, ((v >>> 14) & 0x3fff) + 1); }
+    if (chunk === "VP8 ") return ok(u16le(26) & 0x3fff, u16le(28) & 0x3fff);
+    return null;
+  }
+  // JPEG: walk the markers to the first frame header (SOF0-SOF15, but not DHT, JPG or DAC)
+  let i = 2;
+  while (i + 9 < b.length) {
+    if (b[i] !== 0xff) { i++; continue; }
+    const m = b[i + 1];
+    if (m === 0xff) { i++; continue; }
+    if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { i += 2; continue; }
+    if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return ok(u16be(i + 7), u16be(i + 5));
+    if (m === 0xd9 || m === 0xda) return null;
+    i += 2 + u16be(i + 2);
+  }
+  return null;
+}
+
+/** Why this photo is turned away, or null when it's fine. */
+export function photoProblem(bytes: Uint8Array, type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"): { status: 413 | 422; error: string; max: number } | null {
+  const gif = type === "image/gif";
+  if (!gif && bytes.byteLength > PHOTO_MAX_STILL_BYTES) return { status: 413, error: "too_large", max: PHOTO_MAX_STILL_BYTES };
+  const size = imageSize(bytes, type), side = gif ? GIF_MAX_SIDE : PHOTO_MAX_SIDE;
+  if (!size) return { status: 422, error: "not_an_image", max: side };
+  if (size.w > side || size.h > side) return { status: 422, error: "photo_too_big", max: side };
+  return null;
+}
 
 export function isMediaKind(value: string): value is MediaKind {
   return (MEDIA_KINDS as readonly string[]).includes(value);
@@ -368,6 +419,10 @@ export function mediaRoutes(deps: MediaDeps) {
     if (bytes.byteLength > max) return c.json({ error: "too_large", maxBytes: max }, 413);
     const type = sniffImage(bytes);
     if (!type) return c.json({ error: "not_an_image" }, 415);
+    if (kind === "photo") {
+      const bad = photoProblem(bytes, type);
+      if (bad) return c.json(bad.error === "too_large" ? { error: "too_large", maxBytes: bad.max } : bad.error === "photo_too_big" ? { error: "photo_too_big", maxSide: bad.max } : { error: "not_an_image" }, bad.status);
+    }
     const session = c.get("session");
     try {
       const put = await c.env.MEDIA!.put(mediaKey(session.uid, kind), bytes, { httpMetadata: { contentType: type } });

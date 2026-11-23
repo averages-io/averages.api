@@ -3,7 +3,7 @@
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
 import { DEMO_UID, sealSession, SESSION_COOKIE } from "../src/session.ts";
-import { deleteAllMedia, mediaKey, sniffImage, type MediaBucket } from "../src/media.ts";
+import { deleteAllMedia, imageSize, mediaKey, photoProblem, sniffImage, type MediaBucket } from "../src/media.ts";
 
 let passed = 0;
 let failed = 0;
@@ -95,8 +95,10 @@ async function call(method: string, path: string, init: { cookie?: string; body?
 }
 const json = async (res: Response) => res.json().catch(() => null);
 
-const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 2, 3, 4]);
-const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+const b64 = (s: string) => Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
+/** Real (tiny, 4 x 4) pictures: photos are checked for their size in pixels now. */
+const PNG = b64("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAFUlEQVR4XmM8EWDDAANMcBYDAx4OAEP4AVzA+QYSAAAAAElFTkSuQmCC");
+const JPEG = b64("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAEAAQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDMooor50/Rz//Z");
 const GIF = new TextEncoder().encode("GIF89a\x01\x00\x01\x00");
 const WEBP = new Uint8Array([0x52, 0x49, 0x46, 0x46, 4, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50]);
 const SVG = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
@@ -133,6 +135,28 @@ console.log("\nputting and getting");
   check("PUT background (WebP)", [res.status, MEDIA.objects.get("u/1001/background")?.type], [200, "image/webp"]);
   const gif = await call("PUT", "/media/photo", { cookie: bob, body: GIF, type: "image/gif" });
   check("an animated GIF photo goes up as it is", [gif.status, MEDIA.objects.get("u/1002/photo")?.type], [200, "image/gif"]);
+}
+
+console.log("\nphotos are kept small");
+{
+  const WEBP_LOSSY = b64("UklGRjoAAABXRUJQVlA4IC4AAADwAQCdASoEAAQAAUAmJaACdLoB+AAETAAA/uX6P+3Jl5wR/9cB+cB+cB/KwAAA"), WEBP_LOSSLESS = b64("UklGRiAAAABXRUJQVlA4TBQAAAAvP8ALAAcQEf0PAAnh/3oxov+pHw=="), WEBP_EXT = b64("UklGRtIAAABXRUJQVlA4WAoAAAAQAAAAKwEAxwAAQUxQSBEAAAABBxAREQBQpP//KaL/qf9fAwBWUDggmgAAAHAQAJ0BKiwByAA+bTaZSaQjIqEgKACADYlpbuF2sRtACewD32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snCgAP7/1gAAAAAAAAAAAAA="), JPEG_PROG = b64("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wgARCAC0AUADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAVAQEBAAAAAAAAAAAAAAAAAAAAAf/aAAwDAQACEAMQAAABgAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH//xAAUEAEAAAAAAAAAAAAAAAAAAACQ/9oACAEBAAEFAmY//8QAFBEBAAAAAAAAAAAAAAAAAAAAcP/aAAgBAwEBPwFw/8QAFBEBAAAAAAAAAAAAAAAAAAAAcP/aAAgBAgEBPwFw/8QAFBABAAAAAAAAAAAAAAAAAAAAkP/aAAgBAQAGPwJmP//EABQQAQAAAAAAAAAAAAAAAAAAAJD/2gAIAQEAAT8hZj//2gAMAwEAAgADAAAAEAwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww//EABQRAQAAAAAAAAAAAAAAAAAAAHD/2gAIAQMBAT8QcP/EABQRAQAAAAAAAAAAAAAAAAAAAHD/2gAIAQIBAT8QcP/EABQQAQAAAAAAAAAAAAAAAAAAAJD/2gAIAQEAAT8QZj//2Q==");
+  check("sizes in pixels, read from the first bytes", [imageSize(PNG, "image/png"), imageSize(JPEG, "image/jpeg"), imageSize(JPEG_PROG, "image/jpeg"), imageSize(WEBP_LOSSY, "image/webp"), imageSize(WEBP_LOSSLESS, "image/webp"), imageSize(WEBP_EXT, "image/webp"), imageSize(GIF, "image/gif")],
+    [{ w: 4, h: 4 }, { w: 4, h: 4 }, { w: 320, h: 180 }, { w: 4, h: 4 }, { w: 64, h: 48 }, { w: 300, h: 200 }, { w: 1, h: 1 }]);
+  const wide = PNG.slice(); wide[16] = 0; wide[17] = 0; wide[18] = 0x02; wide[19] = 0x58;   // 600 px wide
+  check("a photo over 512 px a side: photo_too_big", photoProblem(wide, "image/png"), { status: 422, error: "photo_too_big", max: 512 });
+  const heavy = new Uint8Array(160 * 1024); heavy.set(PNG);
+  check("a still photo over 150 KB: too_large", photoProblem(heavy, "image/png"), { status: 413, error: "too_large", max: 150 * 1024 });
+  const bigGif = new TextEncoder().encode("GIF89a\x00\x05\x00\x05");   // 1280 x 1280
+  check("an animated GIF can be bigger, up to 1024 px", [photoProblem(GIF, "image/gif"), photoProblem(bigGif, "image/gif")?.error], [null, "photo_too_big"]);
+  check("a JPEG with no frame header: not_an_image", photoProblem(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 2, 3, 4]), "image/jpeg")?.error, "not_an_image");
+  let res = await call("PUT", "/media/photo", { cookie: bob, body: wide, type: "image/png" });
+  check("PUT a 600 px photo: 422 photo_too_big", [res.status, (await json(res))?.maxSide], [422, 512]);
+  res = await call("PUT", "/media/photo", { cookie: bob, body: heavy, type: "image/png" });
+  check("PUT a 160 KB photo: 413 too_large", [res.status, (await json(res))?.maxBytes], [413, 150 * 1024]);
+  res = await call("PUT", "/media/photo", { cookie: bob, body: WEBP_LOSSY, type: "image/webp" });
+  check("PUT the app's small WebP: 200", res.status, 200);
+  res = await call("PUT", "/media/background", { cookie: bob, body: wide, type: "image/png" });
+  check("backgrounds keep their own rules (a 600 px one is fine)", res.status, 200);
 }
 
 console.log("\nrefusals");
