@@ -179,6 +179,19 @@ async function purposeKey(secret: string, purpose: string): Promise<CryptoKey> {
   return aesKey(`${purpose}\u0000${secret}`);
 }
 
+/** When this session was signed in (unix seconds): its end, less the 15 days every session lasts. */
+export function sessionIssuedAt(session: { exp: number }): number {
+  return session.exp - SESSION_TTL_SECONDS;
+}
+
+/**
+ * The session sealed again, with the same end, under `secret` (moving it to a new SESSION_SECRET, 2026-11-23).
+ * Stamped as a 15-day session: openSession has already moved an older one's end to 15 days.
+ */
+export async function resealSession(session: SessionData, secret: string): Promise<string> {
+  return seal({ ...session, v: SESSION_VERSION } as SessionData, secret);
+}
+
 export async function sealValue(value: unknown, secret: string, purpose: string, ttlSeconds: number): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await purposeKey(secret, purpose);
@@ -270,19 +283,39 @@ export async function openSession(
   }
 }
 
-export const SESSION_COOKIE = "averages_session";
-export const LEGACY_SESSION_COOKIE = "schoolagy_session";
+/**
+ * The session cookie (2026-11-23 security sweep). `__Host-`: the browser only accepts it from api.averages.io itself,
+ * over https, for the whole site, and never sends it to any other averages.io address (it used to go to every
+ * *.averages.io site, the landing page included). Martin: fine to sign everyone out for the change, so the old
+ * names are never read again, only cleared.
+ */
+export const SESSION_COOKIE = "__Host-averages_session";
+/** The names it had before (Domain=.averages.io): cleared wherever a session is set or ends. */
+export const OLD_SESSION_COOKIES = ["averages_session", "schoolagy_session"] as const;
+/**
+ * "Someone's signed in on this browser", for app.averages.io's front door (worker/index.js frontDoor: "/" goes
+ * straight to Home). Only a hint: it holds no token, and a wrong hint just means the sign-in page once.
+ */
+export const SIGNED_IN_COOKIE = "averages_signed_in";
 
-/** The session token from a Cookie header: the new cookie, or the old one while it's still around. */
+/** The session token from a Cookie header (only the current name: the old ones were signed out). */
 export function sessionToken(header: string | null): string | null {
-  return readCookie(header, SESSION_COOKIE) ?? readCookie(header, LEGACY_SESSION_COOKIE);
+  return readCookie(header, SESSION_COOKIE);
 }
 
-export function sessionCookie(token: string, domain: string): string {
+/** The Set-Cookie headers for a new session: the token (this host only) and the signed-in hint (all averages.io). */
+export function sessionCookies(token: string, domain: string): string[] {
+  return [
+    sessionCookie(token),
+    [`${SIGNED_IN_COOKIE}=1`, "Path=/", `Domain=${domain}`, "HttpOnly", "Secure", "SameSite=Lax", `Max-Age=${SESSION_TTL_SECONDS}`].join("; "),
+    ...OLD_SESSION_COOKIES.map((name) => clearSessionCookie(domain, name)),
+  ];
+}
+
+export function sessionCookie(token: string): string {
   return [
     `${SESSION_COOKIE}=${token}`,
     "Path=/",
-    `Domain=${domain}`,
     "HttpOnly",
     "Secure",
     // Lax works because app.averages.io and api.averages.io share the
@@ -292,11 +325,17 @@ export function sessionCookie(token: string, domain: string): string {
   ].join("; ");
 }
 
+/** Every Set-Cookie header that ends a session: the token, the hint and the old names. */
+export function clearSessionCookies(domain: string): string[] {
+  return [clearSessionCookie(domain), clearSessionCookie(domain, SIGNED_IN_COOKIE), ...OLD_SESSION_COOKIES.map((name) => clearSessionCookie(domain, name))];
+}
+
+/** One cookie gone. The session cookie itself has no Domain (a __Host- cookie can't); the others were set with one. */
 export function clearSessionCookie(domain: string, name: string = SESSION_COOKIE): string {
   return [
     `${name}=`,
     "Path=/",
-    `Domain=${domain}`,
+    ...(name === SESSION_COOKIE ? [] : [`Domain=${domain}`]),
     "HttpOnly",
     "Secure",
     "SameSite=Lax",

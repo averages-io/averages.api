@@ -4,7 +4,7 @@ import type { MiddlewareHandler } from "hono";
 import { DEMO_UID } from "./session.ts";
 
 export interface RateRule {
-  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "photos" | "billing" | "apply" | "applyCode" | "applyVerify" | "emailCode" | "emailVerify" | "translate" | "links";
+  name: "signin" | "data" | "send" | "submit" | "push" | "canva" | "canvaPoll" | "canvaBrowse" | "cloud" | "media" | "photos" | "billing" | "apply" | "applyCode" | "applyVerify" | "emailCode" | "emailVerify" | "translate" | "links" | "csp";
   limit: number;
   windowMs: number;
   by: "ip" | "student";
@@ -37,6 +37,8 @@ export const RATE_RULES: Record<RateRule["name"], RateRule> = {
   translate: { name: "translate", limit: 20, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_TRANSLATE" },
   // link previews and their pictures (src/linkPreview.ts): each one is a fetch of another site, so one account can't
   // turn the API into a crawler (2026-11-23 sweep). A message thread shows a few at a time.
+  // the app's CSP reports (POST /csp-report): no session, so per address; a page with many violations sends a burst
+  csp: { name: "csp", limit: 30, windowMs: MINUTE, by: "ip", binding: "RATE_LIMIT_SIGNIN" },
   links: { name: "links", limit: 60, windowMs: MINUTE, by: "student", binding: "RATE_LIMIT_LINKS" },
 };
 
@@ -55,6 +57,8 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (method === "POST" && path === "/email/verify") return RATE_RULES.emailVerify;
   // 2026-11-23 sweep: the email check looks the domain up (DNS); the suggested email asks Stripe
   if (method === "POST" && path === "/email/check") return RATE_RULES.data;
+  if (method === "POST" && path === "/auth/signout-everywhere") return RATE_RULES.send;
+  if (method === "POST" && path === "/csp-report") return RATE_RULES.csp;
   if (path === "/email/suggested") return RATE_RULES.billing;
   if (under(path, "/links")) return RATE_RULES.links;
   if (path === "/schools/applications") return RATE_RULES.signin;

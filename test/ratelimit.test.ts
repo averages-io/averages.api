@@ -51,6 +51,7 @@ check("the numbers", Object.values(RATE_RULES).map((r) => [r.name, r.limit, r.wi
   ["emailCode", 5, 600000, "student"],
   ["emailVerify", 20, 600000, "student"],
   ["translate", 20, 60000, "student"],
+  ["csp", 30, 60000, "ip"],
   ["links", 60, 60000, "student"],
 ]);
 check("school applications per IP; Martin's list like sign-in", [name("POST", "/schools/apply"), name("GET", "/schools/applications")], ["apply", "signin"]);

@@ -178,7 +178,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
 const ENV: any = { SESSION_SECRET: SECRET, CANVA_CLIENT_ID: "OC-x", CANVA_CLIENT_SECRET: "y", CANVA_REDIRECT_URI: "https://api.averages.io/canva/callback", CANVA: ns, CANVA_FOLDERS_ENABLED: "1", RETRY };
 async function call(path: string, opts: { method?: string; body?: unknown; env?: any; session?: any; origin?: string } = {}) {
   const token = await sealSession(opts.session ?? ({ uid: "123", key: "k", secret: "s", exp: Math.floor(Date.now() / 1000) + 3600 } as any), SECRET);
-  const headers: Record<string, string> = { Cookie: `schoolagy_session=${token}`, Origin: opts.origin ?? "https://app.averages.io" };
+  const headers: Record<string, string> = { Cookie: `__Host-averages_session=${token}`, Origin: opts.origin ?? "https://app.averages.io" };
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
   const res = await app.fetch(new Request("https://api.averages.io" + path, { method: opts.method ?? "GET", headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }), { ...ENV, ...opts.env }, { waitUntil() {}, passThroughOnException() {} } as any);
   return { status: res.status, data: await res.json().catch(() => null) as any };

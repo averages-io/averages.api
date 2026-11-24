@@ -22,7 +22,7 @@ function fakeCanva(state: { connected: boolean; scopes: string[] | null }) {
 async function status(env: Record<string, unknown>) {
   const token = await sealSession({ uid: "123", key: "k", secret: "s", exp: Math.floor(Date.now() / 1000) + 3600 } as any, SECRET);
   const res = await app.fetch(
-    new Request("https://api.averages.io/canva/status", { headers: { Cookie: `schoolagy_session=${token}` } }),
+    new Request("https://api.averages.io/canva/status", { headers: { Cookie: `__Host-averages_session=${token}` } }),
     { SESSION_SECRET: SECRET, CANVA_CLIENT_ID: "OC-x", CANVA_CLIENT_SECRET: "y", CANVA_REDIRECT_URI: "https://api.averages.io/canva/callback", ...env } as any,
     { waitUntil() {}, passThroughOnException() {} } as any
   );

@@ -13,7 +13,7 @@ import {
   sealSession,
   sealValue,
   SESSION_COOKIE,
-  LEGACY_SESSION_COOKIE,
+  OLD_SESSION_COOKIES,
 } from "../src/session.ts";
 
 let passed = 0;
@@ -211,26 +211,24 @@ console.log("\nthe reviewer account");
   check("still nothing left the Worker for the reviewer", calls, []);
 }
 
-console.log("\nthe cookie rename: schoolagy_session -> averages_session");
+console.log("\nthe __Host- session cookie (2026-11-23): old names signed out");
 {
-  check("the cookie is called averages_session", SESSION_COOKIE, "averages_session");
+  check("the cookie is called __Host-averages_session", SESSION_COOKIE, "__Host-averages_session");
   const { res } = await call("/auth/session", { json: { key: REVIEW_KEY, secret: REVIEW_SECRET } });
   const sets = setCookies(res);
   const token = cookieValue(res, SESSION_COOKIE) ?? "";
-  check("signing in sets averages_session", token.length > 20, true);
-  check("and clears any old schoolagy_session", sets.some(x => x.startsWith(`${LEGACY_SESSION_COOKIE}=;`) && x.includes("Max-Age=0")), true);
-  const old = await call("/auth/me", { cookie: `${LEGACY_SESSION_COOKIE}=${token}` });
-  check("an old schoolagy_session still signs you in", [old.res.status, old.data.name], [200, "Alex Rivera"]);
-  check("and is moved to averages_session (same session)", cookieValue(old.res, SESSION_COOKIE), token);
-  check("and the old cookie is cleared", setCookies(old.res).some(x => x.startsWith(`${LEGACY_SESSION_COOKIE}=;`) && x.includes("Max-Age=0")), true);
+  check("signing in sets it, for this host only", [token.length > 20, sets.some(x => x.startsWith(`${SESSION_COOKIE}=`) && !/Domain=/i.test(x))], [true, true]);
+  check("and the front door's hint", sets.some(x => x.startsWith("averages_signed_in=1;")), true);
+  check("and clears both old names", OLD_SESSION_COOKIES.every(n => sets.some(x => x.startsWith(`${n}=;`) && x.includes("Max-Age=0"))), true);
+  const old = await call("/auth/me", { cookie: `averages_session=${token}` });
+  check("a cookie under an old name no longer signs you in", old.res.status, 401);
+  check("and is cleared", setCookies(old.res).some(x => x.startsWith("averages_session=;") && x.includes("Max-Age=0")), true);
   const both = await call("/auth/me", { cookie: `${SESSION_COOKIE}=${token}` });
-  check("the new cookie alone: nothing more to move", setCookies(both.res).filter(x => /_session=/.test(x)).length, 0);
-  const bad = await call("/auth/me", { cookie: `${LEGACY_SESSION_COOKIE}=not-a-real-token` });
-  check("a bad old cookie isn't copied over", [bad.res.status, cookieValue(bad.res, SESSION_COOKIE) || null], [401, null]);
+  check("the new cookie alone: signed in, nothing to clear", [both.res.status, setCookies(both.res).filter(x => /_session=/.test(x)).length], [200, 0]);
   const out = await call("/auth/session", { method: "DELETE", cookie: `${SESSION_COOKIE}=${token}`, origin: "https://app.averages.io" });
   const outSets = setCookies(out.res);
   check("the API tells browsers HTTPS only (HSTS)", both.res.headers.get("Strict-Transport-Security"), "max-age=31536000; includeSubDomains");
-  check("signing out clears both names", [outSets.some(x => x.startsWith(`${SESSION_COOKIE}=;`)), outSets.some(x => x.startsWith(`${LEGACY_SESSION_COOKIE}=;`))], [true, true]);
+  check("signing out clears the cookie, the hint and the old names", [SESSION_COOKIE, "averages_signed_in", ...OLD_SESSION_COOKIES].every(n => outSets.some(x => x.startsWith(`${n}=;`))), true);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

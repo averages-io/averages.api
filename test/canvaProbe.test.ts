@@ -93,7 +93,7 @@ const BASE_ENV = {
 
 async function probe(opts: { env?: Record<string, unknown>; body?: unknown; cookie?: boolean; origin?: string; contentType?: string; uid?: string } = {}) {
   const headers: Record<string, string> = {};
-  if (opts.cookie !== false) headers.Cookie = `schoolagy_session=${await session(opts.uid)}`;
+  if (opts.cookie !== false) headers.Cookie = `__Host-averages_session=${await session(opts.uid)}`;
   if (opts.body !== undefined) headers["Content-Type"] = opts.contentType ?? "application/json";
   if (opts.origin) headers.Origin = opts.origin;
   const env = { ...BASE_ENV, CANVA: fakeCanva({ ...BASE_ENV }), CANVA_PERMISSION_PROBE: "1", SCHOOLS_ADMIN_KEY: ADMIN_KEY, ...opts.env };
@@ -173,7 +173,7 @@ check("5th run in a row still runs", [r.status, r.json.ok], [200, true]);
 console.log("connect scopes");
 async function connectScopes(query: string, env: Record<string, unknown>): Promise<string[]> {
   const res = await app.fetch(
-    new Request(`https://api.averages.io/canva/connect${query}`, { headers: { Cookie: `schoolagy_session=${await session("connect-" + query)}` } }),
+    new Request(`https://api.averages.io/canva/connect${query}`, { headers: { Cookie: `__Host-averages_session=${await session("connect-" + query)}` } }),
     { ...BASE_ENV, CANVA: fakeCanva({ ...BASE_ENV, ...env }), ...env } as any,
     { waitUntil() {}, passThroughOnException() {} } as any,
   );

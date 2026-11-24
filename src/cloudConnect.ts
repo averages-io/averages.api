@@ -45,6 +45,7 @@ export interface CloudConnectEnv {
   MS_CLIENT_SECRET?: string;
   /** Seals the stored tokens (see sealConnection). */
   SESSION_SECRET?: string;
+  SESSION_SECRET_PREVIOUS?: string;
 }
 
 /* ── which OAuth client ────────────────────────────────────────────── */
@@ -435,9 +436,10 @@ export class CloudAccount {
 
   async load(uid: string, app: CloudApp): Promise<Connection | null> {
     const sealed = await this.storage.get<string>(connKey(app));
-    const secret = secretOf(this.env.SESSION_SECRET);
+    const secret = secretOf(this.env.SESSION_SECRET), previous = secretOf(this.env.SESSION_SECRET_PREVIOUS);
     if (typeof sealed !== "string" || !secret) return null;
-    return openConnection(sealed, uid, app, secret);
+    // sealed before SESSION_SECRET changed: the previous one still opens it (2026-11-23)
+    return (await openConnection(sealed, uid, app, secret)) ?? (previous ? await openConnection(sealed, uid, app, previous) : null);
   }
 
   async save(uid: string, app: CloudApp, conn: Connection): Promise<void> {

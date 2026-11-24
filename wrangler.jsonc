@@ -37,7 +37,9 @@
       // Calendar sync, an Averages Plus perk (src/calendar.ts, 2026-10-21): one per student link and one per feed, US jurisdiction.
       { "name": "CALENDAR", "class_name": "CalendarStore" },
       // The automatic outage check (src/health.ts, 2026-11-10): one record for the whole app, US jurisdiction.
-      { "name": "HEALTH", "class_name": "HealthStore" }
+      { "name": "HEALTH", "class_name": "HealthStore" },
+      // "Sign out everywhere" (src/sessionGuard.ts, 2026-11-23): one tiny store per student, US jurisdiction.
+      { "name": "SESSIONS", "class_name": "SessionGuard" }
     ]
   },
   // Workers AI (2026-11-15): Advanced translation's server fallback, a Plus perk (src/translate.ts).
@@ -97,7 +99,8 @@
     { "tag": "v8", "new_sqlite_classes": ["BillingStore"] },
     { "tag": "v9", "new_sqlite_classes": ["CalendarStore"] },
     { "tag": "v10", "deleted_classes": ["Converter"] },
-    { "tag": "v11", "new_sqlite_classes": ["HealthStore"] }
+    { "tag": "v11", "new_sqlite_classes": ["HealthStore"] },
+    { "tag": "v12", "new_sqlite_classes": ["SessionGuard"] }
   ],
   // Every 15 minutes: the automatic outage check (src/health.ts). Martin, 2026-11-10: "auto refresh on the server every 15 min".
   "triggers": { "crons": ["*/15 * * * *"] }

@@ -10,6 +10,8 @@
 
 import {
   clearSessionCookie,
+  clearSessionCookies,
+  sessionCookies,
   DEMO_UID,
   isDemoSession,
   isIncognitoSession,
@@ -126,13 +128,12 @@ Date.now = demoNow;
  * what a browser would send back -> readCookie -> openSession.
  */
 const setCookieHeader = sessionCookie(
-  await sealSession({ key: "", secret: "", uid: DEMO_UID }, SECRET),
-  ".schoolagy.io"
+  await sealSession({ key: "", secret: "", uid: DEMO_UID }, SECRET)
 );
 // A browser echoes only the name=value pair, not the attributes.
 const sentBack = setCookieHeader.split(";")[0];
 const roundTripped = await openSession(
-  readCookie(sentBack, "averages_session") ?? "",
+  readCookie(sentBack, "__Host-averages_session") ?? "",
   SECRET
 );
 checkTrue("demo sign-in survives the full cookie round trip", roundTripped !== null);
@@ -146,12 +147,15 @@ const t2 = await sealSession(CREDS, SECRET);
 checkTrue("each seal produces a distinct token", t1 !== t2);
 
 console.log("\ncookie shape");
-const cookie = sessionCookie("abc.def", ".schoolagy.io");
+const cookie = sessionCookie("abc.def");
 checkTrue("HttpOnly (JS cannot read the credentials)", cookie.includes("HttpOnly"));
 checkTrue("Secure (HTTPS only)", cookie.includes("Secure"));
 checkTrue("SameSite set", cookie.includes("SameSite=Lax"));
-checkTrue("scoped to the domain", cookie.includes("Domain=.schoolagy.io"));
-checkTrue("clearing sets Max-Age=0", clearSessionCookie(".schoolagy.io").includes("Max-Age=0"));
+checkTrue("__Host- cookie (2026-11-23): this host only, no Domain, Path=/", cookie.startsWith("__Host-averages_session=abc.def;") && !/Domain=/i.test(cookie) && cookie.includes("Path=/"));
+checkTrue("clearing sets Max-Age=0, also without a Domain", clearSessionCookie(".averages.io").includes("Max-Age=0") && !clearSessionCookie(".averages.io").includes("Domain="));
+const all = sessionCookies("abc.def", ".averages.io");
+checkTrue("a new session also sets the front door's hint (no token in it) and clears the old names", all[1].startsWith("averages_signed_in=1;") && all[1].includes("Domain=.averages.io") && all.slice(2).every((c) => /^(averages|schoolagy)_session=;.*Domain=\.averages\.io.*Max-Age=0/.test(c)));
+checkTrue("ending one clears all four", clearSessionCookies(".averages.io").length === 4 && clearSessionCookies(".averages.io").every((c) => c.includes("Max-Age=0")));
 
 console.log("\ncookie parsing");
 check(
@@ -183,7 +187,7 @@ console.log("\nsign-ins last 15 days (2026-10-30, was 30)");
   check("the lifetime is 15 days", SESSION_TTL_SECONDS, 15 * DAY);
   const fresh = await openSession(await sealSession(CREDS, SECRET), SECRET);
   checkTrue("a new session ends 15 days from now", !!fresh && Math.abs(fresh.exp - (now + 15 * DAY)) <= 2);
-  checkTrue("the cookie is kept 15 days too", /Max-Age=1296000(;|$)/.test(sessionCookie("t", ".averages.io")));
+  checkTrue("the cookie is kept 15 days too", /Max-Age=1296000(;|$)/.test(sessionCookie("t")));
   // A cookie sealed before the change: 30 days, and no version stamp.
   const sealOld = async (exp: number) => {
     const iv = crypto.getRandomValues(new Uint8Array(12));

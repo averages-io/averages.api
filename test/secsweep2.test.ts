@@ -64,8 +64,9 @@ console.log("\n1. every POST / PUT / DELETE refuses another site, with a real se
 {
   const cookie = await cookieFor("777");
   // On purpose: sign-out works from anywhere (it only ends your own session); Stripe's webhook is server to server
-  // (its signature is the check); the Canva probe exists only while testing locally (404 everywhere else).
-  const ALLOWED = new Set(["DELETE /auth/session", "POST /stripe/webhook", "POST /canva/probe"]);
+  // (its signature is the check); the Canva probe exists only while testing locally (404 everywhere else); CSP reports
+  // come from browsers with no session and change nothing (they're only logged).
+  const ALLOWED = new Set(["DELETE /auth/session", "POST /stripe/webhook", "POST /canva/probe", "POST /csp-report"]);
   const open: string[] = [];
   for (const [m, p] of routes) {
     if (m === "GET" || ALLOWED.has(`${m} ${p}`)) continue;
@@ -80,7 +81,7 @@ console.log("\n1. every POST / PUT / DELETE refuses another site, with a real se
 console.log("\n2. every signed-in route counts against a rate limit");
 {
   // Public or server-to-server: the health page, public config, the sign-in page's own status, sign-out, Stripe.
-  const PUBLIC = new Set(["GET /", "GET /status", "GET /config/schools", "GET /config/cloud", "GET /config/features", "GET /push/config", "GET /auth/schoology/status", "GET /auth/schoology/sandbox-authorize", "DELETE /auth/session", "POST /stripe/webhook"]);
+  const PUBLIC = new Set(["GET /", "GET /status", "GET /config/schools", "GET /config/cloud", "GET /config/features", "GET /push/config", "GET /auth/schoology/status", "GET /auth/schoology/sandbox-authorize", "DELETE /auth/session", "POST /stripe/webhook", "GET /.well-known/security.txt"]);
   const none = routes.filter(([m, p]) => !ruleFor(m, fill(p)) && !PUBLIC.has(`${m} ${p}`)).map(([m, p]) => `${m} ${p}`);
   ok("none left out", none.length === 0, none.join(", "));
   ok("the ones that call other services have their own: links, Stripe's suggested email, the DNS email check", [ruleFor("GET", "/links/preview")?.name, ruleFor("GET", "/links/image")?.name, ruleFor("GET", "/email/suggested")?.name, ruleFor("POST", "/email/check")?.name].join() === "links,links,billing,data");
@@ -117,7 +118,29 @@ console.log("\n4. classmate photos: the address only works for whom it was made"
   ok("no session: 401", (await call("GET", "/media/peer/2002?v=e1&e=1&s=1", { origin: APP })).status === 401);
 }
 
-console.log("\n5. nothing above reached the network");
+console.log("\n5. CSP reports and security.txt (2026-11-23)");
+{
+  const logs: string[] = [];
+  const real = console.log;
+  console.log = (...a: any[]) => { logs.push(a.join(" ")); };
+  const report = (body: string, ct = "application/csp-report") => app.fetch(new Request("https://api.averages.io/csp-report", { method: "POST", headers: { "Content-Type": ct, Origin: APP }, body }), ENV, CTX);
+  const r1 = await report(JSON.stringify({ "csp-report": { "document-uri": "https://app.averages.io/IS/grades?course=123&token=secret", "violated-directive": "script-src-elem", "effective-directive": "script-src-elem", "blocked-uri": "https://evil.example/x.js?steal=1", "script-sample": "student grades 98%" } }));
+  const r2 = await report(JSON.stringify([{ type: "csp-violation", body: { documentURL: "https://app.averages.io/home", effectiveDirective: "connect-src", blockedURL: "https://tracker.example/p?id=7" } }, { type: "deprecation", body: { message: "x" } }]), "application/reports+json");
+  const r3 = await report("not json");
+  const r4 = await report("x".repeat(20000));
+  console.log = real;
+  const lines = logs.filter((l) => l.includes("csp_report"));
+  ok("always 204, whatever comes", [r1.status, r2.status, r3.status, r4.status].join() === "204,204,204,204");
+  ok("both report formats logged, one line each (the deprecation report skipped)", lines.length === 2, lines.join(" | "));
+  ok("only the site and path: no query, no script sample", !lines.some((l) => /steal|token|secret|course=|98%|id=7/.test(l)) && lines[0].includes("https://evil.example/x.js") && lines[0].includes("https://app.averages.io/IS/grades"));
+  ok("a burst is capped: 30 a minute per address", ruleFor("POST", "/csp-report")?.limit === 30 && ruleFor("POST", "/csp-report")?.by === "ip");
+  const t = await app.fetch(new Request("https://api.averages.io/.well-known/security.txt"), ENV, CTX);
+  const txt = await t.text();
+  ok("security.txt: contact, a future Expires, canonical", t.status === 200 && /^Contact: mailto:help@averages\.io$/m.test(txt) && new Date(/^Expires: (.+)$/m.exec(txt)![1]).getTime() > Date.now() && /^Canonical: https:\/\/api\.averages\.io\/\.well-known\/security\.txt$/m.test(txt));
+  ok("sign out everywhere is limited like sending", ruleFor("POST", "/auth/signout-everywhere")?.name === "send");
+}
+
+console.log("\n6. nothing above reached the network");
 ok("no outside calls", outside === 0, String(outside));
 
 console.log(`\n${passed} passed, ${failed} failed`);

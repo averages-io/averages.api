@@ -22,7 +22,10 @@ import {
   sessionCookie,
   sessionToken,
   SESSION_COOKIE,
-  LEGACY_SESSION_COOKIE,
+  OLD_SESSION_COOKIES,
+  resealSession,
+  sessionCookies,
+  clearSessionCookies,
   type SessionData,
 } from "./session.ts";
 import {
@@ -162,6 +165,7 @@ import {
 import { findMessageFile, getRecipients, getThread, namesFrom } from "./messages.ts";
 import { getFolder, getSectionGrades, parseFolder, schoologyCourses } from "./extras.ts";
 import { dataExtrasRoutes, messagesRoutes } from "./extrasRoutes.ts";
+import { endAllSessions, sessionEnded, type GuardLike } from "./sessionGuard.ts";
 import { addressProblem, cleanEmail, codeHash, codeMessage, DEFAULT_EMAIL_FROM, EMAIL_CODE_PURPOSE, EMAIL_CODE_TTL, newCode, sameHash, sendFailure, type SendEmailBinding } from "./emailCode.ts";
 import { getLinkImage, getLinkPreview, parseTarget } from "./linkPreview.ts";
 import { rateLimit } from "./rateLimit.ts";
@@ -207,10 +211,20 @@ export { BillingStore } from "./billingStore.ts";
 export { PushStore } from "./pushStore.ts";
 export { CalendarStore } from "./calendar.ts";
 export { HealthStore } from "./healthStore.ts";
+export { SessionGuard } from "./sessionGuard.ts";
 
 type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
   SESSION_SECRET: string;
+  /**
+   * The secret before the last change (2026-11-23): sessions sealed with it still open, and are sealed again with
+   * SESSION_SECRET on their next request, so changing the secret doesn't sign everyone out. Canva / Google Drive /
+   * OneDrive sign-ins stored with it still open too. Remove it once 15 days have passed.
+   *   npx wrangler secret put SESSION_SECRET_PREVIOUS   (the old value)   then   npx wrangler secret put SESSION_SECRET
+   */
+  SESSION_SECRET_PREVIOUS?: string;
+  /** "Sign out everywhere" (src/sessionGuard.ts): one tiny store per student. */
+  SESSIONS?: DurableObjectNamespace;
   /** The sign-in page's invisible Turnstile widget (src/turnstile.ts): public site key (a var) and its secret. Both or neither. */
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET?: string;
@@ -370,15 +384,34 @@ app.use("*", async (c, next) => {
 });
 
 const openedSessions = new WeakMap<Request, Promise<SessionData | null>>();
+/** Sessions this request opened with SESSION_SECRET_PREVIOUS: sealed again with the current secret on the way out. */
+const reseal = new WeakMap<Request, SessionData>();
 function openedSession(c: any): Promise<SessionData | null> {
   const raw: Request = c.req.raw;
   let opened = openedSessions.get(raw);
   if (!opened) {
     const token = sessionToken(c.req.header("Cookie") ?? null);
-    opened = token && c.env.SESSION_SECRET ? openSession(token, c.env.SESSION_SECRET) : Promise.resolve(null);
+    opened = token && c.env.SESSION_SECRET ? openGuarded(c, token, raw) : Promise.resolve(null);
     openedSessions.set(raw, opened);
   }
   return opened;
+}
+function guardFor(env: Bindings, uid: string, requestUrl: string): GuardLike {
+  const ns = isLocalRequest(requestUrl) ? env.SESSIONS! : env.SESSIONS!.jurisdiction("us" as DurableObjectJurisdiction);
+  return ns.get(ns.idFromName(uid)) as unknown as GuardLike;
+}
+async function openGuarded(c: any, token: string, raw: Request): Promise<SessionData | null> {
+  let session = await openSession(token, c.env.SESSION_SECRET);
+  const previous = c.env.SESSION_SECRET_PREVIOUS;
+  if (!session && previous && previous !== c.env.SESSION_SECRET) {
+    session = await openSession(token, previous);
+    if (session) reseal.set(raw, session);
+  }
+  // signed out everywhere since this sign-in (demo and the reviewer are shared, so never)
+  if (session && c.env.SESSIONS && !isDemo(session) && !String(session.uid).startsWith("r:")) {
+    if (await sessionEnded(session, () => guardFor(c.env, session!.uid, c.req.url))) return null;
+  }
+  return session;
 }
 
 app.use("*", async (c, next) => {
@@ -391,16 +424,24 @@ app.use("*", rateLimit({ studentOf: async (c) => (await openedSession(c))?.uid ?
 
 app.use("*", async (c, next) => {
   await next();
+  // Opened with the previous secret: the same session (same end), sealed with the current one.
+  const moved = reseal.get(c.req.raw);
+  if (moved && !(c.res.headers.get("Set-Cookie") ?? "").includes(`${SESSION_COOKIE}=`)) {
+    try { c.res.headers.append("Set-Cookie", sessionCookie(await resealSession(moved, c.env.SESSION_SECRET))); } catch { /* next request */ }
+  }
+});
+
+app.use("*", async (c, next) => {
+  await next();
+  // A session cookie under an old name (before 2026-11-23's __Host- cookie): never read, just cleared, so it stops
+  // being sent. Martin: fine to sign everyone out for it.
   const header = c.req.header("Cookie") ?? null;
-  if (readCookie(header, SESSION_COOKIE) || !readCookie(header, LEGACY_SESSION_COOKIE)) return;
-  if (/(^|,\s*)(averages|schoolagy)_session=/.test(c.res.headers.get("Set-Cookie") ?? "")) return;
-  const token = readCookie(header, LEGACY_SESSION_COOKIE);
-  if (!token || !(await openedSession(c))) return;
+  if (!OLD_SESSION_COOKIES.some((name) => readCookie(header, name) !== null)) return;
+  if ((c.res.headers.get("Set-Cookie") ?? "").includes(`${SESSION_COOKIE}=`)) return;
   try {
-    c.res.headers.append("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
-    c.res.headers.append("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE));
+    for (const name of OLD_SESSION_COOKIES) c.res.headers.append("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, name));
   } catch {
-    // a response whose headers can't change (passed straight through): it moves on the next request
+    // a response whose headers can't change (passed straight through): cleared on the next request
   }
 });
 
@@ -426,6 +467,15 @@ app.use("*", async (c, next) => {
   return c.json({ error: "feature_off", feature: off }, 503);
 });
 
+/** A new session on this browser: the __Host- token, the front door's hint, and any old-name cookie gone. */
+function setSession(c: any, token: string): void {
+  for (const h of sessionCookies(token, COOKIE_DOMAIN)) c.header("Set-Cookie", h, { append: true });
+}
+/** The session ended here: every cookie that could carry it, and the hint. */
+function endSession(c: any): void {
+  for (const h of clearSessionCookies(COOKIE_DOMAIN)) c.header("Set-Cookie", h, { append: true });
+}
+
 /** Resolves the session cookie, or 401s. */
 async function requireSession(c: any, next: any) {
   const token = sessionToken(c.req.header("Cookie") ?? null);
@@ -435,8 +485,7 @@ async function requireSession(c: any, next: any) {
   const session = await openedSession(c);
   if (!session) {
     // Expired or tampered — clear it so the browser stops sending a dead cookie.
-    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
-    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
+    endSession(c);
     return c.json({ error: "session_expired" }, 401);
   }
   c.set("session", session);
@@ -588,8 +637,7 @@ app.post("/auth/session", async (c) => {
   if (reviewer) {
     const me = await getMe({ key: SANDBOX_KEY, secret: SANDBOX_SECRET });
     const token = await sealSession({ key: SANDBOX_KEY, secret: SANDBOX_SECRET, uid: REVIEW_UID, p: profileFrom(me) }, c.env.SESSION_SECRET);
-    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
-    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
+    setSession(c, token);
     return c.json({
       ok: true,
       user: { uid: REVIEW_UID, name: me.name_display ?? "Reviewer", firstName: me.name_first ?? "", email: me.primary_email ?? "", pictureUrl: "" },
@@ -614,8 +662,7 @@ app.post("/auth/session", async (c) => {
       { key: "", secret: "", uid: DEMO_UID },
       c.env.SESSION_SECRET
     );
-    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
-    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
+    setSession(c, token);
     return c.json({
       ok: true,
       demo: true,
@@ -637,8 +684,7 @@ app.post("/auth/session", async (c) => {
     // The name rides along in the sealed cookie so /auth/me never has to ask Schoology for it.
     const p = profileFrom(me);
     const token = await sealSession(under13 ? { key, secret, uid, inc: true, p } : { key, secret, uid, p }, c.env.SESSION_SECRET);
-    c.header("Set-Cookie", sessionCookie(token, COOKIE_DOMAIN));
-    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
+    setSession(c, token);
 
     return c.json({
       ok: true,
@@ -681,8 +727,7 @@ app.delete("/auth/session", async (c) => {
   if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetPush(c.env, session.uid, c.req.url));
   if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetCalendar(c.env as any, session.uid, c.req.url));
   if (forget && session && !isDemo(session)) c.executionCtx.waitUntil(forgetConnections(c.env, session.uid, c.req.url));
-  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
-  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
+  endSession(c);
   // A Google sign-in's refreshed access token, if any (see googleAccess).
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
   // An older Schoology session's name (see /auth/me).
@@ -690,6 +735,74 @@ app.delete("/auth/session", async (c) => {
   clearCfClearance(c);
   return c.json({ ok: true });
 });
+
+/**
+ * Sign out everywhere (2026-11-23): every sign-in of this student up to now ends, on every device, this one included
+ * (within a minute everywhere; at once here). For a copied cookie, a lost phone, a school computer left signed in.
+ */
+app.post("/auth/signout-everywhere", requireSession, async (c) => {
+  const foreign = notFromOurApp(c);
+  if (foreign) return foreign;
+  c.header("Cache-Control", "no-store");
+  const session = c.get("session");
+  if (isDemo(session) || String(session.uid).startsWith("r:")) return c.json({ error: "not_available_in_demo" }, 403);
+  if (!c.env.SESSIONS) return c.json({ error: "not_configured" }, 503);
+  try {
+    await endAllSessions(session.uid, guardFor(c.env, session.uid, c.req.url));
+  } catch (err) {
+    console.error("signout_everywhere_failed", err);
+    return c.json({ error: "unavailable" }, 503);
+  }
+  endSession(c);
+  return c.json({ ok: true });
+});
+
+/**
+ * Where browsers send what the app's Content-Security-Policy-Report-Only header would have blocked (2026-11-23,
+ * public/_headers in averages.io). Logged as one short line each (wrangler tail / Workers Logs), so the policy can be
+ * made to enforce once nothing real shows up. Only the address's site and path are kept: never its query, never a
+ * script sample, never anything else the report carries. No cookies, no session; always 204.
+ */
+app.post("/csp-report", async (c) => {
+  c.header("Cache-Control", "no-store");
+  if (Number(c.req.header("Content-Length") ?? "0") > 16384) return c.body(null, 204);
+  let text = "";
+  try { text = (await c.req.text()).slice(0, 16384); } catch { return c.body(null, 204); }
+  let items: any[] = [];
+  try {
+    const j = JSON.parse(text);
+    // report-uri: { "csp-report": {...} }; report-to (Reporting API): [{ type, body: {...} }]
+    items = Array.isArray(j) ? j.filter((r) => r && r.type === "csp-violation").map((r) => r.body) : j && typeof j["csp-report"] === "object" ? [j["csp-report"]] : [];
+  } catch { /* not JSON */ }
+  const where = (u: unknown) => {
+    const t = String(u ?? "");
+    try {
+      const x = new URL(t);
+      return /^https?:$/.test(x.protocol) ? x.origin + x.pathname.slice(0, 80) : x.protocol;
+    } catch {
+      return /^[a-z-]{1,20}$/.test(t) ? t : "";   // "inline", "eval", "self", "data", "blob"
+    }
+  };
+  for (const r of items.slice(0, 10)) {
+    if (!r || typeof r !== "object") continue;
+    const directive = String(r.effectiveDirective ?? r["effective-directive"] ?? r.violatedDirective ?? r["violated-directive"] ?? "").split(" ")[0].slice(0, 40);
+    console.log(JSON.stringify({ event: "csp_report", directive, blocked: where(r.blockedURL ?? r["blocked-uri"]), page: where(r.documentURL ?? r["document-uri"]) }));
+  }
+  return c.body(null, 204);
+});
+
+/** RFC 9116: where to report a security problem (2026-11-23). The same file is on app.averages.io and averages.io. */
+app.get("/.well-known/security.txt", (c) => {
+  c.header("Content-Type", "text/plain; charset=utf-8");
+  c.header("Cache-Control", "public, max-age=86400");
+  return c.body(SECURITY_TXT("https://api.averages.io"));
+});
+export const SECURITY_TXT = (origin: string) => `Contact: mailto:help@averages.io
+Expires: 2027-11-23T00:00:00.000Z
+Preferred-Languages: en
+Canonical: ${origin}/.well-known/security.txt
+Policy: https://averages.io/privacy-policy
+`;
 
 /** Is Sign in with Schoology ready? The sign-in page asks before showing it. */
 app.get("/auth/schoology/status", (c) => {
@@ -786,8 +899,7 @@ app.get("/auth/schoology/callback", async (c) => {
     const p = profileFrom(me);
     // The access token rides in the sealed session cookie, like a personal key does: never stored on our servers.
     const session = await sealSession({ ...creds, uid, p, sd: pending.d, ...(pending.u13 ? { inc: true as const } : {}) }, c.env.SESSION_SECRET);
-    c.header("Set-Cookie", sessionCookie(session, COOKIE_DOMAIN), { append: true });
-    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
+    setSession(c, session);
     console.log(JSON.stringify({ event: "schoology_signin_ok" }));
     return c.redirect(`${appOrigin(c.req.url)}/?signin=schoology#schoology`, 302);
   } catch (error) {
@@ -825,8 +937,7 @@ async function googleAccess(c: any, session: SessionData): Promise<string> {
 
 /** Schoology refused the student's own sign-in (401): the session ends, like a Classroom one does below. */
 function schoologySignedOut(c: any) {
-  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN), { append: true });
-  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true });
+  endSession(c);
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
   return c.json({ error: "session_expired" }, 401);
 }
@@ -842,8 +953,7 @@ function classroomFailure(c: any, error: unknown) {
     (error instanceof GoogleError && error.code === "google_invalid_grant") ||
     (error instanceof ClassroomError && error.status === 401);
   if (signedOut) {
-    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN), { append: true });
-    c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
+    endSession(c);
     c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
     return c.json({ error: "session_expired" }, 401);
   }
@@ -1143,8 +1253,7 @@ app.delete("/account", requireSession, async (c) => {
   const failed = results.filter((r) => r.status === "rejected").length;
   for (const r of results) if (r.status === "rejected") console.error("account_delete_failed", r.reason);
   if (failed) return c.json({ error: "delete_incomplete", failed }, 502);
-  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN));
-  c.header("Set-Cookie", clearSessionCookie(COOKIE_DOMAIN, LEGACY_SESSION_COOKIE), { append: true }); // the old name goes too
+  endSession(c);
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
   c.header("Set-Cookie", clearProfileCookie(!isLocalRequest(c.req.url)), { append: true });
   clearCfClearance(c);

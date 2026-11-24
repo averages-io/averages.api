@@ -57,6 +57,7 @@ export interface CanvaConfig {
   CANVA_REDIRECT_URI?: string;
   /** Also seals the stored Canva tokens (see sealTokens). */
   SESSION_SECRET?: string;
+  SESSION_SECRET_PREVIOUS?: string;
   /** "1" once design:content:read is enabled in Canva's Developer Portal (see canvaScopes). */
   CANVA_EXPORT_ENABLED?: string;
   /** "1" once folder:read and folder:write are enabled there (see canvaScopes). */
@@ -444,7 +445,8 @@ export class CanvaAccount {
   async loadTokens(uid: string): Promise<CanvaTokens | null> {
     const sealed = await this.storage.get<string>("tokens");
     if (!sealed || !this.env.SESSION_SECRET) return null;
-    return openTokens(sealed, uid, this.env.SESSION_SECRET);
+    // sealed before SESSION_SECRET changed: still opens with the previous one (2026-11-23), and is sealed again on its next refresh
+    return (await openTokens(sealed, uid, this.env.SESSION_SECRET)) ?? (this.env.SESSION_SECRET_PREVIOUS ? await openTokens(sealed, uid, this.env.SESSION_SECRET_PREVIOUS) : null);
   }
 
   /** A valid access token, refreshing it first if it's about to expire. */

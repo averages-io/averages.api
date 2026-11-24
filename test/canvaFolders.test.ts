@@ -66,7 +66,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
 async function call(path: string, opts: { method?: string; body?: unknown; env?: Record<string, unknown>; state?: any; origin?: string; contentType?: string } = {}) {
   const token = await sealSession({ uid: "123", key: "k", secret: "s", exp: Math.floor(Date.now() / 1000) + 3600 } as any, SECRET);
   const state = opts.state ?? { connected: true, scopes: NEW, asked: [] };
-  const headers: Record<string, string> = { Cookie: `schoolagy_session=${token}` };
+  const headers: Record<string, string> = { Cookie: `__Host-averages_session=${token}` };
   if (opts.body !== undefined) headers["Content-Type"] = opts.contentType ?? "application/json";
   if (opts.origin) headers.Origin = opts.origin;
   const res = await app.fetch(
