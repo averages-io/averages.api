@@ -341,5 +341,23 @@ check("Schoology's dropbox_<uid>_r<n>.html is a written answer", [shownSubmissio
   check("...and shows that way in the history", h[0].files[0].name, "Written answer.html");
 }
 
+console.log("\nGET /data/submissions?for=: each one's newest turn-in and Schoology's late mark (2026-11-26)");
+resetWorld();
+{
+  world.histories["102/702"] = { revision: [
+    // a typed answer, no files: still turned in, and late
+    { revision_id: 91, uid: ME, created: unix(NOW - 2 * DAY), late: 1, draft: 0, body: "<p>My answer</p>" },
+    { revision_id: 92, uid: ME, created: unix(NOW - DAY), late: 0, draft: 1, body: "<p>a draft</p>" },
+  ] };
+  fresh();
+  const { data } = await call("/data/submissions?for=101:601,102:701,102:702,101:605,103:999", student);
+  const by = (k: string) => data.turnins.find((x: any) => `${x.course}:${x.assignment}` === k);
+  check("on time: its newest real turn-in (not the draft, not a classmate's)", by("101:601"), { course: "101", assignment: "601", at: Math.floor((NOW - DAY) / 1000) * 1000, late: false });
+  check("late, with files", by("102:701")?.late, true);
+  check("late, typed (no files), the draft after it doesn't count", [by("102:702")?.late, by("102:702")?.at], [true, Math.floor((NOW - 2 * DAY) / 1000) * 1000]);
+  check("nothing turned in (404) or not readable (500): not listed; the 500 makes it partial", [!!by("103:999"), !!by("101:605"), data.partial], [false, false, true]);
+  check("files are still listed as before", data.files.some((f: any) => f.id === "905"), true);
+}
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);

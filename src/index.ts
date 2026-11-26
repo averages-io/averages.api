@@ -186,6 +186,7 @@ import { forgetPush, pushRoutes } from "./push.ts";
 import { submitRoutes } from "./submitRoutes.ts";
 import { addSharedPhotos, deleteAllMedia, mediaRoutes, syncShareSections, type MediaBucket } from "./media.ts";
 import {
+  adaptHistory,
   findSubmittedFile,
   getHistory,
   MAX_SUBMISSION_ASSIGNMENTS,
@@ -1837,10 +1838,16 @@ app.get("/data/submissions", async (c) => {
       } catch { /* not readable: left as it was */ }
     });
     const found: SubmittedFile[] = [];
+    // each one's newest turn-in, files or not: when, and whether Schoology marked it late (2026-11-26, Martin: "what
+    // assignments were turned in late" found none: graded work was never asked about, and text answers have no files)
+    const turnins: { course: string; assignment: string; at: number; late: boolean }[] = [];
     let partial = false;
     await eachAtMost(pairs, 5, async ([course, id]) => {
       try {
-        found.push(...submittedFiles(await getHistory(session, course, id, session.uid), session.uid, { course, id, title: "" }));
+        const history = await getHistory(session, course, id, session.uid);
+        found.push(...submittedFiles(history, session.uid, { course, id, title: "" }));
+        const newest = adaptHistory(history, session.uid, "UTC").find((r) => !r.draft);
+        if (newest) turnins.push({ course, assignment: id, at: newest.created, late: newest.late });
       } catch (error) {
         if (error instanceof SchoologyError && error.status === 404) return;
         partial = true;
@@ -1848,7 +1855,7 @@ app.get("/data/submissions", async (c) => {
     });
     await postedP;
     const { files, cut } = newestSubmittedFiles(found);
-    return c.json({ platform: "schoology", courses: [], files, posted, partial: partial || cut });
+    return c.json({ platform: "schoology", courses: [], files, posted, turnins, partial: partial || cut });
   }
   try {
     const { COURSES } = adaptCourses(await getSections(session.uid, session), []);
