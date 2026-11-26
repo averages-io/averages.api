@@ -323,7 +323,9 @@ export function adaptConversations(input: {
     if (inInbox && String(row?.message_status ?? "").toLowerCase() === "unread") entry.conv.unread = true;
     if (at > entry.conv.at) {
       entry.conv.at = at;
-      entry.conv.preview = clip(toPlainText(row?.message ?? ""), 140);
+      // a message that's only a file has no words: say so, not nothing (2026-11-26, Martin: the popup showed an empty message)
+      const files = clip(toPlainText(row?.message ?? ""), 140) ? [] : messageFiles(row);
+      entry.conv.preview = clip(toPlainText(row?.message ?? ""), 140) || (files.length ? clip(`📎 ${files.map((f) => f.name).join(", ")}`, 140) : "");
       entry.conv.time = at ? relativeTime(String(Math.floor(at / 1000)), now) : "";
       entry.latestAuthor = ID_RE.test(author) ? author : entry.latestAuthor;
     }

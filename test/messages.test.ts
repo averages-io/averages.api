@@ -81,6 +81,10 @@ console.log("\nthread list");
     ["91", "5009", "No subject", false, "2d ago"],
   ]);
   check("preview is the newest message, plain text", [CONVERSATIONS[0].preview, CONVERSATIONS[0].at], ["Thank you!", Math.floor((NOW - HOUR) / 1000) * 1000]);
+  {
+    const fileOnly = adaptConversations({ inbox: [{ id: 99, subject: "Worksheet", recipient_ids: "1001", last_updated: unix(NOW), author_id: "5001", message: "", attachments: { files: { file: [{ id: "77", title: "Worksheet.pdf", filename: "Worksheet.pdf", filesize: 10 }] } } }], sent: [], names: new Map(), me: ME, now: NOW });
+    check("a message that's only a file: its preview names the file (2026-11-26)", fileOnly.CONVERSATIONS[0].preview, "📎 Worksheet.pdf");
+  }
   check("participants: everyone but the student; messages load later", [CONVERSATIONS[2].participants, CONVERSATIONS[0].messages], [["5002", "7001", "7002"], []]);
   check("PEOPLE: names from the list, else Teacher (an author) or Classmate", PEOPLE, {
     "5001": { name: "Mr. Cho" },
