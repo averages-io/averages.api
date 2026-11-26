@@ -14,6 +14,12 @@ export const CALENDAR_PURPOSE = "calendar-credential";
 export const CALENDAR_LINK_PURPOSE = "calendar-link";
 /** A link's calendar is read from the school platform at most this often. */
 export const MIN_READ_MS = 10 * 60 * 1000;
+/**
+ * Reads allowed in those 10 minutes (2026-11-26, Martin: "the ical links dont work"). It was 1: opening the link to
+ * check it, then adding it to Google Calendar, got Google a 429 and "couldn't fetch"; Apple Calendar reads twice
+ * when subscribing. A few reads, then 429.
+ */
+export const MAX_READS = 4;
 export const PAST_DAYS = 14;
 export const AHEAD_DAYS = 90;
 export const MAX_SECTIONS = 12;
@@ -153,7 +159,7 @@ function nextDay(day: string): string {
 }
 
 /** The whole .ics text. `notice` adds one all-day event today (sign in again, Plus ended). */
-export function buildIcs(items: DueItem[], opts: { now: number; tz: string; notice?: { title: string; text: string } }): string {
+export function buildIcs(items: DueItem[], opts: { now: number; tz: string; notice?: { title: string; text: string }; added?: AddedDate[] }): string {
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -185,6 +191,11 @@ export function buildIcs(items: DueItem[], opts: { now: number; tz: string; noti
     const summary = it.time ? `${it.title} (due ${it.time})` : `${it.title} (due)`;
     const description = [it.course, it.time ? `Due ${it.time}` : "", `Open in Averages.io: ${it.link}`].filter(Boolean).join("\n");
     event(it.uid, it.day, summary, description, it.link);
+  }
+  // the dates added from the school's calendar: as they are in Averages.io's calendar
+  for (const d of opts.added ?? []) {
+    const note = d.note && !(d.off && d.note === "No school.") ? d.note : "";
+    event(`added-${d.id}@averages.io`, d.day, d.off ? `No school: ${d.title}` : d.title, [d.off ? "No school." : "", note, "Added from your school's calendar in Averages.io."].filter(Boolean).join("\n"));
   }
   lines.push("END:VCALENDAR");
   return lines.map(foldLine).join("\r\n") + "\r\n";
@@ -272,11 +283,37 @@ export interface CalendarDeps {
   plusStoreFor?: PlusStoreFor;
   /** For tests: what the calendar is made of. */
   dueItems?: (session: SessionData, env: CalendarEnv, tz: string, now: number) => Promise<DueItem[]>;
+  /** The school calendar dates the student added in Averages.io (synced with Sync Across Devices), or []. */
+  addedDates?: (env: CalendarEnv, uid: string, requestUrl: string) => Promise<unknown>;
   now?: () => number;
 }
 
+/** A day the student added from their school's calendar (days off, big dates): an all-day event. */
+export interface AddedDate { id: string; title: string; day: string; off: boolean; note: string }
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_MS = 86_400_000;
+/**
+ * The synced list (settings.calendarDates: { id, t, kind, date, desc }) as events: only well-formed ones, from a
+ * month ago to a year and a half ahead, 300 at most (2026-11-26, Martin: "can we sync added events/imported events").
+ */
+export function addedDatesFrom(raw: unknown, now: number): AddedDate[] {
+  if (!Array.isArray(raw)) return [];
+  const from = new Date(now - 31 * DAY_MS).toISOString().slice(0, 10), to = new Date(now + 550 * DAY_MS).toISOString().slice(0, 10);
+  const out: AddedDate[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== "object") continue;
+    const d = x as Record<string, unknown>;
+    const day = typeof d.date === "string" ? d.date : "", id = typeof d.id === "string" ? d.id.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40) : "";
+    const title = typeof d.t === "string" ? d.t.trim().slice(0, 120) : "";
+    if (!DAY_RE.test(day) || !id || !title || day < from || day > to) continue;
+    out.push({ id, title, day, off: d.kind === "off", note: typeof d.desc === "string" ? d.desc.trim().slice(0, 300) : "" });
+    if (out.length >= 300) break;
+  }
+  return out;
+}
+
 interface LinkRecord { sealedToken: string; hash: string; createdAt: number }
-interface FeedRecord { uid: string; cred: { sealed: string; exp: number }; tz: string; createdAt: number; lastReadAt?: number }
+interface FeedRecord { uid: string; cred: { sealed: string; exp: number }; tz: string; createdAt: number; lastReadAt?: number; reads?: number[] }
 
 async function sealCredential(session: SessionData, secret: string): Promise<{ sealed: string; exp: number } | null> {
   const ttl = session.exp - Math.floor(Date.now() / 1000);
@@ -403,7 +440,7 @@ export function calendarRoutes(deps: CalendarDeps) {
       const tz = asked && asked !== feed.tz ? asked : feed.tz;
       const cred = await sealCredential(session, c.env.PUSH_SECRET!);
       const freshCred = !!cred && cred.exp > (feed.cred?.exp ?? 0);
-      if (freshCred || tz !== feed.tz) await feedStore.write({ ...feed, ...(freshCred ? { cred: cred! } : {}), tz, lastReadAt: 0 });
+      if (freshCred || tz !== feed.tz) await feedStore.write({ ...feed, ...(freshCred ? { cred: cred! } : {}), tz, lastReadAt: 0, reads: [] });
       return c.json({ ok: true, on: true });
     } catch (err) {
       console.error("calendar_store_failed", err instanceof Error ? err.message : String(err));
@@ -451,11 +488,13 @@ export function calendarRoutes(deps: CalendarDeps) {
     if (plus === false) {
       return send(buildIcs([], { now: t, tz, notice: { title: "Averages Plus has ended", text: "Calendar sync is part of Averages Plus, so this calendar has stopped updating. Pick Plus in Averages.io Settings > Account to turn it back on, then add the new link." } }));
     }
-    const since = t - (feed.lastReadAt ?? 0);
-    if (since >= 0 && since < MIN_READ_MS) {
+    // a calendar app checking the link is there (HEAD): nothing is read, nothing counted
+    if (c.req.method === "HEAD") return send("");
+    const recent = (Array.isArray(feed.reads) ? feed.reads : feed.lastReadAt ? [feed.lastReadAt] : []).filter((x) => typeof x === "number" && t - x >= 0 && t - x < MIN_READ_MS);
+    if (recent.length >= MAX_READS) {
       return new Response("Asked too often. Try again later.", {
         status: 429,
-        headers: { "Retry-After": String(Math.ceil((MIN_READ_MS - since) / 1000)), "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+        headers: { "Retry-After": String(Math.max(1, Math.ceil((MIN_READ_MS - (t - recent[0])) / 1000))), "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
       });
     }
 
@@ -466,7 +505,7 @@ export function calendarRoutes(deps: CalendarDeps) {
     }
     // Noted before reading, so calendar apps retrying at once don't all reach the school platform.
     try {
-      await feedStore.write({ ...feed, lastReadAt: t });
+      await feedStore.write({ ...feed, lastReadAt: t, reads: [...recent, t].slice(-MAX_READS) });
     } catch {
       return c.text("Try again later", 503);
     }
@@ -476,7 +515,11 @@ export function calendarRoutes(deps: CalendarDeps) {
         : isGoogleSession(session)
           ? await classroomDueItems(session, c.env, tz, t)
           : await schoologyDueItems(session, tz, t);
-      return send(buildIcs(items, { now: t, tz }));
+      let added: AddedDate[] = [];
+      if (deps.addedDates) {
+        try { added = addedDatesFrom(await deps.addedDates(c.env, feed.uid, c.req.url), t); } catch { added = []; }
+      }
+      return send(buildIcs(items, { now: t, tz, added }));
     } catch (err) {
       console.error("calendar_read_failed", err instanceof Error ? err.message : String(err));
       // Calendar apps keep showing what they had; they ask again later.

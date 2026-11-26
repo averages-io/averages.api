@@ -236,5 +236,19 @@ console.log("\nrate limit");
   check("the 21st upload in a minute is refused (429)", last, 429);
 }
 
+console.log("\nsynced settings keep the added calendar dates (2026-11-26)");
+{
+  const put = async (settings: unknown) => json(await call("PUT", "/sync/settings", { cookie: bob, type: "application/json", body: new TextEncoder().encode(JSON.stringify({ settings })) }));
+  const dates = [{ id: "up1", t: "Winter Break", kind: "off", date: "2026-12-21" }];
+  const a = await put({ settingsOptions: { syncAcrossDevices: true }, calendarDates: dates });
+  check("a device with dates: they're saved", a?.settings?.calendarDates, dates);
+  const b = await put({ settingsOptions: { syncAcrossDevices: true, potatoMode: true } });
+  check("a device without the field (new, or an older page): the list is kept", [b?.settings?.calendarDates, b?.settings?.settingsOptions?.potatoMode], [dates, true]);
+  const c = await put({ settingsOptions: {}, calendarDates: [] });
+  check("an empty list (all removed): saved as empty", c?.settings?.calendarDates, []);
+  const d = await put({ settingsOptions: {} });
+  check("and stays empty", d?.settings?.calendarDates, []);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

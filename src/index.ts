@@ -754,6 +754,10 @@ app.post("/auth/signout-everywhere", requireSession, async (c) => {
     console.error("signout_everywhere_failed", err);
     return c.json({ error: "unavailable" }, 503);
   }
+  // what keeps working without a sign-in stops too, as signing out does: notifications on every device, and the
+  // calendar link (it holds a copy of the sign-in)
+  c.executionCtx.waitUntil(forgetPush(c.env, session.uid, c.req.url));
+  c.executionCtx.waitUntil(forgetCalendar(c.env as any, session.uid, c.req.url));
   endSession(c);
   return c.json({ ok: true });
 });
@@ -1107,8 +1111,16 @@ app.put("/sync/settings", requireSession, async (c) => {
   // The seen notifications live beside the settings (sync.ts): a settings save keeps them as they are.
   const kv = syncKV(c.env, session.uid, c.req.url);
   const before = await loadSyncRecord(kv, session.uid);
+  // The school calendar dates the student added (2026-11-26): a device that has never had them (a new one, or a
+  // page that doesn't handle them) sends settings without the field, and that keeps the account's list as it is.
+  // A device that has them sends the field, an empty list included, and that's the list.
+  let settings = body.settings as any;
+  const keptDates = (before.settings as any)?.calendarDates;
+  if (settings && typeof settings === "object" && !Array.isArray(settings) && !("calendarDates" in settings) && keptDates !== undefined) {
+    settings = { ...settings, calendarDates: keptDates };
+  }
   const record = {
-    settings: body.settings,
+    settings,
     seen: before.seen,
     seenAt: before.seenAt,
     updatedAt: now,
@@ -2734,7 +2746,13 @@ app.route("/billing", billingRoutes({ requireSession, fromOurApp: notFromOurApp,
 app.route("/stripe", stripeWebhookRoutes({ storeFor: billingStore, onPlusEnded }) as any);
 
 /** Calendar sync, an Averages Plus perk (src/calendar.ts). */
-app.route("/calendar", calendarRoutes({ requireSession, fromOurApp: notFromOurApp }) as any);
+// the school calendar dates the student added come from their synced settings (Sync Across Devices)
+app.route("/calendar", calendarRoutes({ requireSession, fromOurApp: notFromOurApp, addedDates: async (env: any, uid: string, url: string) => {
+  if (!env.SYNC) return [];
+  const record = await loadSyncRecord(syncKV(env, uid, url), uid);
+  const st = record.settings as { calendarDates?: unknown; settingsOptions?: { syncAcrossDevices?: unknown } } | null;
+  return st && st.settingsOptions?.syncAcrossDevices !== false ? st.calendarDates ?? [] : [];
+} }) as any);
 
 /** Profile photo and background for Sync Across Devices, in R2 (src/media.ts). */
 app.route("/media", mediaRoutes({

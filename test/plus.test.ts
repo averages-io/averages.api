@@ -7,6 +7,7 @@ import { PushStore, PUSH_PURPOSE } from "../src/pushStore.ts";
 import { generateVapidKeys } from "../src/webpush.ts";
 import { forgetPlus, notificationsPlus, plusRequired } from "../src/plus.ts";
 import {
+  addedDatesFrom,
   buildIcs,
   calendarRoutes,
   foldLine,
@@ -237,6 +238,8 @@ const recordFor = (_env: any, name: string): CalendarRecordStore => ({
   remove: async () => { recs.delete(name); },
 });
 let clock = Date.UTC(2026, 9, 21, 12);
+// the school calendar dates the student added (their synced settings' calendarDates)
+let ADDED: unknown = [{ id: "upabc1", t: "Thanksgiving Break", kind: "off", date: "2026-11-26", desc: "No school." }, { id: "upabc2", t: "Back to School Night", kind: "event", date: "2026-10-29", desc: "6 PM, gym" }];
 const calApp = new Hono();
 calApp.route("/calendar", calendarRoutes({
   requireSession,
@@ -244,6 +247,7 @@ calApp.route("/calendar", calendarRoutes({
   storeFor: recordFor,
   plusStoreFor,
   now: () => clock,
+  addedDates: async () => ADDED,
   dueItems: async (session) => {
     calendarReads++;
     return [{ uid: `sgy-${session.uid}@averages.io`, title: "Essay", course: "English", dueMs: clock + 86400000, time: "11:59 PM", day: "2026-10-22", link: "https://app.averages.io/assignment?id=5" }];
@@ -285,11 +289,16 @@ const CAL_ENV = { ...BILLING_ON, FEATURES_ON: "billing" };
   const feed = await call(calApp, "GET", url.pathname, { env: CAL_ENV });
   const ics = await feed.res.text();
   check("the calendar: text/calendar, private, one event", [feed.res.headers.get("Content-Type"), feed.res.headers.get("Cache-Control"), ics.includes("SUMMARY:Essay (due 11:59 PM)")], ["text/calendar; charset=utf-8", "private, max-age=900", true]);
+  const head = await call(calApp, "HEAD", url.pathname, { env: CAL_ENV });
+  check("a calendar app checking the link (HEAD): 200, nothing read or counted", [head.status, head.res.headers.get("Content-Type"), calendarReads], [200, "text/calendar; charset=utf-8", 1]);
+  const rereads: number[] = [];
+  for (let i = 0; i < 3; i++) rereads.push((await call(calApp, "GET", url.pathname, { env: CAL_ENV })).status);
+  check("read again within 10 minutes (checking it, then adding it; Apple reads twice): up to 4 reads (2026-11-26)", [rereads, calendarReads], [[200, 200, 200], 4]);
   const soon = await call(calApp, "GET", url.pathname, { env: CAL_ENV });
-  check("asked again within 10 minutes: 429 with Retry-After, school platform not asked", [soon.status, Number(soon.res.headers.get("Retry-After")) > 0, calendarReads], [429, true, 1]);
+  check("a 5th within 10 minutes: 429 with Retry-After, school platform not asked", [soon.status, Number(soon.res.headers.get("Retry-After")) > 0, calendarReads], [429, true, 4]);
   check("the calendar itself is never stored (only when it was read)", JSON.stringify([...recs.values()]).includes("Essay"), false);
   clock += 11 * 60 * 1000;
-  check("after 10 minutes: read again", [(await call(calApp, "GET", url.pathname, { env: CAL_ENV })).status, calendarReads], [200, 2]);
+  check("after 10 minutes: read again", [(await call(calApp, "GET", url.pathname, { env: CAL_ENV })).status, calendarReads], [200, 5]);
   clock += 11 * 60 * 1000;
 
   {
@@ -407,6 +416,35 @@ section("Worker: early access and Plus ending");
   await Promise.all(waits);
   check("webhook: Plus ended", [hook.status, (await NS.get("9101").status()).plus], [200, false]);
   check("…notifications deleted and the calendar link gone", [pushDeleted.includes("9101"), calendarRecs.has("u:9101"), calendarRecs.has("f:abc")], [true, false, false]);
+}
+
+console.log("\nthe dates added from the school's calendar, in the calendar link (2026-11-26)");
+{
+  const now = Date.UTC(2026, 10, 26, 12);
+  const got = addedDatesFrom([
+    { id: "a1", t: "Winter Break", kind: "off", date: "2026-12-21", desc: "No school." },
+    { id: "a2", t: "Old", kind: "event", date: "2025-01-01" },
+    { id: "bad id!<script>", t: "Odd id", kind: "event", date: "2026-12-01" },
+    { id: "a3", t: "", kind: "event", date: "2026-12-02" },
+    { id: "a4", t: "No date", kind: "event", date: "soon" },
+    "junk", null,
+  ], now);
+  check("only well-formed, recent-or-ahead dates; ids cleaned", got.map((d) => [d.id, d.title, d.day, d.off]), [["a1", "Winter Break", "2026-12-21", true], ["badidscript", "Odd id", "2026-12-01", false]]);
+  check("not a list: none", [addedDatesFrom(null, now), addedDatesFrom({ a: 1 }, now)], [[], []]);
+  check("300 at most", addedDatesFrom(Array.from({ length: 500 }, (_, i) => ({ id: "x" + i, t: "Day " + i, kind: "event", date: "2027-01-0" + ((i % 9) + 1) })), now).length, 300);
+  const ics = buildIcs([], { now, tz: "America/Los_Angeles", added: got });
+  check("a day off: all day, 'No school: ...', its own id", [ics.includes("UID:added-a1@averages.io"), ics.includes("SUMMARY:No school: Winter Break"), ics.includes("DTSTART;VALUE=DATE:20261221"), ics.includes("DTEND;VALUE=DATE:20261222")], [true, true, true, true]);
+  // through the feed: a fresh link for 9003 (Plus), its dates in the calendar
+  plusOf.set("9003", "active");
+  const ck = await cookieFor("9003");
+  const made = await call(calApp, "POST", "/calendar", { cookie: ck, body: { tz: "America/Los_Angeles" }, env: CAL_ENV });
+  const feed = await (await call(calApp, "GET", new URL(made.data.url).pathname, { env: CAL_ENV })).res.text();
+  check("the link has the assignments and the added dates", [feed.includes("SUMMARY:Essay (due 11:59 PM)"), feed.includes("SUMMARY:No school: Thanksgiving Break"), feed.includes("SUMMARY:Back to School Night"), /DESCRIPTION:6 PM\\, gym/.test(feed)], [true, true, true, true]);
+  ADDED = Promise.reject(new Error("store down"));
+  (ADDED as Promise<unknown>).catch(() => {});
+  clock += 11 * 60 * 1000;
+  const again = await call(calApp, "GET", new URL(made.data.url).pathname, { env: CAL_ENV });
+  check("the dates can't be read: the calendar still comes, without them", [again.status, (await again.res.text()).includes("Thanksgiving")], [200, false]);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
