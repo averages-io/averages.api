@@ -421,6 +421,26 @@ app.use("*", async (c, next) => {
   try { c.res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains"); } catch { /* headers fixed: skip */ }
 });
 
+/**
+ * Every answer from this API is data, never a page (2026-11-26 security pass): if a browser is ever made to open one
+ * as a page (a download it shows anyway, an error page, a file someone links to), nothing in it can run, be framed or
+ * leak the address it came from. Answers that set their own policy keep it: files shown inline (viewResponse) need
+ * the browser's PDF and media viewers, which a sandbox would break.
+ */
+const API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox";
+app.use("*", async (c, next) => {
+  await next();
+  try {
+    const h = c.res.headers;
+    if (!h.has("Content-Security-Policy")) h.set("Content-Security-Policy", API_CSP);
+    if (!h.has("X-Frame-Options")) h.set("X-Frame-Options", "DENY");
+    if (!h.has("Referrer-Policy")) h.set("Referrer-Policy", "no-referrer");
+    if (!h.has("X-Content-Type-Options")) h.set("X-Content-Type-Options", "nosniff");
+  } catch {
+    /* headers fixed (passed straight through): skip */
+  }
+});
+
 app.use("*", rateLimit({ studentOf: async (c) => (await openedSession(c))?.uid ?? null }));
 
 app.use("*", async (c, next) => {

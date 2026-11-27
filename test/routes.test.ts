@@ -167,6 +167,7 @@ function schoology(method: string, path: string, query: URLSearchParams, body: s
     return reply({ section: only ? world.grades.filter((g) => g.section_id === only) : world.grades });
   }
   if (path === "/messages/inbox") return reply({ message: world.inbox });
+  { const u = path.match(/^\/users\/(\d+)$/); if (u && (world as any).users?.[u[1]]) return reply((world as any).users[u[1]]); }
   if (path === "/messages/sent") return reply({ message: world.sent });
   if (path === "/messages/recipients") return pick(world.recipients) ?? reply({ recipients: world.recipients });
   if (path === `/users/${ME}/events`) return pick(world.userEvents) ?? reply({ event: world.userEvents });
@@ -535,6 +536,15 @@ resetRateLimits();
   const replied = await call("/messages/reply", { method: "POST", cookie: schoologySession, json: { id: "88", message: "Thanks!", recipientIds: ["9999"], subject: "ignored" } });
   check("reply ok", [replied.status, await json(replied)], [200, { ok: true }]);
   check("reply goes to the thread's own participants and subject (never the browser's)", world.posted, [{ path: "/messages/88", body: { subject: "Lab report", message: "Thanks!", recipient_ids: "5001,7001" } }]);
+  // the school turned off messaging other students: Schoology says no for everyone in the thread
+  world.posted = [];
+  (world as any).users = { "5001": { uid: "5001", send_message: 0 }, "7001": { uid: "7001", send_message: "0" } };
+  const off = await call("/messages/reply", { method: "POST", cookie: schoologySession, json: { id: "88", message: "still here?" } });
+  check("messaging other students off: 409 replies_off, nothing sent", [off.status, (await json(off)).error, world.posted.length], [409, "replies_off", 0]);
+  (world as any).users = { "5001": { uid: "5001", send_message: 0 }, "7001": { uid: "7001", send_message: 1 } };
+  const mixed = await call("/messages/reply", { method: "POST", cookie: schoologySession, json: { id: "88", message: "for the teacher" } });
+  check("someone in it can still be messaged: the reply goes", [mixed.status, world.posted.length], [200, 1]);
+  (world as any).users = undefined;
   const gone = await call("/messages/reply", { method: "POST", cookie: schoologySession, json: { id: "77", message: "x" } });
   check("reply to a thread that isn't there: 404", gone.status, 404);
   check("reply validation", [(await call("/messages/reply", { method: "POST", cookie: schoologySession, json: { id: "8 8", message: "x" } })).status, (await call("/messages/reply", { method: "POST", cookie: schoologySession, json: { id: "88", message: "" } })).status], [400, 400]);

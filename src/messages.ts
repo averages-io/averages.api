@@ -540,7 +540,7 @@ export function parseReply(body: unknown): Parsed<{ id: string; message: string;
   return { ok: true, id, message: text.message, fileIds: files.fileIds };
 }
 
-export type SendResult = { ok: true; id: string } | { ok: false; error: "recipient_not_allowed" | "school_blocks_new_messages" | "not_found" | "no_recipients" | "too_many_recipients" };
+export type SendResult = { ok: true; id: string } | { ok: false; error: "recipient_not_allowed" | "school_blocks_new_messages" | "replies_off" | "not_found" | "no_recipients" | "too_many_recipients" };
 
 /**
  * A new thread. Every recipient must be someone GET /messages/recipients
@@ -600,6 +600,11 @@ export async function sendReply(creds: Credentials, me: string, input: { id: str
   const recipients = threadParticipants(rows, me);
   if (recipients.length === 0) return { ok: false, error: "no_recipients" };
   if (recipients.length > MAX_REPLY_RECIPIENTS) return { ok: false, error: "too_many_recipients" };
+  // A school that turned off messaging other students (2026-11-26 security pass): the app shows those conversations
+  // read-only, and this holds the same line, so a reply can't be sent around it. Only when Schoology says no for
+  // everyone in the conversation (a teacher in it, or no answer, and the reply goes as before).
+  const { can } = await canMessage(creds, recipients);
+  if (recipients.every((id) => can[id] === false)) return { ok: false, error: "replies_off" };
   await schoologyPost(`/messages/${input.id}`, creds, {
     subject: threadSubject(rows) || "No subject",
     message: messageHtml(input.message),
