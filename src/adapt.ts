@@ -496,7 +496,7 @@ export function adaptCourses(
 }
 
 /**
- * The predicted grade, made better (2026-11-09, Martin: "improve the grade prediction system in any way possible").
+ * The predicted grade, made better.
  *
  * predict() above only looked at the last few scores as equal percentages. This looks at how the class grade is
  * actually made and what's still coming:

@@ -56,7 +56,7 @@ async function fire(method: string, path: string, opts: { cookie?: string; origi
 const live = (uid: string, extra: any = {}) => sealSession({ key: "ck", secret: "cs", uid, ...extra } as any, SECRET);
 const APP = "https://app.averages.io";
 
-// A real 4 x 4 PNG: photos are checked for their size in pixels too (2026-11-23).
+// A real 4 x 4 PNG: photos are checked for their size in pixels too.
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAFUlEQVR4XmM8EWDDAANMcBYDAx4OAEP4AVzA+QYSAAAAAElFTkSuQmCC"), (ch) => ch.charCodeAt(0));
 
 console.log("key derivation: stores are addressed by the session uid, never request input");

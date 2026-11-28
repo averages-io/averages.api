@@ -151,14 +151,14 @@ console.log("connect");
       tokenAuth = String((init.headers as any).Authorization);
       return json({ access_token: "AT1", refresh_token: "RT1", expires_in: 14400, scope: "x" });
     }
-    if (u.endsWith("/users/me/profile")) return json({ profile: { display_name: "Martin V" } });
+    if (u.endsWith("/users/me/profile")) return json({ profile: { display_name: "Sam R" } });
     return json({}, 404);
   };
   const back = await acct.finishConnect(UID, state, "the-code");
   check("finishing returns to where they started", back, "/settings");
   checkTrue("code exchange sends the PKCE verifier", tokenBody.includes("code_verifier="));
   check("code exchange uses Basic client auth", tokenAuth, "Basic " + btoa("OC-test:shh"));
-  check("status says connected, with the account name", await acct.status(UID), { connected: true, name: "Martin V" });
+  check("status says connected, with the account name", await acct.status(UID), { connected: true, name: "Sam R" });
   checkTrue("tokens are stored sealed, not as JSON", typeof (await store.get("tokens")) === "string" && !String(await store.get("tokens")).includes("AT1"));
   await rejects("a state only works once", acct.finishConnect(UID, state, "the-code"), "canva_state_not_found");
 

@@ -45,7 +45,7 @@ answer = () => new Response("limit", { status: 429 });
 let code = 0;
 await getAssignments("5", CREDS).catch((e) => { code = e.status; });
 check("still limited after every wait: gives up with the 429 (4 tries)", [code, calls.length], [429, 4]);
-// Schoology's Retry-After is what we wait (2026-11-13), not our own guess
+// Schoology's Retry-After is what we wait, not our own guess
 check("retryAfterMs: seconds, a date, nothing", [retryAfterMs("2"), retryAfterMs("0.5"), retryAfterMs(new Date(10_000).toUTCString(), 7_000), retryAfterMs(null), retryAfterMs("soon")], [2000, 500, 3000, null, null]);
 {
   RATE_LIMIT_WAITS_MS.splice(0, RATE_LIMIT_WAITS_MS.length, 3000, 3000, 3000);   // a wait it must NOT use

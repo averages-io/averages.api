@@ -219,7 +219,7 @@ type Bindings = {
   /** Random high-entropy string. Set with: npx wrangler secret put SESSION_SECRET */
   SESSION_SECRET: string;
   /**
-   * The secret before the last change (2026-11-23): sessions sealed with it still open, and are sealed again with
+   * The secret before the last change: sessions sealed with it still open, and are sealed again with
    * SESSION_SECRET on their next request, so changing the secret doesn't sign everyone out. Canva / Google Drive /
    * OneDrive sign-ins stored with it still open too. Remove it once 15 days have passed.
    *   npx wrangler secret put SESSION_SECRET_PREVIOUS   (the old value)   then   npx wrangler secret put SESSION_SECRET
@@ -423,7 +423,7 @@ app.use("*", async (c, next) => {
 });
 
 /**
- * Every answer from this API is data, never a page (2026-11-26 security pass): if a browser is ever made to open one
+ * Every answer from this API is data, never a page: if a browser is ever made to open one
  * as a page (a download it shows anyway, an error page, a file someone links to), nothing in it can run, be framed or
  * leak the address it came from. Answers that set their own policy keep it: files shown inline (viewResponse) need
  * the browser's PDF and media viewers, which a sandbox would break.
@@ -455,8 +455,8 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   await next();
-  // A session cookie under an old name (before 2026-11-23's __Host- cookie): never read, just cleared, so it stops
-  // being sent. Martin: fine to sign everyone out for it.
+  // A session cookie under an old name (before the __Host- cookie): never read, just cleared, so it stops
+  // being sent. Everyone signs in again once.
   const header = c.req.header("Cookie") ?? null;
   if (!OLD_SESSION_COOKIES.some((name) => readCookie(header, name) !== null)) return;
   if ((c.res.headers.get("Set-Cookie") ?? "").includes(`${SESSION_COOKIE}=`)) return;
@@ -529,7 +529,7 @@ app.get("/", (c) => {
 });
 
 /**
- * api.averages.io/status (2026-11-09, Martin): everything the public routes say, on one page, in the same flat
+ * api.averages.io/status: everything the public routes say, on one page, in the same flat
  * shape as "/". Whether each part of Averages.io is on and set up, with the maintenance message when there is one.
  * Booleans only: no client ids, keys or anyone's data.
  */
@@ -759,7 +759,7 @@ app.delete("/auth/session", async (c) => {
 });
 
 /**
- * Sign out everywhere (2026-11-23): every sign-in of this student up to now ends, on every device, this one included
+ * Sign out everywhere: every sign-in of this student up to now ends, on every device, this one included
  * (within a minute everywhere; at once here). For a copied cookie, a lost phone, a school computer left signed in.
  */
 app.post("/auth/signout-everywhere", requireSession, async (c) => {
@@ -784,7 +784,7 @@ app.post("/auth/signout-everywhere", requireSession, async (c) => {
 });
 
 /**
- * Where browsers send what the app's Content-Security-Policy-Report-Only header would have blocked (2026-11-23,
+ * Where browsers send what the app's Content-Security-Policy-Report-Only header would have blocked (
  * public/_headers in averages.io). Logged as one short line each (wrangler tail / Workers Logs), so the policy can be
  * made to enforce once nothing real shows up. Only the address's site and path are kept: never its query, never a
  * script sample, never anything else the report carries. No cookies, no session; always 204.
@@ -817,7 +817,7 @@ app.post("/csp-report", async (c) => {
   return c.body(null, 204);
 });
 
-/** RFC 9116: where to report a security problem (2026-11-23). The same file is on app.averages.io and averages.io. */
+/** RFC 9116: where to report a security problem. The same file is on app.averages.io and averages.io. */
 app.get("/.well-known/security.txt", (c) => {
   c.header("Content-Type", "text/plain; charset=utf-8");
   c.header("Cache-Control", "public, max-age=86400");
@@ -1034,7 +1034,7 @@ app.get("/auth/me", requireSession, async (c) => {
       firstName: p.f,
       email: p.em ?? "",
       pictureUrl: p.pic ?? "",
-      // The school's ID for the student, for the report card PDF (2026-11-12). "" when the school has none,
+      // The school's ID for the student, for the report card PDF. "" when the school has none,
       // and for a session sealed before this field existed (it fills in at the next sign-in).
       studentId: p.sid ?? "",
       incognito: isIncognito(session),
@@ -1132,7 +1132,7 @@ app.put("/sync/settings", requireSession, async (c) => {
   // The seen notifications live beside the settings (sync.ts): a settings save keeps them as they are.
   const kv = syncKV(c.env, session.uid, c.req.url);
   const before = await loadSyncRecord(kv, session.uid);
-  // The school calendar dates the student added (2026-11-26): a device that has never had them (a new one, or a
+  // The school calendar dates the student added: a device that has never had them (a new one, or a
   // page that doesn't handle them) sends settings without the field, and that keeps the account's list as it is.
   // A device that has them sends the field, an empty list included, and that's the list.
   let settings = body.settings as any;
@@ -1161,7 +1161,7 @@ app.get("/sync/seen", requireSession, async (c) => {
   const record = await loadSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
   return c.json({ seen: record.seen ?? {}, seenAt: record.seenAt ?? {} });
 });
-// Advanced translation's server fallback (2026-11-15, src/translate.ts): Plus only, and only used when
+// Advanced translation's server fallback (src/translate.ts): Plus only, and only used when
 // the student's browser can't translate on its own and they turned this on. Nothing is kept or logged.
 app.post("/translate", requireSession, async (c) => {
   const session = c.get("session");
@@ -1418,7 +1418,7 @@ app.get("/data/bundle", requireSession, async (c) => {
   } catch (error) {
     if (error instanceof SchoologyError) {
       // Schoology no longer takes this sign-in (the student removed Averages.io in Schoology, or the token ran out):
-      // signed out, so they sign in again instead of seeing "couldn't load" until the session ends (2026-11-23,
+      // signed out, so they sign in again instead of seeing "couldn't load" until the session ends (
       // Schoology's Authentication docs: "If it failed with an HTTP Unauthorized, our token is no longer valid").
       if (error.status === 401 && !isDemo(session)) return schoologySignedOut(c);
       return c.json({ error: "schoology_error", status: error.status }, 502);
@@ -1863,7 +1863,7 @@ app.get("/data/submissions", async (c) => {
   if (typeof forList === "string" || typeof postedList === "string") {
     const pairsOf = (v: string | undefined, most: number) => [...new Set(String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean))].slice(0, most)
       .map((x) => x.split(":")).filter((p) => p.length === 2 && ID_RE.test(p[0]) && ID_RE.test(p[1]));
-    // at most 20 (the app asks for 20 since 2026-11-14: Home's overdue list can be that long)
+    // at most 20 (the app asks for 20: Home's overdue list can be that long)
     const pairs = pairsOf(forList, 20);
     // ?posted=section:discussion,...: which of these discussions the student has posted in (at most 10)
     const discussions = pairsOf(postedList, 10);
@@ -1874,8 +1874,7 @@ app.get("/data/submissions", async (c) => {
       } catch { /* not readable: left as it was */ }
     });
     const found: SubmittedFile[] = [];
-    // each one's newest turn-in, files or not: when, and whether Schoology marked it late (2026-11-26, Martin: "what
-    // assignments were turned in late" found none: graded work was never asked about, and text answers have no files)
+    // each one's newest turn-in, files or not: when, and whether Schoology marked it late
     const turnins: { course: string; assignment: string; at: number; late: boolean }[] = [];
     let partial = false;
     await eachAtMost(pairs, 5, async ([course, id]) => {
@@ -2669,7 +2668,7 @@ app.route("/data", dataExtrasRoutes(extrasDeps));
 app.route("/messages", messagesRoutes(extrasDeps));
 
 app.post("/email/code", requireSession, async (c) => {
-  const foreign = notFromOurApp(c);   // only the app asks (2026-11-23 sweep: the one mutating group without it)
+  const foreign = notFromOurApp(c);   // only the app asks (the one mutating group that lacked it)
   if (foreign) return foreign;
   const session = c.get("session");
   c.header("Cache-Control", "no-store");
@@ -2698,7 +2697,7 @@ app.post("/email/code", requireSession, async (c) => {
 });
 /** The same checks as /email/code, without sending anything: the app asks as the student finishes typing. */
 app.post("/email/check", requireSession, async (c) => {
-  const foreign = notFromOurApp(c);   // only the app asks (2026-11-23 sweep: the one mutating group without it)
+  const foreign = notFromOurApp(c);   // only the app asks (the one mutating group that lacked it)
   if (foreign) return foreign;
   c.header("Cache-Control", "no-store");
   const body = (await c.req.json().catch(() => null)) as { email?: unknown; force?: unknown } | null;
@@ -2724,7 +2723,7 @@ app.get("/email/suggested", requireSession, async (c) => {
 });
 
 app.post("/email/verify", requireSession, async (c) => {
-  const foreign = notFromOurApp(c);   // only the app asks (2026-11-23 sweep: the one mutating group without it)
+  const foreign = notFromOurApp(c);   // only the app asks (the one mutating group that lacked it)
   if (foreign) return foreign;
   const session = c.get("session");
   c.header("Cache-Control", "no-store");

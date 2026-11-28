@@ -29,9 +29,9 @@ function check(name: string, actual: unknown, expected: unknown) {
 
 const ME = {
   uid: 4242,
-  name_display: "Martin Volkov",
-  name_first: "Martin",
-  primary_email: "martin@school.example",
+  name_display: "Sam Rivera",
+  name_first: "Sam",
+  primary_email: "sam@school.example",
   picture_url: "https://asset-cdn.schoology.com/system/files/imagecache/profile_reg/pictures/picture-4242.jpg",
 };
 let schoologyStatus = 200;
@@ -74,7 +74,7 @@ function cookieValue(res: Response, name: string): string | null {
   }
   return null;
 }
-const ANSWER = { uid: "4242", name: "Martin Volkov", firstName: "Martin", email: "martin@school.example", pictureUrl: ME.picture_url, studentId: "", incognito: false, provider: "schoology" };
+const ANSWER = { uid: "4242", name: "Sam Rivera", firstName: "Sam", email: "sam@school.example", pictureUrl: ME.picture_url, studentId: "", incognito: false, provider: "schoology" };
 
 /* ── Signing in seals the name ─────────────────────────────────────────── */
 console.log("signing in with a Schoology key");
@@ -86,7 +86,7 @@ let session = "";
   check("sign-in asked Schoology once (as before, for the user id)", calls, ["/v1/users/me"]);
   session = cookieValue(res, SESSION_COOKIE) ?? "";
   const opened = await openSession(session, SECRET);
-  check("the name is sealed into the session", opened?.p, { n: "Martin Volkov", f: "Martin", em: "martin@school.example", pic: ME.picture_url });
+  check("the name is sealed into the session", opened?.p, { n: "Sam Rivera", f: "Sam", em: "sam@school.example", pic: ME.picture_url });
   check("the session cookie stays small (browsers keep ~4096 bytes)", session.length < 1200, true);
 }
 
@@ -104,7 +104,7 @@ console.log("\n/auth/me on a new session");
   calls.length = 0;
   schoologyStatus = 503;
   const { res, data } = await call("/auth/me", { cookie: `${SESSION_COOKIE}=${session}` });
-  check("Schoology down: still signed in, still no call", [res.status, data.name, calls.length], [200, "Martin Volkov", 0]);
+  check("Schoology down: still signed in, still no call", [res.status, data.name, calls.length], [200, "Sam Rivera", 0]);
   schoologyStatus = 200;
 }
 {
@@ -116,7 +116,7 @@ console.log("\n/auth/me on a new session");
   const cookie = `${SESSION_COOKIE}=${cookieValue(under.res, SESSION_COOKIE)}`;
   calls.length = 0;
   const { data } = await call("/auth/me", { cookie });
-  check("under 13: Incognito still reported, from the cookie", [data.incognito, data.name, calls.length], [true, "Martin Volkov", 0]);
+  check("under 13: Incognito still reported, from the cookie", [data.incognito, data.name, calls.length], [true, "Sam Rivera", 0]);
 }
 
 console.log("\nan older session (no name inside)");
@@ -131,7 +131,7 @@ let profile = "";
   check("the session cookie is NOT rewritten", cookieValue(res, SESSION_COOKIE), null);
   profile = cookieValue(res, PROFILE_COOKIE) ?? "";
   const kept: any = await openValue(profile, SECRET, PROFILE_PURPOSE);
-  check("the name goes in the side cookie, tied to this session", [kept?.uid, kept?.exp, kept?.p?.n], ["4242", oldSession.exp, "Martin Volkov"]);
+  check("the name goes in the side cookie, tied to this session", [kept?.uid, kept?.exp, kept?.p?.n], ["4242", oldSession.exp, "Sam Rivera"]);
   const raw = setCookies(res).find((c) => c.startsWith(PROFILE_COOKIE + "=")) ?? "";
   const maxAge = Number(/Max-Age=(\d+)/.exec(raw)?.[1]);
   check("side cookie: HttpOnly, Secure, host-only, ends with the session", [/HttpOnly/.test(raw), /Secure/.test(raw), /Domain=/.test(raw), Math.abs(maxAge - (oldSession.exp - Math.floor(Date.now() / 1000))) <= 2], [true, true, false, true]);
@@ -139,7 +139,7 @@ let profile = "";
 {
   calls.length = 0;
   const { res, data } = await call("/auth/me", { cookie: `${SESSION_COOKIE}=${oldToken}; ${PROFILE_COOKIE}=${profile}` });
-  check("next visit: from the side cookie, no Schoology", [res.status, data.name, calls, /desc="cookie"/.test(res.headers.get("Server-Timing") ?? "")], [200, "Martin Volkov", [], true]);
+  check("next visit: from the side cookie, no Schoology", [res.status, data.name, calls, /desc="cookie"/.test(res.headers.get("Server-Timing") ?? "")], [200, "Sam Rivera", [], true]);
 }
 {
   calls.length = 0;
@@ -191,7 +191,7 @@ console.log("\nsigning out and the edges");
   check("profileFrom: nothing at all is still a name", profileFrom({}), { n: "Student", f: "" });
   const long = profileFrom({ name_display: "y".repeat(500), picture_url: "https://x.example/" + "z".repeat(900) });
   check("profileFrom: long values are cut so the cookie stays small", [long.n.length, long.pic], [200, undefined]);
-  // The student ID for the report card (2026-11-12): kept when it's a plain short ID, dropped otherwise.
+  // The student ID for the report card: kept when it's a plain short ID, dropped otherwise.
   check("profileFrom: keeps the school's student ID", profileFrom({ name_display: "Sam", school_uid: " 178-A.23 " }).sid, "178-A.23");
   check("profileFrom: a numeric school_uid works too", profileFrom({ name_display: "Sam", school_uid: 100245 }).sid, "100245");
   check("profileFrom: odd or long IDs are left out", [profileFrom({ school_uid: "<b>1</b>" }).sid, profileFrom({ school_uid: "9".repeat(41) }).sid, profileFrom({ school_uid: "" }).sid], [undefined, undefined, undefined]);

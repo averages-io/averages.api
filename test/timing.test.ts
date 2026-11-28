@@ -1,4 +1,4 @@
-// Server-Timing on every answer: src/timing.ts and its use in the Worker (2026-11-13).
+// Server-Timing on every answer: src/timing.ts and its use in the Worker.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/timing.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";

@@ -17,7 +17,7 @@ export const MAX_MEDIA_BYTES: Record<MediaKind, number> = {
 };
 
 /**
- * Photos are kept small (2026-11-23, Martin: "compress pfps automatically when they get inputed into R2"). The app
+ * Photos are kept small. The app
  * already makes each one a 256 px square (WebP, or JPEG where the browser can't make WebP), about 10-40 KB, so the API
  * only has to turn away anything else: a still photo over 512 px a side or over 150 KB. An animated GIF goes up as it
  * is (re-making every frame on the server would cost far more than it saves), up to 1 MB and 1024 px a side.
@@ -126,8 +126,7 @@ export async function deleteAllMedia(bucket: MediaBucket | undefined, uid: strin
   }
 }
 
-/* ── The photo, shown to classmates (2026-11-23, Martin: "their pfp is shared with classmates with the app and vice
- * versa but can be turned off") ──────────────────────────────────────────────────────────────────────────────────
+/* ── The photo, shown to classmates ──────────────────────────────────────────────────────────────────────────────────
  * Off until the student turns it on (Settings > Privacy). On, the photo gets one small marker per class the student
  * is in: share/<section>/<uid>, its version in the marker. A classmate's GET /data/classmates lists the markers of
  * the classes Schoology says THEY are in, and only for the people Schoology lists in that class, so a photo only
@@ -400,7 +399,7 @@ export function mediaRoutes(deps: MediaDeps) {
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Content-Security-Policy", "default-src 'none'; sandbox");
     c.header("Cross-Origin-Resource-Policy", "same-site");
-    // only this student's browser, only this version of the photo, and only for an hour (2026-11-23 sweep: it was the
+    // only this student's browser, only this version of the photo, and only for an hour (it was the
     // week the address lasts, so a photo its owner stopped showing could stay in a classmate's browser that long)
     c.header("Cache-Control", "private, max-age=3600");
     return c.body(obj.body as any, 200);

@@ -1,4 +1,4 @@
-// Google files over 10 MB as Word, Excel, PowerPoint, PDF or CSV (2026-11-09, Martin: "google only makes pdf up to 10 mb").
+// Google files over 10 MB as Word, Excel, PowerPoint, PDF or CSV.
 //
 // Drive's files.export, which the browser uses, stops at 10 MB (exportSizeLimitExceeded). A Google file's own
 // export links on docs.google.com don't have that limit. They can't be fetched from the browser (no CORS), so the

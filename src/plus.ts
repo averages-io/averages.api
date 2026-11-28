@@ -38,8 +38,7 @@ export function plusRequired(env: PlusEnv, billingSwitch: boolean = featureOn(en
 }
 
 /**
- * Answers kept in this Worker's memory for a little while (2026-11-23, Martin: store things "in the most efficient
- * and cheap way"). Every live-grades check (every 2 minutes per open tab) asked the student's billing store, one
+ * Answers kept in this Worker's memory for a little while, to keep it cheap. Every live-grades check (every 2 minutes per open tab) asked the student's billing store, one
  * Durable Object request each time. Now a "yes" is kept 5 minutes and a "no" 1 minute, so a new subscriber gets the
  * perks within a minute and a cancelled one loses them within five. Only this Worker instance's memory, never
  * stored; Settings' own Plus check still asks the store every time.

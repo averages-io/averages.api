@@ -590,6 +590,6 @@ export const CLASSMATES: { uid: string; first: string; last: string; sections: n
   { uid: "8200000006", first: "Noah", last: "Kim", sections: [1, 3, 5] },
   { uid: "8200000007", first: "Sofia", last: "Rossi", sections: [0, 2, 4] },
   { uid: "8200000008", first: "Liam", last: "Okoro", sections: [1, 5] },
-  { uid: "8200000009", first: "Ava", last: "Martin", sections: [3, 4] },
+  { uid: "8200000009", first: "Ava", last: "Sam", sections: [3, 4] },
   { uid: "8200000010", first: "Ethan", last: "Walsh", sections: [0, 1, 3] },
 ];

@@ -1,4 +1,4 @@
-// "Sign out everywhere" and changing SESSION_SECRET without signing everyone out (2026-11-23 security sweep).
+// "Sign out everywhere" and changing SESSION_SECRET without signing everyone out.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/sessionGuard.test.ts
 import app from "../src/index.ts";
 import { openSession, sealSession, SESSION_COOKIE, SESSION_TTL_SECONDS, sessionIssuedAt, DEMO_UID } from "../src/session.ts";

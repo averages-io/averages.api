@@ -77,7 +77,7 @@ export function sendFailure(err: unknown): { status: 400 | 429 | 502; error: str
   return { status: 502, error: "email_failed" };
 }
 
-/* ── Is this address worth a code? (2026-11-18, Martin: check it's real before spending one of the month's emails) ──
+/* ── Is this address worth a code? ──
  * Nothing can prove a mailbox exists without emailing it, but three quick checks stop most bad addresses first:
  *  1. throwaway inboxes (mailinator and the like): turned down;
  *  2. a typo of a big email provider (gmial.com): "did you mean gmail.com?", once; sending again with force goes ahead;

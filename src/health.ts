@@ -1,5 +1,4 @@
-// Automatic outage notices (2026-11-10, Martin: "have the maintenance banners be automatically on if a connector or
-// login is down", then "just have it auto refresh on the server every 15 min").
+// Automatic outage notices.
 //
 // Every 15 minutes (a Cron Trigger, wrangler.jsonc) the API checks each part of Averages.io once and keeps the answer
 // in one small record (HealthStore, US):
@@ -9,7 +8,7 @@
 //    "Sign in with Schoology" takes, so a broken key shows too.
 //  - our own pieces: Sync, notifications and calendar sync each read their own test record; profile pictures list
 //    the picture storage. An error means it's down.
-//  - A.I. search (2026-11-17): the files every browser downloads to run it (both models and the ONNX Runtime) must
+//  - A.I. search: the files every browser downloads to run it (both models and the ONNX Runtime) must
 //    be in the R2 bucket averages-ai (the API's read-only AI_FILES binding, asked for their size only). Without the
 //    binding, they're asked for from app.averages.io/ai/ (HEAD). A missing file is down too: the download fails there.
 // While anything is down, the pages' banner says what (unless the maintenance switch is on: its message wins), and

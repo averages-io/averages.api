@@ -445,7 +445,7 @@ export class CanvaAccount {
   async loadTokens(uid: string): Promise<CanvaTokens | null> {
     const sealed = await this.storage.get<string>("tokens");
     if (!sealed || !this.env.SESSION_SECRET) return null;
-    // sealed before SESSION_SECRET changed: still opens with the previous one (2026-11-23), and is sealed again on its next refresh
+    // sealed before SESSION_SECRET changed: still opens with the previous one, and is sealed again on its next refresh
     return (await openTokens(sealed, uid, this.env.SESSION_SECRET)) ?? (this.env.SESSION_SECRET_PREVIOUS ? await openTokens(sealed, uid, this.env.SESSION_SECRET_PREVIOUS) : null);
   }
 

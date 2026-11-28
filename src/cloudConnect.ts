@@ -438,7 +438,7 @@ export class CloudAccount {
     const sealed = await this.storage.get<string>(connKey(app));
     const secret = secretOf(this.env.SESSION_SECRET), previous = secretOf(this.env.SESSION_SECRET_PREVIOUS);
     if (typeof sealed !== "string" || !secret) return null;
-    // sealed before SESSION_SECRET changed: the previous one still opens it (2026-11-23)
+    // sealed before SESSION_SECRET changed: the previous one still opens it
     return (await openConnection(sealed, uid, app, secret)) ?? (previous ? await openConnection(sealed, uid, app, previous) : null);
   }
 

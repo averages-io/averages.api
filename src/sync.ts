@@ -18,7 +18,7 @@ export interface SyncRecord {
 export type SeenLists = Partial<Record<(typeof SEEN_KINDS)[number], string[]>>;
 export type SeenDays = Partial<Record<(typeof SEEN_KINDS)[number], Record<string, number>>>;
 /**
- * Only the last 15 days of seen ids are kept (2026-11-14). Anything older counts as seen on every device
+ * Only the last 15 days of seen ids are kept. Anything older counts as seen on every device
  * anyway (the app treats an update, grade, message, assignment or file over 15 days old as not new), so its
  * id is dropped. Something can't be seen before it's posted, so an id marked seen 15+ days ago belongs to
  * something at least that old. Ids that come without a day (older records, the Windowed bell) start today.

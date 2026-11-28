@@ -41,7 +41,7 @@ const CTX: any = { waitUntil: (p: Promise<unknown>) => waits.push(p), passThroug
 const API = "https://api.averages.io";
 const APP = "https://app.averages.io";
 const CREDS = { key: "abcdef0123456789abcdef0123456789", secret: "0123456789abcdef0123456789abcdef" };
-const martin = `${SESSION_COOKIE}=${await sealSession({ ...CREDS, uid: "4242" }, SECRET)}`;
+const student = `${SESSION_COOKIE}=${await sealSession({ ...CREDS, uid: "4242" }, SECRET)}`;
 const demo = `${SESSION_COOKIE}=${await sealSession({ key: "", secret: "", uid: DEMO_UID }, SECRET)}`;
 
 async function signOut(query: string, cookie?: string, origin = APP, env = ENV) {
@@ -58,34 +58,34 @@ async function signOut(query: string, cookie?: string, origin = APP, env = ENV) 
 
 console.log("sign-out with Sync off (?forget=1)");
 {
-  const r = await signOut("?forget=1", martin);
+  const r = await signOut("?forget=1", student);
   check("200 and the session cookie cleared", [r.status, r.clearsSession], [200, true]);
   check("Canva, Google Drive and OneDrive all disconnected, for this student, Google's grant revoked too", r.calls, ["canva 4242", "gdrive 4242 (uid 4242) revoke", "onedrive 4242 (uid 4242) revoke"]);
 }
 {
   canvaBroken = true;
-  const r = await signOut("?forget=1", martin);
+  const r = await signOut("?forget=1", student);
   canvaBroken = false;
   check("Canva failing doesn't stop Drive and OneDrive, or the sign-out", [r.status, r.clearsSession, r.calls], [200, true, ["gdrive 4242 (uid 4242) revoke", "onedrive 4242 (uid 4242) revoke"]]);
 }
 {
-  const r = await signOut("?forget=1", martin, APP, { SESSION_SECRET: SECRET });
+  const r = await signOut("?forget=1", student, APP, { SESSION_SECRET: SECRET });
   check("no Canva or Cloud stores configured: still signs out", [r.status, r.clearsSession, r.calls], [200, true, []]);
 }
 
 console.log("\nplain sign-out (Sync on)");
 {
-  const r = await signOut("", martin);
+  const r = await signOut("", student);
   check("signs out, connections kept (the account keeps them)", [r.status, r.clearsSession, r.calls], [200, true, []]);
-  const other = await signOut("?forget=0", martin);
+  const other = await signOut("?forget=0", student);
   check("anything but forget=1 is a plain sign-out", other.calls, []);
 }
 
 console.log("\nrefusals and edges");
 {
-  const r = await signOut("?forget=1", martin, "https://evil.example");
+  const r = await signOut("?forget=1", student, "https://evil.example");
   check("another site can't make it forget (403, nothing touched)", [r.status, r.calls, r.clearsSession], [403, [], false]);
-  const plain = await signOut("", martin, "https://evil.example");
+  const plain = await signOut("", student, "https://evil.example");
   check("plain sign-out from anywhere still works as before", plain.status, 200);
   const none = await signOut("?forget=1");
   check("no session: just clears cookies", [none.status, none.calls], [200, []]);
@@ -95,7 +95,7 @@ console.log("\nrefusals and edges");
 
 console.log("\nCloudflare's bot-check cookie");
 {
-  const r = await signOut("", martin);
+  const r = await signOut("", student);
   check("cf_clearance expired twice: partitioned and not", r.cf.map((c) => [c.includes("Max-Age=0"), c.includes("Domain=averages.io"), c.endsWith("; Partitioned")]), [[true, true, true], [true, true, false]]);
 }
 

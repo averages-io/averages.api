@@ -185,7 +185,7 @@ export function sessionIssuedAt(session: { exp: number }): number {
 }
 
 /**
- * The session sealed again, with the same end, under `secret` (moving it to a new SESSION_SECRET, 2026-11-23).
+ * The session sealed again, with the same end, under `secret` (moving it to a new SESSION_SECRET).
  * Stamped as a 15-day session: openSession has already moved an older one's end to 15 days.
  */
 export async function resealSession(session: SessionData, secret: string): Promise<string> {
@@ -284,10 +284,10 @@ export async function openSession(
 }
 
 /**
- * The session cookie (2026-11-23 security sweep). `__Host-`: the browser only accepts it from api.averages.io itself,
+ * The session cookie. `__Host-`: the browser only accepts it from api.averages.io itself,
  * over https, for the whole site, and never sends it to any other averages.io address (it used to go to every
- * *.averages.io site, the landing page included). Martin: fine to sign everyone out for the change, so the old
- * names are never read again, only cleared.
+ * *.averages.io site, the landing page included). Everyone signs in again once for the change: the old names are
+ * never read again, only cleared.
  */
 export const SESSION_COOKIE = "__Host-averages_session";
 /** The names it had before (Domain=.averages.io): cleared wherever a session is set or ends. */

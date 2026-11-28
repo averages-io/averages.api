@@ -121,7 +121,7 @@ const sGrade = (assignment: number, grade: unknown, max = 20, extra: Record<stri
   max_points: max,
   exception: 0,
   timestamp: Math.floor(NOW / 1000) - 3600 + assignment,
-  comment: "Great job on the lab write-up, Martin",
+  comment: "Great job on the lab write-up, Sam",
   ...extra,
 });
 const sGrades = (...assignments: unknown[]) => [{ section_id: "111", period: [{ period_id: "p1", assignment: assignments }], final_grade: [{ grade: 93 }] }];
@@ -264,7 +264,7 @@ section("Privacy: a stored snapshot holds hashes only");
   const stored = JSON.stringify(mergeSnapshot(null, obs, ALL));
   const all = Object.values(mergeSnapshot(null, obs, ALL).sets).flat();
   check("every entry is an 8-character hash", all.every((h) => /^[A-Za-z0-9_-]{8}$/.test(h)), true);
-  check("no grades, titles, names, subjects or ids", ["18.5", "B+", "Molarity", "Chemistry", "Rivera", "Field trip", "Martin", "111", "1001"].filter((w) => stored.includes(w)), []);
+  check("no grades, titles, names, subjects or ids", ["18.5", "B+", "Molarity", "Chemistry", "Rivera", "Field trip", "Sam", "111", "1001"].filter((w) => stored.includes(w)), []);
 }
 
 /* Classroom raw data helpers */
@@ -791,7 +791,7 @@ const GOOGLE_SESSION: SessionData = {
   secret: "",
   uid: "g:1234567890",
   exp: Math.floor(Date.now() / 1000) + 30 * 86400,
-  g: { at: "ya29.old", rt: "1//refresh-token", ax: 0, sc: "cwma", name: "Martin", email: "m@example.com", pic: "" },
+  g: { at: "ya29.old", rt: "1//refresh-token", ax: 0, sc: "cwma", name: "Sam", email: "m@example.com", pic: "" },
 };
 {
   resetWorld();

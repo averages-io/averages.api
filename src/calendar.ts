@@ -15,7 +15,7 @@ export const CALENDAR_LINK_PURPOSE = "calendar-link";
 /** A link's calendar is read from the school platform at most this often. */
 export const MIN_READ_MS = 10 * 60 * 1000;
 /**
- * Reads allowed in those 10 minutes (2026-11-26, Martin: "the ical links dont work"). It was 1: opening the link to
+ * Reads allowed in those 10 minutes. It was 1: opening the link to
  * check it, then adding it to Google Calendar, got Google a 429 and "couldn't fetch"; Apple Calendar reads twice
  * when subscribing. A few reads, then 429.
  */
@@ -294,7 +294,7 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
 /**
  * The synced list (settings.calendarDates: { id, t, kind, date, desc }) as events: only well-formed ones, from a
- * month ago to a year and a half ahead, 300 at most (2026-11-26, Martin: "can we sync added events/imported events").
+ * month ago to a year and a half ahead, 300 at most.
  */
 export function addedDatesFrom(raw: unknown, now: number): AddedDate[] {
   if (!Array.isArray(raw)) return [];

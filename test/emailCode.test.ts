@@ -34,7 +34,7 @@ const cookieFor = async (uid: string, extra: Record<string, unknown> = {}) => `$
 const codeIn = (m: any) => (String(m.text).match(/\b(\d{6})\b/) || [])[1];
 
 console.log("\nhelpers");
-check("an address is cleaned and lowercased", cleanEmail("  Martin@Example.COM "), "martin@example.com");
+check("an address is cleaned and lowercased", cleanEmail("  Sam@Example.COM "), "sam@example.com");
 check("not addresses", ["", "a@b", "a b@c.com", "x@y.com\nBcc: z@w.com", "a@b..com", ".a@b.com", "a,b@c.com", 7].map(cleanEmail), [null, null, null, null, null, null, null, null]);
 check("codes are 6 digits", Array.from({ length: 50 }, newCode).every((c) => /^\d{6}$/.test(c)), true);
 const h1 = await codeHash(SECRET, "1", "a@b.com", "123456");

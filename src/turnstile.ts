@@ -1,4 +1,4 @@
-// Cloudflare Turnstile on the sign-in page (2026-11-23, Martin: "can we put an invisible turnstile on the login page").
+// Cloudflare Turnstile on the sign-in page.
 // The page runs Cloudflare's check without showing anything to almost everyone (an invisible widget); the API asks
 // Cloudflare whether the token is real before starting a sign-in. On only when both TURNSTILE_SITE_KEY (public, a
 // wrangler var) and TURNSTILE_SECRET (npx wrangler secret put TURNSTILE_SECRET) are set.

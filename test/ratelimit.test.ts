@@ -54,7 +54,7 @@ check("the numbers", Object.values(RATE_RULES).map((r) => [r.name, r.limit, r.wi
   ["csp", 30, 60000, "ip"],
   ["links", 60, 60000, "student"],
 ]);
-check("school applications per IP; Martin's list like sign-in", [name("POST", "/schools/apply"), name("GET", "/schools/applications")], ["apply", "signin"]);
+check("school applications per IP; the same list as sign-in", [name("POST", "/schools/apply"), name("GET", "/schools/applications")], ["apply", "signin"]);
 check("verify-email codes have their own rules", [name("POST", "/schools/apply/code"), name("POST", "/schools/apply/verify")], ["applyCode", "applyVerify"]);
 check("onboarding's email codes too (2026-11-06)", [name("POST", "/email/code"), name("POST", "/email/verify")], ["emailCode", "emailVerify"]);
 check("Advanced translation's server fallback has its own limit", name("POST", "/translate"), "translate");

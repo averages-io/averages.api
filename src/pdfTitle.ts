@@ -1,6 +1,6 @@
 // A PDF shown in the browser is titled by its own document info, not by its file name: Firefox's and Chrome's PDF
 // viewers show "<Title> - <file name>" in the tab. Teachers' PDFs (Google Docs, Word and Schoology's own preview copies)
-// very often carry the title "Untitled", so every one of them opened as "Untitled - Lab Report.pdf" (Martin, 2026-11-28).
+// very often carry the title "Untitled", so every one of them opened as "Untitled - Lab Report.pdf".
 //
 // withoutPdfTitle() streams a PDF through unchanged and adds a small incremental update at its end (the standard way
 // a PDF is edited without rewriting it): a new, empty document info dictionary. The viewer then has no title to show,

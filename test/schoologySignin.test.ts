@@ -26,7 +26,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (refuse) return new Response("Invalid consumer", { status: 401 });
   if (url.pathname === "/v1/oauth/request_token") return new Response("oauth_token=REQTOKEN1&oauth_token_secret=REQSECRET1", { status: 200 });
   if (url.pathname === "/v1/oauth/access_token") return new Response("oauth_token=ACCTOKEN9&oauth_token_secret=ACCSECRET9", { status: 200 });
-  if (url.pathname === "/v1/users/me") return new Response(JSON.stringify({ uid: 5150, name_display: "Martin Volkov", name_first: "Martin", primary_email: "", picture_url: "" }), { status: 200, headers: { "Content-Type": "application/json" } });
+  if (url.pathname === "/v1/users/me") return new Response(JSON.stringify({ uid: 5150, name_display: "Sam Rivera", name_first: "Sam", primary_email: "", picture_url: "" }), { status: 200, headers: { "Content-Type": "application/json" } });
   return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
@@ -118,7 +118,7 @@ console.log("\ncallback");
   check("the swap is signed with the request token", /oauth_token="REQTOKEN1"/.test(calls[0]?.auth ?? ""), true);
   check("/users/me is signed with the access token", /oauth_token="ACCTOKEN9"/.test(calls[1]?.auth ?? ""), true);
   const s = await openSession(cookieValue(r, SESSION_COOKIE) ?? "", SECRET);
-  check("the session carries the access token and the student", [s?.uid, s?.token, s?.tokenSecret, s?.key, s?.inc ?? null, s?.p?.n], ["5150", "ACCTOKEN9", "ACCSECRET9", "consumer-key-abc", null, "Martin Volkov"]);
+  check("the session carries the access token and the student", [s?.uid, s?.token, s?.tokenSecret, s?.key, s?.inc ?? null, s?.p?.n], ["5150", "ACCTOKEN9", "ACCSECRET9", "consumer-key-abc", null, "Sam Rivera"]);
   check("the in-between cookie is cleared", setCookies(r).some((c) => c.startsWith(`${OAUTH_COOKIE}=;`) && /Max-Age=0/.test(c)), true);
 
   // under 13: Incognito only, sealed in

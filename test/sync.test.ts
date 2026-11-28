@@ -112,7 +112,7 @@ console.log("\nan old record's GPA snapshot (weekly email, removed 2026-10-06) i
   check("the next save writes the record without gpaSnapshot or gpaHistory", Object.keys(stored), ["settings", "updatedAt", "settingsUpdatedAt", "seen", "seenAt"]);
   // Even when something passes a record that still has one (a caller spreading an old object).
   await saveSyncRecord(kv, "u4", { ...(loaded as any), gpaSnapshot: { current: 1 } });
-  check("saveSyncRecord writes exactly the three fields, whatever it's given", Object.keys(JSON.parse(kv.store.get("sync:u4")!)), ["settings", "updatedAt", "settingsUpdatedAt", "seen", "seenAt"]); // + the seen notifications (2026-11-03)
+  check("saveSyncRecord writes exactly the three fields, whatever it's given", Object.keys(JSON.parse(kv.store.get("sync:u4")!)), ["settings", "updatedAt", "settingsUpdatedAt", "seen", "seenAt"]); // + the seen notifications
 }
 
 function fakeStore(): SyncStoreLike & { data: Map<string, string> } {

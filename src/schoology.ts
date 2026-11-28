@@ -155,7 +155,7 @@ async function signedGet(url: URL, path: string, creds: Credentials): Promise<Re
     const fallback = RATE_LIMIT_WAITS_MS[attempt];
     if (res.status !== 429 || fallback === undefined) return res;
     await res.body?.cancel().catch(() => {});
-    // Schoology's own "try again in": exactly when the calls refill, instead of a guess (2026-11-13). Between
+    // Schoology's own "try again in": exactly when the calls refill, instead of a guess. Between
     // 0.1 and 6 s; the old guesses (1.2, 2.5, 4.5 s) when it doesn't say.
     const told = retryAfterMs(res.headers.get("Retry-After"));
     const wait = told === null ? fallback : Math.min(6000, Math.max(100, told));
@@ -325,7 +325,7 @@ export async function getDocuments(sectionId: string, creds: Credentials) {
 
 export async function getAssignmentsWithAttachments(sectionId: string, creds: Credentials) {
   // Paged (Schoology's assignment docs: start/limit, with a `total`): a class with more than one page of
-  // assignments gets the rest too, up to 3 pages (600), each assignment once (2026-11-14).
+  // assignments gets the rest too, up to 3 pages (600), each assignment once.
   const out: Record<string, any>[] = [];
   const seen = new Set<string>();
   for (let page = 0; page < 3; page++) {
@@ -350,7 +350,7 @@ export async function getAssignmentsWithAttachments(sectionId: string, creds: Cr
 /**
  * Whether the student has posted in a discussion: its replies (GET /sections/{id}/discussions/{id}/comments,
  * Schoology's discussion-reply docs) include one with their uid. Up to 2 pages of 200. Schoology's own To Do
- * leaves a discussion out of Overdue once the student has posted in it (2026-11-14).
+ * leaves a discussion out of Overdue once the student has posted in it.
  */
 export async function postedInDiscussion(sectionId: string, discussionId: string, uid: string, creds: Credentials): Promise<boolean> {
   for (let page = 0; page < 2; page++) {

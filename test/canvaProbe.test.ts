@@ -42,7 +42,7 @@ function fakeCanva(env: Record<string, unknown>, scopes: string[] | null = SCOPE
     },
     accessToken: async () => { if (!connected) throw new Error("canva_not_connected"); return TOKEN; },
     grantedScopes: async () => scopes,
-    status: async () => ({ connected, name: connected ? "Martin" : "" }),
+    status: async () => ({ connected, name: connected ? "Sam" : "" }),
   };
   const ns = { idFromName: (n: string) => n, get: () => stub, jurisdiction: () => ns };
   return ns;

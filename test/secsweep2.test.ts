@@ -1,4 +1,4 @@
-// Security sweep, 2026-11-23: the surfaces added since the 11-09 IDOR pass (classmate photos, the email code
+// Security sweep: the surfaces added since the IDOR pass (classmate photos, the email code
 // popup, Turnstile, the Plus cache, link previews), plus two checks that cover every route at once so a new one
 // can't quietly skip them:
 //   1. every POST / PUT / DELETE refuses another site (Origin), with a real session;

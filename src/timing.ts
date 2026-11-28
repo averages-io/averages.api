@@ -1,4 +1,4 @@
-// Where a request's time goes, as a Server-Timing header (2026-11-13). DevTools shows it in a request's Timing tab
+// Where a request's time goes, as a Server-Timing header. DevTools shows it in a request's Timing tab
 // ("Server Timing"): our Worker's total, the feature switches (Flagship), and the time spent waiting on Schoology.
 // Durations, counts and Schoology paths with the ids taken out only: nothing about the student.
 import { AsyncLocalStorage } from "node:async_hooks";

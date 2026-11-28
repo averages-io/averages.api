@@ -15,14 +15,14 @@ export const DEFAULTS = {
   "live-grades": true,
   fullscreen: true,
   "schoology-oauth": true,
-  // Advanced translation's "Translate on our server" (2026-11-14). Off = only the Averages.io school can use it
+  // Advanced translation's "Translate on our server". Off = only the Averages.io school can use it
   // (fullscreenTester in src/index.ts: the app.schoology.com sandbox school, FULLSCREEN_SCHOOLS, and API-key
   // sign-ins). On = every student. Stays off until PowerSchool says in writing that Workers AI may process
   // Schoology data (Developer Terms §3.2.1: not outside the US without permission, and Workers AI doesn't
   // promise a region). On-device translation doesn't need it. Turn on in Flagship, or with
   // FEATURES_ON="server-translate" in wrangler.jsonc. Not in featureForRoute: /translate checks it itself.
   "server-translate": false,
-  // A.I. search on the student's own device (2026-11-15, the app's averages-ai.js). Off = only the Averages.io
+  // A.I. search on the student's own device (the app's averages-ai.js). Off = only the Averages.io
   // school sees it (same list as server-translate); on = every student. Nothing is sent to us or anyone: the model
   // runs in the browser. Turn on in Flagship, or with FEATURES_ON="ai-search".
   "ai-search": false,

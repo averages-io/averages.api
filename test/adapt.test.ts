@@ -357,7 +357,7 @@ console.log("\ndiscussions, new quizzes and Updated (2026-11-06)");
   check("a discussion's grade is found under its grade item", gb.categories[0].assignments.map((a: any) => [a.title, a.score ?? null]), [["Was George right?", 9]]);
 }
 {
-  // excused (exception 1, Schoology's grade docs): marked, so the app never calls it overdue (2026-11-14)
+  // excused (exception 1, Schoology's grade docs): marked, so the app never calls it overdue
   const work = [{ id: 801, title: "Excused one", type: "assignment", due: "2026-10-20 23:59:00", max_points: "10", grading_category: "1" }, { id: 802, title: "Missing one", type: "assignment", due: "2026-10-20 23:59:00", max_points: "10", grading_category: "1" }];
   const gb2 = adaptSchoologyGradebook({ categories: null, assignments: work, gradeEntry: { period: [{ assignment: [{ assignment_id: 801, grade: null, exception: 1, max_points: 10 }, { assignment_id: 802, grade: null, exception: 3, max_points: 10 }] }] } });
   const rows = gb2.categories.flatMap((c: any) => c.assignments).map((a: any) => [a.title, !!a.excused, !!a.missing]);

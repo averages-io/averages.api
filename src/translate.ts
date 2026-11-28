@@ -1,4 +1,4 @@
-// Advanced translation's server fallback (2026-11-15), an Averages Plus perk.
+// Advanced translation's server fallback, an Averages Plus perk.
 // The browser translates class names, titles, posts and messages on the device when it can
 // (public/js/averages-i18n.js). Only when it can't, and only if the student turned on
 // "Translate on our server", it sends them here: Workers AI's m2m100 translates them and we
@@ -6,7 +6,7 @@
 
 export const TRANSLATE_MODEL = "@cf/meta/m2m100-1.2b";
 /** The app's languages, as the model names them. */
-/** The app's languages, as the model names them: any of them to any other (2026-11-14: English too, for school content written in another language). */
+/** The app's languages, as the model names them: any of them to any other. */
 export const TARGETS: Record<string, string> = { en: "english", es: "spanish", fr: "french", pt: "portuguese", de: "german", zh: "chinese" };
 export const MAX_TEXTS = 40;
 export const MAX_CHARS = 1000;

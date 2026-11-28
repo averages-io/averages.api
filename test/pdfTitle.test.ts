@@ -1,4 +1,4 @@
-// The tab named after a PDF's own "Untitled" title (2026-11-28, Martin: files opened as "Untitled - <name>"): an empty
+// The tab named after a PDF's own "Untitled" title: an empty
 // document info is added at the end (src/pdfTitle.ts), so the viewer names the tab after the file.
 // Fixtures: 3 blank pages, Title "Untitled", made with pikepdf (classic xref, xref + object streams, linearized, encrypted).
 // Run: node --experimental-strip-types test/pdfTitle.test.ts

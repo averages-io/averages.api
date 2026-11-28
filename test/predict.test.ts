@@ -1,4 +1,4 @@
-// The predicted grade (src/adapt.ts projectGrade, 2026-11-09).
+// The predicted grade (src/adapt.ts projectGrade).
 import { projectGrade } from "../src/adapt.ts";
 
 let passed = 0, failed = 0;

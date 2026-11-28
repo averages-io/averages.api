@@ -58,7 +58,7 @@ export async function getRecipients(creds: Credentials): Promise<Raw[]> {
  * People in Schoology by name, for Add contacts (GET /search?type=user): counselors, librarians, other teachers.
  * Ids digits only, each once, never the student. Schoology's search covers every school on Schoology.
  *
- * mySchool (Settings → Only search my school, on by default; Martin, 2026-11-09): just the student's own school,
+ * mySchool (Settings → Only search my school, on by default): just the student's own school,
  * by school_id only (never buildings). Someone whose school Schoology doesn't say is left out, and if we can't tell
  * the student's school, nobody is shown. Off: everyone, whatever their district.
  */
@@ -323,7 +323,7 @@ export function adaptConversations(input: {
     if (inInbox && String(row?.message_status ?? "").toLowerCase() === "unread") entry.conv.unread = true;
     if (at > entry.conv.at) {
       entry.conv.at = at;
-      // a message that's only a file has no words: say so, not nothing (2026-11-26, Martin: the popup showed an empty message)
+      // a message that's only a file has no words: say so, not nothing
       const files = clip(toPlainText(row?.message ?? ""), 140) ? [] : messageFiles(row);
       entry.conv.preview = clip(toPlainText(row?.message ?? ""), 140) || (files.length ? clip(`📎 ${files.map((f) => f.name).join(", ")}`, 140) : "");
       entry.conv.time = at ? relativeTime(String(Math.floor(at / 1000)), now) : "";
@@ -343,8 +343,7 @@ export function adaptConversations(input: {
     CONVERSATIONS.push(entry.conv);
   }
   CONVERSATIONS.sort((a, b) => b.at - a.at || b.id.localeCompare(a.id));
-  // A second copy of a thread, under its own id, with no one else in it (2026-11-28, Martin: "the same convos are
-  // showing up twice", one under the classmate's name and one under "Schoology"): Schoology files some of a student's
+  // A second copy of a thread, under its own id, with no one else in it: Schoology files some of a student's
   // own messages in the inbox too, with only the student on them. It goes when a thread with someone in it has the same
   // subject and was last written to within 5 minutes of it.
   const SAME_MS = 5 * 60 * 1000;
@@ -608,7 +607,7 @@ export async function sendReply(creds: Credentials, me: string, input: { id: str
   const recipients = threadParticipants(rows, me);
   if (recipients.length === 0) return { ok: false, error: "no_recipients" };
   if (recipients.length > MAX_REPLY_RECIPIENTS) return { ok: false, error: "too_many_recipients" };
-  // A school that turned off messaging other students (2026-11-26 security pass): the app shows those conversations
+  // A school that turned off messaging other students: the app shows those conversations
   // read-only, and this holds the same line, so a reply can't be sent around it. Only when Schoology says no for
   // everyone in the conversation (a teacher in it, or no answer, and the reply goes as before).
   const { can } = await canMessage(creds, recipients);

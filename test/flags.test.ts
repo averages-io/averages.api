@@ -14,7 +14,7 @@ function check(name: string, actual: unknown, expected: unknown) {
   else { failed++; console.log(`  FAIL  ${name}\n        expected: ${e}\n        actual:   ${a}`); }
 }
 
-check("16 switches, in Martin's order (billing and calendar-sync added 2026-10-21, live-grades 2026-10-27, fullscreen 2026-10-28, schoology-oauth 2026-10-29; coursematerialpreview-feature removed 2026-11-10; server-translate 2026-11-14, ai-search 2026-11-15)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "turnin-feature", "messaging-features", "notifications-features", "billing", "calendar-sync", "live-grades", "fullscreen", "schoology-oauth", "server-translate", "ai-search"]);
+check("16 switches, in the dashboard's order (billing and calendar-sync added 2026-10-21, live-grades 2026-10-27, fullscreen 2026-10-28, schoology-oauth 2026-10-29; coursematerialpreview-feature removed 2026-11-10; server-translate 2026-11-14, ai-search 2026-11-15)", FEATURE_KEYS, ["canva-integration", "onedrive-integration", "drive-integration", "schoology-signin", "test-signin", "maintenance-banner", "turnin-feature", "messaging-features", "notifications-features", "billing", "calendar-sync", "live-grades", "fullscreen", "schoology-oauth", "server-translate", "ai-search"]);
 check("server translation: off by default, and /translate checks it itself (off = the Averages.io school only)", [featureForRoute("POST", "/translate"), DEFAULTS["server-translate"]], [[], false]);
 check("live grades need live-grades; the bundle never does", [featureForRoute("GET", "/data/grades"), featureForRoute("GET", "/data/bundle")], [["live-grades"], []]);
 check("calendar routes need calendar-sync, except turning it off", [featureForRoute("GET", "/calendar/status"), featureForRoute("POST", "/calendar"), featureForRoute("GET", "/calendar/abc.ics"), featureForRoute("DELETE", "/calendar")], [["calendar-sync"], ["calendar-sync"], ["calendar-sync"], []]);
@@ -89,7 +89,7 @@ check("reviewer sign-in off → 503 test-signin", await json(await signIn(OFF("t
 check("Schoology sign-in off → 503 schoology-signin", await json(await signIn(OFF("schoology-signin"), "abcdefghijklmnop", "abcdefghijklmnopqrstuvwxyz")), [503, { error: "feature_off", feature: "schoology-signin" }]);
 check("Schoology sign-in off doesn't stop the reviewer", (await signIn(OFF("schoology-signin"), "k".repeat(20), "r".repeat(20))).status !== 503, true);
 
-// Flagship is asked at most every FLAG_KEEP_MS per Worker; requests in between use that answer (2026-11-13)
+// Flagship is asked at most every FLAG_KEEP_MS per Worker; requests in between use that answer
 {
   let asks = 0, drive = true;
   const F = { getBooleanValue: async (k: string, d: boolean) => { asks++; return k === "drive-integration" ? drive : d; }, getStringValue: async () => "" };

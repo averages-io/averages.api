@@ -1,4 +1,4 @@
-// Security pass, 2026-11-26: every API answer carries "this is data, not a page" headers, and the newest inputs
+// Security pass: every API answer carries "this is data, not a page" headers, and the newest inputs
 // (dates added from a school calendar, which end up in calendar apps) can't break out of where they go.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/secsweep3.test.ts
 import app from "../src/index.ts";
