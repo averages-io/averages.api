@@ -175,6 +175,7 @@ import type { CanvaStore } from "./canvaStore.ts";
 import type { CloudStore } from "./cloudStore.ts";
 import type { BillingStore } from "./billingStore.ts";
 import { calendarRoutes, forgetCalendar } from "./calendar.ts";
+import { withoutPdfTitle } from "./pdfTitle.ts";
 import { forgetPlus, hasPlusNow, plusRequired } from "./plus.ts";
 import { checkTurnstile, turnstileHosts, turnstileOn } from "./turnstile.ts";
 import { liveCourses, liveEvery } from "./liveGrades.ts";
@@ -1747,6 +1748,9 @@ function viewResponse(upstream: Response, name: string): Response | null {
     "Content-Security-Policy": "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; object-src 'self'; frame-ancestors 'none'",
     "Referrer-Policy": "no-referrer",
   });
+  // a PDF's own title ("Untitled", very often) would name the tab: it's taken out so the file's name shows (src/pdfTitle.ts).
+  // The length then changes, so none is sent.
+  if (type === "application/pdf" && upstream.body) return new Response(withoutPdfTitle(upstream.body), { status: 200, headers });
   const length = upstream.headers.get("Content-Length");
   if (length) headers.set("Content-Length", length);
   return new Response(upstream.body, { status: 200, headers });
