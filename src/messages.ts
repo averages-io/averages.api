@@ -343,7 +343,15 @@ export function adaptConversations(input: {
     CONVERSATIONS.push(entry.conv);
   }
   CONVERSATIONS.sort((a, b) => b.at - a.at || b.id.localeCompare(a.id));
-  const kept = CONVERSATIONS.slice(0, MAX_CONVERSATIONS);
+  // A second copy of a thread, under its own id, with no one else in it (2026-11-28, Martin: "the same convos are
+  // showing up twice", one under the classmate's name and one under "Schoology"): Schoology files some of a student's
+  // own messages in the inbox too, with only the student on them. It goes when a thread with someone in it has the same
+  // subject and was last written to within 5 minutes of it.
+  const SAME_MS = 5 * 60 * 1000;
+  const ghost = (c: Conversation) => !c.personId && c.participants.length === 0
+    && CONVERSATIONS.some((o) => o !== c && !!o.personId && o.subject.toLowerCase() === c.subject.toLowerCase() && Math.abs(o.at - c.at) <= SAME_MS);
+  const real = CONVERSATIONS.filter((c) => !ghost(c));
+  const kept = real.slice(0, MAX_CONVERSATIONS);
   for (const conv of kept) {
     for (const id of [conv.personId, ...conv.participants]) {
       if (!id || PEOPLE[id]) continue;

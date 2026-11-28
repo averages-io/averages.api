@@ -36,6 +36,7 @@ function check(name: string, actual: unknown, expected: unknown) {
 }
 
 const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
 const NOW = Date.UTC(2026, 9, 6, 21, 5); // Tue Oct 6 2026, 2:05 PM in Los Angeles
 const unix = (ms: number) => String(Math.floor(ms / 1000));
 const ME = "1001";
@@ -93,6 +94,16 @@ console.log("\nthread list");
     "7002": { name: "Classmate" },
     "5009": { name: "Teacher" },
   });
+  {
+    // Schoology's own copy of a message the student sent, filed in their inbox under another id with only them on it
+    const twice = adaptConversations({
+      inbox: [{ id: 301, subject: "as", recipient_ids: ME, last_updated: unix(NOW - 19 * DAY), author_id: ME, message: "as" },
+        { id: 305, subject: "as", recipient_ids: ME, last_updated: unix(NOW - 2 * DAY), author_id: ME, message: "a note to myself" }],
+      sent: [{ id: 300, subject: "as", recipient_ids: "7001", last_updated: unix(NOW - 19 * DAY + 20000), author_id: ME, message: "as" }],
+      names: new Map([["7001", "Ashton B."]]), me: ME, now: NOW,
+    });
+    check("the same message twice: shown once, with the classmate (2026-11-28)", twice.CONVERSATIONS.map((c) => [c.id, c.personId]), [["305", ""], ["300", "7001"]]);
+  }
   const many = adaptConversations({ inbox: Array.from({ length: 70 }, (_, i) => ({ id: i + 1, author_id: "5001", last_updated: unix(NOW - i * HOUR) })), sent: null, names: new Map(), me: ME, now: NOW });
   check("at most 50", [many.CONVERSATIONS.length, many.CONVERSATIONS[0].id], [50, "1"]);
 }
