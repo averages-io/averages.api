@@ -1,4 +1,4 @@
-// Design app integration.
+// Canva Connect integration.
 
 export const CANVA_API = "https://api.canva.com/rest/v1";
 const AUTHORIZE = "https://www.canva.com/api/oauth/authorize";
@@ -348,7 +348,7 @@ export class CanvaAccount {
     pending[state] = { verifier, returnTo: safeAppPath(returnTo, "/settings"), exp: nowS() + CONNECT_TTL_S };
     await this.storage.put("connect", pending);
 
-    // Built by hand: URLSearchParams encodes spaces as "+", and the design app's scope
+    // Built by hand: URLSearchParams encodes spaces as "+", and Canva's scope
     // separator has to be %20.
     const q = ([
       ["client_id", this.env.CANVA_CLIENT_ID!],
@@ -426,7 +426,7 @@ export class CanvaAccount {
         const tokens = await this.loadTokens(uid);
         if (tokens) {
           const ok = await revokeToken(this.env, tokens.refresh_token);
-          // A refresh token the design app no longer honours: the access token still ends the session.
+          // A refresh token Canva no longer honours: the access token still ends the session.
           if (!ok && tokens.expires_at > nowS()) await revokeToken(this.env, tokens.access_token);
         }
       } catch {
@@ -460,7 +460,7 @@ export class CanvaAccount {
       this.refreshing = (async () => {
         try {
           const fresh = await tokenRequest(this.env, { grant_type: "refresh_token", refresh_token: tokens.refresh_token });
-          // Disconnected while this was on its way to the design app: don't bring the connection back.
+          // Disconnected while this was on its way to Canva: don't bring the connection back.
           if (gen !== this.generation) throw new CanvaError("canva_not_connected", 409);
           if (!fresh.scope && tokens.scope) fresh.scope = tokens.scope;
           // Save BEFORE using it: the new refresh token is now the only valid one.
@@ -506,7 +506,7 @@ export class CanvaAccount {
   /* ── Return contexts ── */
 
   async saveReturn(ctx: ReturnContext): Promise<string> {
-    const key = rand(18); // 24 characters; the design app allows up to 50
+    const key = rand(18); // 24 characters; Canva allows up to 50
     const all = prune(await this.storage.get<Record<string, ReturnContext>>("returns"), 20);
     all[key] = { designId: ctx.designId, returnTo: safeAppPath(ctx.returnTo, "/"), exp: nowS() + RETURN_TTL_S };
     await this.storage.put("returns", all);
@@ -678,7 +678,7 @@ function toDesign(d: any): DesignInfo {
     editUrl: String(d?.urls?.edit_url ?? ""),
     viewUrl: String(d?.urls?.view_url ?? ""),
     thumbnailUrl: String(d?.thumbnail?.url ?? ""),
-    // The design app sends seconds; tolerate milliseconds too.
+    // Canva sends seconds; tolerate milliseconds too.
     updatedAt: updated > 1e12 ? updated : updated * 1000,
     designTypes: Array.isArray(d?.design_types) ? d.design_types.filter((t: unknown) => typeof t === "string" && /^[a-z_]{1,20}$/.test(t)).slice(0, 6) : [],
   };
@@ -696,7 +696,7 @@ export async function importFile(
   mimeType?: string,
   wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
 ): Promise<DesignInfo[]> {
-  // Standard base64 with padding (the design app's own example ends in "=="), of the UTF-8 title.
+  // Standard base64 with padding (Canva's own example ends in "=="), of the UTF-8 title.
   const titleBytes = new TextEncoder().encode(importTitle(filename));
   const meta: Record<string, string> = { title_base64: btoa(String.fromCharCode(...titleBytes)) };
   if (mimeType) meta.mime_type = mimeType;
@@ -732,7 +732,7 @@ export async function importFile(
 export async function getDesign(token: string, designId: string): Promise<DesignInfo | null> {
   const res = await canvaFetch(`${CANVA_API}/designs/${encodeURIComponent(designId)}`, { headers: bearer(token) });
   // 404: deleted (or never edited and expired). 403: belongs to a different
-  // account than the one connected now. Either way it's not openable.
+  // Canva account than the one connected now. Either way it's not openable.
   if (res.status === 404 || res.status === 403) return null;
   if (!res.ok) throw failure(res, "design");
   const json = await readJson(res);
@@ -816,7 +816,7 @@ async function keyForKid(kid: string): Promise<CryptoKey> {
     const res = await canvaFetch(`${CANVA_API}/connect/keys`);
     if (!res.ok) throw new CanvaError("canva_jwks_failed", 502);
     const keys: Jwk[] = (await readJson(res))?.keys ?? [];
-    // Replace the whole set, so a key the design app has withdrawn stops being trusted.
+    // Replace the whole set, so a key Canva has withdrawn stops being trusted.
     const next = new Map<string, CryptoKey>();
     for (const k of Array.isArray(keys) ? keys : []) {
       if (!k?.kid || k.kty !== "OKP" || k.crv !== "Ed25519" || typeof k.x !== "string") continue;
@@ -945,7 +945,7 @@ export async function probePermissions(
   if (!designId) return { designId, folderId, results };
 
   const D = `/designs/${designId}`;
-  // Reading: where would the list of people / link access live? The design app nests
+  // Reading: where would the list of people / link access live? Canva nests
   // things under the design (…/comments, /pages, /export-formats), so the
   // likeliest home is …/designs/{id}/permissions. Then the two flat styles.
   const reads: string[] = [
@@ -974,12 +974,12 @@ export async function probePermissions(
     }
     await call("GET", p, undefined);
   }
-  // A full design read: does the design app now include sharing info in the design itself?
+  // A full design read: does Canva now include sharing info in the design itself?
   if (budgetLeft()) await call("GET", D, undefined);
   else skipped++;
 
   if (opts.write) {
-    // Write guesses on the TEST design only, stopping at the first one the design app accepts.
+    // Write guesses on the TEST design only, stopping at the first Canva accepts.
     const writes: [string, string, any][] = [
       ["POST", `${D}/permissions`, { type: "anyone", role: "viewer" }],
       ["POST", `${D}/permissions`, { audience: "anyone_with_link", role: "view" }],
@@ -996,7 +996,7 @@ export async function probePermissions(
         break;
       }
       const r = await call(method, path, body);
-      if (r.status >= 200 && r.status < 300) break; // The design app accepted one: stop.
+      if (r.status >= 200 && r.status < 300) break; // Canva accepted one: stop.
     }
     if (folderId) {
       const folderWrites: [string, string, any][] = [
@@ -1039,7 +1039,7 @@ export const SWEEP_FLAT = [
   "/permissions", "/permissions/designs/{D}", "/permissions/folders/{F}", "/design-permissions", "/design_permissions",
   "/sharing", "/shares", "/share-links", "/links", "/access",
 ];
-const SWEEP_PER_BATCH = 40;   // + 2 checks + our own storage object calls stays under 50
+const SWEEP_PER_BATCH = 40;   // + 2 checks + our own Durable Object calls stays under 50
 
 export interface SweepStep { method: string; path: string; body: any }
 
@@ -1082,7 +1082,7 @@ export async function probeSweep(
     } catch (error) {
       text = error instanceof Error ? error.message : String(error);
     }
-    // The design app's answers carry signed edit/view links: never pass those on.
+    // Canva's design answers carry signed edit/view links: never pass those on.
     const shown = /"urls"\s*:/.test(text) ? text.replace(/"urls"\s*:\s*\{[^}]*\}/g, '"urls":"(hidden)"') : text;
     results.push({ method, path, body: body ?? null, status, answer: shown.slice(0, 600) });
     return { status, full: text };

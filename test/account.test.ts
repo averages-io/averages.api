@@ -108,7 +108,7 @@ console.log("\nstatus page");
 
 console.log("\ndelete your account: everything, or it says so");
 {
-  // pictures in file storage: all gone
+  // pictures in R2: all gone
   const objs = new Map([["u/r:reviewer/photo", 1], ["u/r:reviewer/background", 1], ["u/someone-else/photo", 1]]);
   ENV.MEDIA = { async get() { return null; }, async list({ prefix }: any) { return { objects: [...objs.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })), truncated: false }; }, async delete(keys: string[]) { for (const k of keys) objs.delete(k); } };
   let r = await call("/account", { method: "DELETE" });

@@ -1,4 +1,4 @@
-// Averages Plus: a monthly subscription through the payment provider.
+// Averages Plus: a monthly subscription through Stripe.
 
 import type { CanvaStorage } from "./canva.ts";
 

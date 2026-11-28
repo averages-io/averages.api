@@ -116,7 +116,7 @@ console.log("\nmiddleware");
   check("sign-in: 30 a minute per IP", [(await req("POST", "/auth/session", "192.0.2.9")).status, (await req("POST", "/auth/session", "192.0.2.10")).status], [429, 200]);
   check("preflights and the health check are never limited", [(await req("OPTIONS", "/auth/session", "192.0.2.9")).status, (await req("GET", "/", "192.0.2.9")).status], [200, 200]);
 
-  // An optional rate-limiting binding: asked too; refusing is final, failing is ignored.
+  // An optional Workers Rate Limiting binding: asked too; refusing is final, failing is ignored.
   store.clear();
   uid = "4242";
   const keys: string[] = [];

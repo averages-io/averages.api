@@ -1,4 +1,4 @@
-// Save folder to the design app: the job store, one file's run from the queue (with fakes for Schoology and the design app).
+// Save folder to Canva: the job store, one file's run from the queue (with fakes for Schoology and Canva).
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/canvaSave.test.ts
 import app, { retryHandlers } from "../src/index.ts";
 import { openValue, sealSession } from "../src/session.ts";
@@ -195,7 +195,7 @@ async function call(path: string, opts: { method?: string; body?: unknown; env?:
   const status = await call(`/canva/save-folder/${r.data.job}`);
   check("progress", [status.status, status.data.total, status.data.done], [200, 3, 0]);
 
-  // The queue runs file 0 against fake Schoology and design app.
+  // The queue runs file 0 against fake Schoology and Canva.
   const h = retryHandlers({ ...ENV } as any);
   check("handler: a message for a file already finished or gone is dropped", await quiet(() => h.canvaSave("ef".repeat(32), "nosuchjob1", 0)), "drop");
 

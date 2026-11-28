@@ -1,4 +1,4 @@
-// Classroom data for a Classroom sign-in: the same shapes the pages already render for Schoology (see adapt.ts).
+// Google Classroom data for a Google sign-in: the same shapes the pages already render for Schoology (see adapt.ts).
 
 import { colorForCourse, computeProjectedGPA, letterFromPct, parsePeriod, predict, sectionLabel, type AdaptedCourse } from "./adapt.ts";
 
@@ -494,7 +494,7 @@ export function adaptClassroomBundle(raw: CourseRaw[], now: number, tz: string) 
     };
 
     // A teacher can hide the overall grade from students in Classroom; it's
-    // hidden here too (respect displaySetting). Individual grades
+    // hidden here too (Google: respect displaySetting). Individual grades
     // still show, as they do in Classroom.
     const hidden = ["HIDE_OVERALL_GRADE", "SHOW_TEACHERS_ONLY"].includes(String(course.gradebookSettings?.displaySetting ?? ""));
     const pct = hidden ? null : overallPct(graded, course.gradebookSettings);
@@ -693,7 +693,7 @@ export function adaptClassroomAssignment(work: Raw, sub: Raw | undefined | null,
     due: due === null ? "" : formatDueIn(due, tz),
     dueAt: due === null ? "" : new Date(due).toISOString(),
     type: "assignment",
-    // Classroom files live in the cloud drive: they open there, never through our server.
+    // Classroom files live in Google Drive: they open there, never through our server.
     files: [],
     links: materials.map((m: ClassroomMaterial) => ({ title: m.title, url: m.url })),
     materials,

@@ -105,7 +105,7 @@ export function kvFromSyncStore(getStore: () => SyncStoreLike): KVLike {
       try {
         return JSON.parse(raw);
       } catch {
-        return null; // a damaged record reads as "nothing saved", same as the old store did
+        return null; // a damaged record reads as "nothing saved", same as KV did
       }
     },
     async put(key, value) {

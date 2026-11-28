@@ -1,4 +1,4 @@
-// One storage object per student for Averages Plus: their customer and subscription ids and the subscription's status.
+// One Durable Object per student for Averages Plus: their Stripe customer and subscription ids and the subscription's status.
 
 import { DurableObject } from "cloudflare:workers";
 import { BillingAccount, type BillingRecord, type BillingStatus, type BillingUpdate } from "./billing.ts";

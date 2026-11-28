@@ -1,4 +1,4 @@
-// Storage for "Sync Across Devices": one small storage object per student.
+// Storage for "Sync Across Devices": one small Durable Object per student.
 
 import { DurableObject } from "cloudflare:workers";
 

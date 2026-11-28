@@ -44,7 +44,7 @@ export interface BillingDeps {
 function billingFailure(c: any, error: unknown, fallback: string) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   const code = message.match(/\bbilling_[a-z_]+/)?.[0] ?? fallback;
-  // BillingErrors were already logged where they happened (without the provider's text).
+  // BillingErrors were already logged where they happened (without Stripe's text).
   if (!(error instanceof BillingError)) console.error(fallback, message);
   return c.json({ error: code }, statusForBillingCode(code));
 }

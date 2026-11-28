@@ -1,4 +1,4 @@
-// Design folders on the Files page: the routes in src/canvaFolders.ts, the switch, the scope check and GET /canva/status's `folders`.
+// Canva folders on the Files page: the routes in src/canvaFolders.ts, the switch, the scope check and GET /canva/status's `folders`.
 import app from "../src/index.ts";
 import { sealSession } from "../src/session.ts";
 import { adaptFolderItems, cleanFolderName, folderFailure } from "../src/canvaFolders.ts";
@@ -33,7 +33,7 @@ function fakeCanva(state: { connected: boolean; scopes: string[] | null; asked: 
   return ns;
 }
 
-// The design app's side.
+// Canva's side.
 const calls: { method: string; url: string; body: any; auth: string | null }[] = [];
 let nextAnswer: { status: number; body?: any } | null = null;
 const realFetch = globalThis.fetch;

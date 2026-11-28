@@ -1,4 +1,4 @@
-// Drive files over 10 MB through our API (src/driveExport.ts).
+// Google files over 10 MB through our API (src/driveExport.ts).
 import { exportFileName, exportHostOk, isDriveExportType, openDriveExport, DriveExportError } from "../src/driveExport.ts";
 
 let passed = 0, failed = 0;

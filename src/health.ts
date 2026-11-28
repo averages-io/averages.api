@@ -9,7 +9,7 @@
 //  - our own pieces: Sync, notifications and calendar sync each read their own test record; profile pictures list
 //    the picture storage. An error means it's down.
 //  - A.I. search: the files every browser downloads to run it (both models and the ONNX Runtime) must
-//    be in the bucket averages-ai (the API's read-only AI_FILES binding, asked for their size only). Without the
+//    be in the R2 bucket averages-ai (the API's read-only AI_FILES binding, asked for their size only). Without the
 //    binding, they're asked for from app.averages.io/ai/ (HEAD). A missing file is down too: the download fails there.
 // While anything is down, the pages' banner says what (unless the maintenance switch is on: its message wins), and
 // api.averages.io/status shows each part. No student data is touched: the test records hold nothing.

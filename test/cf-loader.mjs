@@ -11,7 +11,7 @@ export async function resolve(specifier, context, next) {
     };
   }
   if (specifier === "@cloudflare/containers") {
-    // The real package only runs on the platform (and its files don't load in Node): a stand-in
+    // The real package only runs inside Cloudflare (and its files don't load in Node): a stand-in
     // whose getRandom hands back the binding's own stub, so tests can fake the container.
     return {
       shortCircuit: true,

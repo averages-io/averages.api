@@ -1,4 +1,4 @@
-// Cloud drives run in the student's browser: their drive tokens never reach this Worker.
+// Google Drive and OneDrive run in the student's browser: their Google and Microsoft tokens never reach this Worker.
 
 export type CloudEnv = {
   GOOGLE_DRIVE_CLIENT_ID?: string;
@@ -29,8 +29,8 @@ export function pick(value: unknown, shape: RegExp): string | null {
 }
 
 export function cloudConfig(env: CloudEnv): CloudConfig {
-  // The drive uses its own client when GOOGLE_DRIVE_CLIENT_ID is set (same
-  // cloud project, so the same consent screen and Picker project
+  // Google Drive uses its own client when GOOGLE_DRIVE_CLIENT_ID is set (same
+  // Google Cloud project, so the same consent screen and Picker project
   // number); otherwise the sign-in client, GOOGLE_CLIENT_ID.
   const googleClientId = pick(env.GOOGLE_DRIVE_CLIENT_ID, GOOGLE_CLIENT_ID_RE) ?? pick(env.GOOGLE_CLIENT_ID, GOOGLE_CLIENT_ID_RE);
   const msClientId = pick(env.MS_CLIENT_ID, MS_CLIENT_ID_RE);

@@ -1,10 +1,10 @@
-// Drive files over 10 MB as a document, spreadsheet, slides, PDF or CSV.
+// Google files over 10 MB as Word, Excel, PowerPoint, PDF or CSV.
 //
-// The drive's files.export, which the browser uses, stops at 10 MB (exportSizeLimitExceeded). A drive file's own
+// Drive's files.export, which the browser uses, stops at 10 MB (exportSizeLimitExceeded). A Google file's own
 // export links on docs.google.com don't have that limit. They can't be fetched from the browser (no CORS), so the
 // API fetches one here with the student's own Drive token and streams it back, never stored.
 //
-// Safety: the browser sends only a file id and a type. The link comes from the drive's own answer for that file and
+// Safety: the browser sends only a file id and a type. The link comes from Google's own answer for that file and
 // must be https on docs.google.com; redirects are followed by hand (3 at most) and only to docs.google.com or
 // *.googleusercontent.com, and the token is only ever sent to docs.google.com.
 
@@ -125,7 +125,7 @@ async function openTraced(token: string, fileId: string, as: DriveExportType, f:
     await res.body?.cancel().catch(() => {});
     throw new DriveExportError("cloud_download_failed", 502);
   }
-  // A sign-in page instead of the file means the drive didn't take the token.
+  // A sign-in page instead of the file means Google didn't take the token.
   const got = (res.headers.get("Content-Type") || "").toLowerCase();
   trace.push(`type ${got.split(";")[0] || "none"}`);
   if (got.startsWith("text/html")) {

@@ -1,4 +1,4 @@
-// Signing out with ?forget=1: the app sends it when Sync Across Devices is off, and the API then disconnects the design app.
+// Signing out with ?forget=1: the app sends it when Sync Across Devices is off, and the API then disconnects Canva.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/signout.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";

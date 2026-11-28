@@ -1,4 +1,4 @@
-// Tests for turning in work (src/submit.ts, src/submitRoutes.ts) and the design PDF export (src/canvaExport.ts.
+// Tests for turning in work (src/submit.ts, src/submitRoutes.ts) and the Canva PDF export (src/canvaExport.ts.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/submit.test.ts
 
 import { Hono } from "hono";
@@ -425,7 +425,7 @@ async function put(token: string, bytes: Uint8Array, opts: { cookie?: string; le
   check("signed for PUT on the full location, query included", await signatureOk("PUT", LOCATION, sent.headers.get("Authorization") ?? ""), true);
   check("a redirect isn't followed", sent.init.redirect, "manual");
 
-  // On the platform, a FixedLengthStream carries the body, so the exact length is declared and enforced.
+  // Workers: a FixedLengthStream carries the body, so the exact length is declared and enforced.
   const g = globalThis as any;
   g.FixedLengthStream = class {
     readable: ReadableStream;

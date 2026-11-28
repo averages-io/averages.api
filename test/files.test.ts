@@ -82,7 +82,7 @@ const doc = (id: string, title: string, files: unknown) => ({ id, title, attachm
 }
 
 {
-  // Schoology's PDF copy of an uploaded file (made for its viewer), used to preview office files.
+  // Schoology's PDF copy of an uploaded file (made for its viewer), used to preview Office files.
   const CONV = (id: string, extra: Record<string, unknown> = {}) => ({ converted_status: "1", converted_extension: "pdf", converted_download_path: `https://api.schoology.com/v1/attachment/${id}/conversion/file.pdf`, ...extra });
   const f = (id: string, filename: string, extra: Record<string, unknown> = {}) => ({ id, filename, title: filename, download_path: `https://api.schoology.com/v1/attachment/${id}/source/x`, ...extra });
   const raw = { attachments: { files: { file: [

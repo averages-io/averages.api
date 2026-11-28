@@ -55,7 +55,7 @@ export function ruleFor(method: string, path: string): RateRule | null {
   if (method === "POST" && path === "/schools/apply/verify") return RATE_RULES.applyVerify;
   if (method === "POST" && path === "/email/code") return RATE_RULES.emailCode;
   if (method === "POST" && path === "/email/verify") return RATE_RULES.emailVerify;
-  // The email check looks the domain up (DNS); the suggested email asks the payment provider
+  // The email check looks the domain up (DNS); the suggested email asks Stripe
   if (method === "POST" && path === "/email/check") return RATE_RULES.data;
   if (method === "POST" && path === "/auth/signout-everywhere") return RATE_RULES.send;
   if (method === "POST" && path === "/csp-report") return RATE_RULES.csp;

@@ -19,7 +19,7 @@
     "CANVA_PERMISSION_PROBE": "0",
     // 1 = Fullscreen for everyone (while the fullscreen switch is on); 0 = only app.schoology.com sign-ins and API keys.
     "FULLSCREEN_PUBLIC": "1",
-    // Invisible bot check on the sign-in page (src/turnstile.ts). The secret is TURNSTILE_SECRET
+    // Invisible Turnstile on the sign-in page (src/turnstile.ts). The secret is TURNSTILE_SECRET
     // (npx wrangler secret put TURNSTILE_SECRET); until it's set, the check stays off. Tokens are only taken from
     // TURNSTILE_HOSTNAMES (never localhost here; wrangler dev on this machine adds it by itself).
     "TURNSTILE_SITE_KEY": "0x4AAAAAAGPcp9YvLlPAQg1C",
@@ -32,7 +32,7 @@
       { "name": "CANVA", "class_name": "CanvaStore" },
       { "name": "PUSH", "class_name": "PushStore" },
       { "name": "CLOUD", "class_name": "CloudStore" },
-      // Averages Plus (src/billing.ts): billing customer / subscription per student, US jurisdiction.
+      // Averages Plus (src/billing.ts): Stripe customer / subscription per student, US jurisdiction.
       { "name": "BILLING", "class_name": "BillingStore" },
       // Calendar sync, an Averages Plus perk (src/calendar.ts): one per student link and one per feed, US jurisdiction.
       { "name": "CALENDAR", "class_name": "CalendarStore" },
@@ -42,14 +42,14 @@
       { "name": "SESSIONS", "class_name": "SessionGuard" }
     ]
   },
-  // Hosted model: Advanced translation's server fallback, a Plus perk (src/translate.ts).
+  // Workers AI: Advanced translation's server fallback, a Plus perk (src/translate.ts).
   // The "server-translate" switch (src/flags.ts, off by default): off = only the Averages.io school can use it
   // (app.schoology.com, FULLSCREEN_SCHOOLS, API-key sign-ins); on = every student. Ask PowerSchool before turning
-  // it on, since the hosted model doesn't promise to process in the US. To turn it on without the flag service, add to "vars":
+  // it on, since Workers AI doesn't promise to process in the US. To turn it on without Flagship, add to "vars":
   //   "FEATURES_ON": "server-translate"
   "ai": { "binding": "AI" },
   "flagship": [{ "binding": "FLAGS", "app_id": "005ce593-1d7c-4a30-80f9-18f7efe7f20d" }],
-  // "Verify your email" codes (src/emailCode.ts): the platform's email service, from averages.io only.
+  // "Verify your email" codes (src/emailCode.ts): Cloudflare Email Service, from averages.io only.
   // averages.io must be onboarded once in the dashboard: Compute > Email Service > Email Sending > Onboard Domain.
   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["no-reply@averages.io"] }],
   "ratelimits": [
@@ -71,9 +71,9 @@
     { "name": "RATE_LIMIT_TRANSLATE", "namespace_id": "1015", "simple": { "limit": 20, "period": 60 } },
     { "name": "RATE_LIMIT_LINKS", "namespace_id": "1017", "simple": { "limit": 60, "period": 60 } }
   ],
-  // No containers: the document converter for designs is gone ; migration v10 below deletes its storage object class.
+  // No containers: the Word converter for Canva Docs is gone ; migration v10 below deletes its Durable Object class.
   // Queues are parked for launch (scope-and-priorities.md): no real
-  // users yet, so nothing to retry and nobody saving folders to the design app. The code
+  // users yet, so nothing to retry and nobody saving folders to Canva. The code
   // in src/retryQueue.ts + src/canvaSave.ts stays and no-ops without the RETRY
   // binding (enqueueRetry returns false; the `queue` export is never invoked).
   // To switch back on later: uncomment, then `npx wrangler queues create averages-retry`.
