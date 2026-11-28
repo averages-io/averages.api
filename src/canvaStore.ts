@@ -1,4 +1,4 @@
-// One Durable Object per student for their Canva connection.
+// One storage object per student for their design app connection.
 
 import { DurableObject } from "cloudflare:workers";
 import { CanvaAccount, type CanvaConfig, type Draft, type ReturnContext } from "./canva.ts";

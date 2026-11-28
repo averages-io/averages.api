@@ -1,4 +1,4 @@
-// Retries through Cloudflare Queues: a send that failed for a passing reason is tried again a little later, instead of being lost.
+// Retries through a queue: a send that failed for a passing reason is tried again a little later, instead of being lost.
 
 /** The queue's messages. Short keys: each delivery counts per 64 KB, but small is cheaper to log and read. */
 export interface RetryNote {

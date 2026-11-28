@@ -56,7 +56,7 @@ class FakeStorage {
 }
 
 /* Plus per student, as the BillingStore would say. */
-const plusOf = new Map<string, string>(); // uid -> Stripe status
+const plusOf = new Map<string, string>(); // uid -> billing status
 let billingDown = false;
 const plusStoreFor = (_env: any, uid: string) => ({
   status: async () => {
@@ -405,7 +405,7 @@ section("Worker: early access and Plus ending");
     check("…and its routes open without Plus", anyone.status !== 503, true);
   }
 
-  // Plus ends through Stripe's webhook: notifications and the calendar link go.
+  // Plus ends through the billing webhook: notifications and the calendar link go.
   calendarRecs.set("u:9101", { sealedToken: "x", hash: "abc", createdAt: 1 });
   calendarRecs.set("f:abc", { uid: "9101" });
   const payload = JSON.stringify({ id: "evt_end", type: "customer.subscription.deleted", created: 2, data: { object: { id: "sub_1", object: "subscription", customer: "cus_1", status: "canceled", metadata: { uid: "9101" }, items: { data: [] } } } });

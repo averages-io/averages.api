@@ -80,7 +80,7 @@ console.log("\nloadSyncRecord defensiveness against malformed/pre-migration stor
 {
   const kv = fakeKV();
   // @ts-ignore — deliberately writing something not shaped like a SyncRecord,
-  // simulating either an old format or hand-edited KV data.
+  // simulating either an old format or hand-edited stored data.
   await kv.put("sync:u3", JSON.stringify({ settings: { a: 1 } })); // no updatedAt at all
   const loaded = await loadSyncRecord(kv, "u3");
   check("missing updatedAt falls back to ''", loaded.updatedAt, "");

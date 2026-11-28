@@ -1,4 +1,4 @@
-// Canva permission probe: GET /canva/connect?probe=1 and POST /canva/probe, the gates around them.
+// Design app permission probe: GET /canva/connect?probe=1 and POST /canva/probe, the gates around them.
 import app from "../src/index.ts";
 import { sealSession } from "../src/session.ts";
 import { CanvaAccount, PROBE_SCOPES, PROBE_TITLE, SWEEP_BATCHES, sweepPlan, type CanvaStorage } from "../src/canva.ts";

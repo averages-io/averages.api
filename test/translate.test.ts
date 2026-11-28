@@ -1,4 +1,4 @@
-// Advanced translation's server fallback: POST /translate (src/translate.ts), Workers AI faked here.
+// Advanced translation's server fallback: POST /translate (src/translate.ts), the hosted model faked here.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/translate.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";

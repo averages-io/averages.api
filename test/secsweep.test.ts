@@ -1,4 +1,4 @@
-// Security sweep: adversarial pass over the surfaces added since the Sept/Oct audits — the Stripe webhook.
+// Security sweep: adversarial pass over the surfaces added since the Sept/Oct audits — the billing webhook.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/secsweep.test.ts
 import app from "../src/index.ts";
 import { sealSession, sealValue, SESSION_COOKIE, DEMO_UID } from "../src/session.ts";
@@ -26,7 +26,7 @@ function fakeR2() {
     async list(opts?: any) { const pre = opts?.prefix ?? ""; return { objects: [...m.keys()].filter(k => k.startsWith(pre)).map(key => ({ key })), truncated: false }; },
   };
 }
-// One in-memory Durable Object namespace shared by BILLING/CALENDAR, keyed by name.
+// One in-memory storage object namespace shared by BILLING/CALENDAR, keyed by name.
 function fakeDONamespace(impl: (name: string) => any) {
   const inst = new Map<string, any>();
   const ns: any = {

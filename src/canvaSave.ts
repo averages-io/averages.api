@@ -1,4 +1,4 @@
-// Save a folder to Canva: every file in one of the teacher's Course Materials folders becomes a design in the student's.
+// Save a folder to the design app: every file in one of the teacher's Course Materials folders becomes a design in the student's.
 
 import type { RetryOutcome } from "./retryQueue.ts";
 
@@ -274,7 +274,7 @@ export async function saveOneFile(deps: SaveFileDeps): Promise<RetryOutcome> {
       const { bytes, contentType } = await deps.download(session, file.downloadPath);
       designs = await deps.importFile(token, name, bytes, contentType);
     } catch (error) {
-      // Saved before (this folder, an earlier try, or Edit in Canva): use that design.
+      // Saved before (this folder, an earlier try, or Edit in the design app): use that design.
       if (!(error instanceof Error && error.message.includes("canva_duplicate_import"))) throw error;
       const found = await deps.findImported(token, name);
       if (!found) throw error;

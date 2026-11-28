@@ -204,8 +204,8 @@ import { canvaFolderRoutes, createFolder, moveItem } from "./canvaFolders.ts";
 import { answerUnlessSame, FP_HEADER } from "./fingerprint.ts";
 import { cleanFolderName, newJobId, parseSaveFiles, SAVE_CRED_TTL_S, SAVE_JOB_RE, SAVE_MAX_FILES, SAVE_SPACING_S, saveOneFile } from "./canvaSave.ts";
 
-// The Durable Object classes have to be exported from the Worker's main module
-// for Cloudflare to find them (see wrangler.jsonc's durable_objects).
+// The storage object classes have to be exported from the Worker's main module
+// for the platform to find them (see wrangler.jsonc's durable_objects).
 export { SyncStore } from "./syncStore.ts";
 export { CanvaStore } from "./canvaStore.ts";
 export { CloudStore } from "./cloudStore.ts";
@@ -750,7 +750,7 @@ app.delete("/auth/session", async (c) => {
   if (session && !isDemo(session)) c.executionCtx.waitUntil(forgetCalendar(c.env as any, session.uid, c.req.url));
   if (forget && session && !isDemo(session)) c.executionCtx.waitUntil(forgetConnections(c.env, session.uid, c.req.url));
   endSession(c);
-  // A Google sign-in's refreshed access token, if any (see googleAccess).
+  // A drive sign-in's refreshed access token, if any (see googleAccess).
   c.header("Set-Cookie", clearAccessCookie(!isLocalRequest(c.req.url)), { append: true });
   // An older Schoology session's name (see /auth/me).
   c.header("Set-Cookie", clearProfileCookie(!isLocalRequest(c.req.url)), { append: true });
@@ -836,7 +836,7 @@ app.get("/auth/schoology/status", (c) => {
   const sandbox = isSandboxConsumer(consumer);
   const on = !!consumer && featureOn(c.env, "schoology-oauth") && (!sandbox || featureOn(c.env, "test-signin"));
   c.header("Cache-Control", "no-store");
-  // the sign-in page's invisible Turnstile check (src/turnstile.ts): its public site key, when it's on
+  // the sign-in page's invisible bot check (src/turnstile.ts): its public site key, when it's on
   return c.json({ on, ...(turnstileOn(c.env as any) ? { turnstile: (c.env as any).TURNSTILE_SITE_KEY } : {}) });
 });
 
@@ -1214,7 +1214,7 @@ app.delete("/sync/settings", requireSession, async (c) => {
     return c.json({ error: "not_available_in_demo" }, 403);
   }
   await deleteSyncRecord(syncKV(c.env, session.uid, c.req.url), session.uid);
-  // The profile photo and background in R2 (src/media.ts) are Sync data too.
+  // The profile photo and background in file storage (src/media.ts) are Sync data too.
   await deleteAllMedia(c.env.MEDIA as unknown as MediaBucket | undefined, session.uid);
   return c.json({ ok: true });
 });
@@ -1497,7 +1497,7 @@ async function sessionFrom(c: any): Promise<SessionData | null> {
 
 /** An error code safe to hand to the app; anything unexpected becomes `fallback` (and is logged). */
 function errorCode(error: unknown, fallback: string): string {
-  // Errors from the Durable Object arrive over RPC as plain Errors whose
+  // Errors from the storage object arrive over RPC as plain Errors whose
   // message may be prefixed with the original class ("CanvaError: canva_..."),
   // so the code is picked out rather than compared whole.
   const message = error instanceof Error ? error.message : String(error ?? "");
@@ -1657,7 +1657,7 @@ app.get("/data/attachment", async (c) => {
   const session = await sessionFrom(c);
   if (!session) return c.json({ error: "not_authenticated" }, 401);
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
-  // Google Classroom files live in Google Drive and open there; they never pass through this Worker.
+  // Classroom files live in the cloud drive and open there; they never pass through this Worker.
   if (isGoogle(session)) return c.json({ error: "classroom_files_open_in_drive" }, 404);
   const section = c.req.query("section") ?? "";
   const assignment = c.req.query("assignment") ?? "";
@@ -1800,7 +1800,7 @@ app.get("/data/files", async (c) => {
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
   c.header("Cache-Control", "private, no-store");
   if (isGoogle(session)) {
-    // Google Drive files posted in the student's classes, as links that open in Google Drive.
+    // Drive files posted in the student's classes, as links that open in the drive.
     try {
       const accessToken = await googleAccess(c, session);
       const budget = new CallBudget(CALL_BUDGET);
@@ -1928,7 +1928,7 @@ app.get("/data/submission-file", async (c) => {
   const session = await sessionFrom(c);
   if (!session) return c.json({ error: "not_authenticated" }, 401);
   if (isDemo(session)) return c.json({ error: "not_available_in_demo" }, 403);
-  // Google Classroom files live in Google Drive and open there; they never pass through this Worker.
+  // Classroom files live in the cloud drive and open there; they never pass through this Worker.
   if (isGoogle(session)) return c.json({ error: "classroom_files_open_in_drive" }, 404);
   const section = c.req.query("section") ?? "";
   const assignment = c.req.query("assignment") ?? "";
@@ -2065,7 +2065,7 @@ app.get("/canva/connect", async (c) => {
   const returnTo = safeAppPath(c.req.query("return_to"), "/settings");
   const probe = c.req.query("probe") === "1";
   try {
-    // The scopes depend on switches that can come from Flagship (src/flags.ts): pass them in.
+    // The scopes depend on switches that can come from the flag service (src/flags.ts): pass them in.
     return c.redirect(await canvaStore(c.env, session.uid, c.req.url).beginConnect(returnTo, { CANVA_EXPORT_ENABLED: c.env.CANVA_EXPORT_ENABLED, CANVA_FOLDERS_ENABLED: c.env.CANVA_FOLDERS_ENABLED, CANVA_PERMISSION_PROBE: c.env.CANVA_PERMISSION_PROBE }, probe));
   } catch (error) {
     errorCode(error, "canva_connect_failed");
@@ -2112,10 +2112,10 @@ app.post("/canva/probe", requireSession, async (c) => {
   if (!canvaProbeEnabled(c.env) || !keys.length) return c.json({ error: "not_found" }, 404);
 
   const session = c.get("session");
-  // Same gates as the other Canva POSTs: no demo/incognito, configured, our app, JSON.
+  // Same gates as the other design POSTs: no demo/incognito, configured, our app, JSON.
   const blocked = canvaGuard(c) ?? notFromOurApp(c);
   if (blocked) return blocked;
-  // Google Classroom sign-ins have no Canva connection (same as /canva/edit).
+  // Classroom sign-ins have no design app connection (same as /canva/edit).
   if (isGoogle(session)) return c.json({ error: "classroom_not_supported" }, 403);
 
   let body: any;
@@ -2160,7 +2160,7 @@ app.post("/canva/edit", requireSession, async (c) => {
   const blocked = canvaGuard(c) ?? notFromOurApp(c);
   if (blocked) return blocked;
   const session = c.get("session");
-  // Edit in Canva copies a file from the school platform; Google Classroom files are in Google Drive instead.
+  // Edit in the design app copies a file from the school platform; Classroom files are in the cloud drive instead.
   if (isGoogle(session)) return c.json({ error: "classroom_not_supported" }, 403);
 
   let body: any;
@@ -2200,14 +2200,14 @@ app.post("/canva/edit", requireSession, async (c) => {
   try {
     const token = await store.accessToken(session.uid);
 
-    // Already made a design from this file? Reopen it: Canva refuses to import
+    // Already made a design from this file? Reopen it: the design app refuses to import
     // the same file twice anyway. (Remembered even after its draft is deleted.)
     const existing = await store.findDraftForFile(section, assignment, fileId);
     const knownId = existing?.designId ?? (await store.importedDesign(section, assignment, fileId));
     if (knownId) {
       const design = await getDesign(token, knownId);
       if (design) return answer(design, existing?.sourceName ?? design.title, existing, true);
-      // Deleted in Canva, expired unedited, or another Canva account: start over.
+      // Deleted in the design app, expired unedited, or another account: start over.
       if (existing) await store.removeDraft(existing.designId);
     }
 
@@ -2256,7 +2256,7 @@ app.post("/canva/save-folder", requireSession, async (c) => {
   try {
     // Connected? (409 canva_not_connected / canva_reconnect_needed otherwise.)
     await store.accessToken(session.uid);
-    // A Canva folder for more than one file, when the connection may make folders. Without, they go to Projects.
+    // A design folder for more than one file, when the connection may make folders. Without, they go to Projects.
     let folderId: string | null = null;
     if (files.length > 1 && canvaFoldersEnabled(c.env)) {
       try {
@@ -2385,7 +2385,7 @@ app.get("/canva/drafts", requireSession, async (c) => {
         try {
           design = await getDesign(token, d.designId);
         } catch {
-          design = undefined; // Canva hiccup: still show the draft with what we know
+          design = undefined; // Design app hiccup: still show the draft with what we know
         }
         if (design === null) {
           await store.removeDraft(d.designId);
@@ -2505,7 +2505,7 @@ app.get("/cloud/:app/connect", async (c) => {
       write: c.req.query("write") === "1",
       loginHint: c.req.query("login_hint") ?? null,
       // This Worker's own address as the browser reached it, so wrangler dev
-      // works too. It must be listed with Google / Microsoft (see DEVELOPMENT.md).
+      // works too. It must be listed with each provider (see DEVELOPMENT.md).
       redirectUri: `${new URL(c.req.url).origin}/cloud/${cloudApp}/callback`,
     });
     return c.redirect(url);
@@ -2633,7 +2633,7 @@ app.delete("/cloud/:app/connection", requireSession, async (c) => {
   const foreign = notFromOurApp(c);
   if (foreign) return foreign;
   try {
-    // Google's grant is revoked too, unless this student signed in with Google
+    // The drive's grant is revoked too, unless this student signed in with that same account
     // (the same client holds their sign-in; see CloudAccount.disconnect).
     await cloudStore(c.env, session.uid, c.req.url).disconnect(session.uid, cloudApp, { revokeShared: !isGoogle(session) });
     return c.json({ ok: true });
@@ -2781,7 +2781,7 @@ app.route("/calendar", calendarRoutes({ requireSession, fromOurApp: notFromOurAp
 app.route("/media", mediaRoutes({
   requireSession,
   fromOurApp: notFromOurApp,
-  // Show my photo to classmates: Schoology classes only for now (Classroom's ids for classmates are Google's)
+  // Show my photo to classmates: Schoology classes only for now (Classroom's ids for classmates are its own)
   sectionsOf: async (session) => (isDemo(session) || isGoogle(session) ? null : (await schoologyCourses(session.uid, session)).map((x) => x.id)),
   secret: (c) => c.env.SESSION_SECRET,
 }) as any);
@@ -2857,7 +2857,7 @@ export function retryHandlers(env: Bindings): RetryHandlers {
 }
 
 export default {
-  // Flagship switches (src/flags.ts) are read once per request, before the app sees env.
+  // Flag service switches (src/flags.ts) are read once per request, before the app sees env.
   fetch: (request: Request, env: Bindings, ctx: ExecutionContext) => {
     // Server-Timing on every answer (src/timing.ts): our time, the switches', and Schoology's
     const t = newTiming(Date.now(), String((request as any).cf?.colo ?? ""));

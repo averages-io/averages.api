@@ -1,4 +1,4 @@
-// Profile photos and uploaded backgrounds in R2.
+// Profile photos and uploaded backgrounds in file storage.
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { isDemoSession, isIncognitoSession, type SessionData } from "./session.ts";
@@ -118,7 +118,7 @@ export async function deleteAllMedia(bucket: MediaBucket | undefined, uid: strin
       keys.push(...page.objects.map((o) => o.key));
       cursor = page.truncated ? page.cursor : undefined;
     } while (cursor);
-    // R2 deletes up to 1000 keys per call.
+    // File storage deletes up to 1000 keys per call.
     for (let i = 0; i < keys.length; i += 1000) await bucket.delete(keys.slice(i, i + 1000));
   } catch (err) {
     console.error("media_delete_all_failed", err);

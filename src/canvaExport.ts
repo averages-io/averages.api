@@ -1,4 +1,4 @@
-// Exporting a Canva design as a PDF, so a draft can be turned in.
+// Exporting a design as a PDF, so a draft can be turned in.
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import {
@@ -126,14 +126,14 @@ export async function createPdfExport(token: string, designId: string): Promise<
 export async function createExport(token: string, designId: string, type: TurnInFormat): Promise<string> {
   const format: Record<string, unknown> = { type };
   if (type === "png") format.as_single_image = true;
-  if (type === "jpg") format.quality = 90; // Canva's JPG needs a quality, 1 to 100
+  if (type === "jpg") format.quality = 90; // The design app's JPG needs a quality, 1 to 100
   const res = await canvaFetch(`${CANVA_API}/exports`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ design_id: designId, format }),
   });
   const json = await readJson(res);
-  // Canva refuses a type this design can't be (a Canva Doc as a PNG or JPG, say): say so instead of "try again"
+  // The design app refuses a type this design can't be (a document design as a PNG or JPG, say): say so instead of "try again"
   if (res.status === 400 && type !== "pdf") {
     console.error("canva_export_call_failed", res.status, String(json?.code ?? ""), String(json?.message ?? "").slice(0, 200));
     throw new CanvaError("canva_export_wrong_type", 422);
@@ -177,7 +177,7 @@ export async function getExportJob(token: string, jobId: string): Promise<Export
     console.error("canva_export_job_failed", String(job.error?.code ?? ""), String(job.error?.message ?? "").slice(0, 200));
     return { status: "failed", urls: [], error: jobError(job.error?.code) };
   }
-  // Anything else (a status Canva adds later) reads as still working; the app gives up after a while.
+  // Anything else (a status the design app adds later) reads as still working; the app gives up after a while.
   return { status: "in_progress", urls: [] };
 }
 
@@ -290,7 +290,7 @@ export function contentDisposition(name: string): string {
 /** An error code safe for the app, with its status (same picking-out rule as index.ts's errorCode). */
 function failure(c: C, error: unknown, fallback: string) {
   if (error instanceof CanvaError) return c.json({ error: error.message }, error.status as any);
-  // From the Durable Object over RPC the class is gone but the code survives in the message.
+  // From the storage object over RPC the class is gone but the code survives in the message.
   const message = error instanceof Error ? error.message : String(error ?? "");
   const code = message.match(/\bcanva_[a-z_]+/)?.[0];
   if (code) return c.json({ error: code }, statusForCode(code) as any);
@@ -306,7 +306,7 @@ export function canvaExportRoutes(deps: CanvaExportDeps) {
     c.header("Cache-Control", "private, no-store");
     const blocked = deps.canvaGuard(c) ?? (write ? deps.fromOurApp(c) : null);
     if (blocked) return blocked;
-    // Off until the scope is enabled in Canva (see the top of this file).
+    // Off until the scope is enabled in the design app (see the top of this file).
     if (!canvaExportEnabled(c.env)) return c.json({ error: "canva_reconnect_needed" }, 409);
     return null;
   };

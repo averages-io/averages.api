@@ -1,4 +1,4 @@
-// Sign in with Google, for schools on Google Classroom.
+// Sign in with a Classroom account, for schools on Classroom.
 
 import { GOOGLE_UID_PREFIX, type GoogleSession } from "./session.ts";
 
@@ -110,8 +110,8 @@ export async function authorizationUrl(config: { clientId: string; redirectUri: 
     response_type: "code",
     scope: [...PROFILE_SCOPES, ...Object.values(CLASSROOM_SCOPES)].join(" "),
     // A refresh token, so the 30-day session keeps working after the first
-    // hour. Google only hands one out when the consent screen is shown, hence
-    // "consent"; "select_account" lets a shared Chromebook pick the right student.
+    // hour. The provider only hands one out when the consent screen is shown, hence
+    // "consent"; "select_account" lets a shared laptop pick the right student.
     access_type: "offline",
     prompt: "consent select_account",
     state: s.state,
@@ -146,7 +146,7 @@ async function tokenRequest(body: Record<string, string>): Promise<any> {
   const data: any = await response.json().catch(() => null);
   if (!response.ok || !data || typeof data !== "object") {
     // invalid_grant: the code was used already or expired, or (refresh) the
-    // student removed Averages.io's access in their Google account.
+    // student removed Averages.io's access in their account.
     if (data?.error === "invalid_grant") throw new GoogleError("google_invalid_grant");
     throw new GoogleError("google_token_failed");
   }
@@ -202,7 +202,7 @@ export async function refreshAccessToken(config: { clientId: string; clientSecre
 
 function clampExpiry(value: unknown): number {
   const n = Number(value);
-  // Google says 3599. Anything odd: assume 5 minutes, so it's refreshed early rather than late.
+  // The provider says 3599. Anything odd: assume 5 minutes, so it's refreshed early rather than late.
   return Number.isFinite(n) && n > 60 ? Math.min(n, 24 * 60 * 60) : 300;
 }
 

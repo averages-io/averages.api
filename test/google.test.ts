@@ -1,4 +1,4 @@
-// Sign in with Google (Google Classroom): removed for the beta, which is Schoology only. These tests check it stays off.
+// Classroom sign-in: removed for the beta, which is Schoology only. These tests check it stays off.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/google.test.ts
 import app from "../src/index.ts";
 
@@ -11,7 +11,7 @@ function check(name: string, actual: unknown, expected: unknown) {
   else { failed++; console.log(`  FAIL  ${name}\n        expected: ${e}\n        actual:   ${a}`); }
 }
 
-// Everything Google sign-in used to need, set, so a 404 means the route is gone (not just unconfigured).
+// Everything Classroom sign-in used to need, set, so a 404 means the route is gone (not just unconfigured).
 const ENV: any = {
   SESSION_SECRET: "s".repeat(32),
   GOOGLE_CLIENT_ID: "123456789012-abcdefghijklmnop0123456789abcdef.apps.googleusercontent.com",

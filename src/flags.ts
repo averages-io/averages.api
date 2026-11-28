@@ -1,4 +1,4 @@
-// Feature switches you can flip without a deploy: Cloudflare Flagship.
+// Feature switches you can flip without a deploy: the flag service.
 
 export const DEFAULTS = {
   "canva-integration": true,
@@ -17,14 +17,14 @@ export const DEFAULTS = {
   "schoology-oauth": true,
   // Advanced translation's "Translate on our server". Off = only the Averages.io school can use it
   // (fullscreenTester in src/index.ts: the app.schoology.com sandbox school, FULLSCREEN_SCHOOLS, and API-key
-  // sign-ins). On = every student. Stays off until PowerSchool says in writing that Workers AI may process
-  // Schoology data (Developer Terms §3.2.1: not outside the US without permission, and Workers AI doesn't
-  // promise a region). On-device translation doesn't need it. Turn on in Flagship, or with
+  // sign-ins). On = every student. Stays off until PowerSchool says in writing that the hosted model may process
+  // Schoology data (Developer Terms §3.2.1: not outside the US without permission, and the hosted model doesn't
+  // promise a region). On-device translation doesn't need it. Turn on in the flag service, or with
   // FEATURES_ON="server-translate" in wrangler.jsonc. Not in featureForRoute: /translate checks it itself.
   "server-translate": false,
   // A.I. search on the student's own device (the app's averages-ai.js). Off = only the Averages.io
   // school sees it (same list as server-translate); on = every student. Nothing is sent to us or anyone: the model
-  // runs in the browser. Turn on in Flagship, or with FEATURES_ON="ai-search".
+  // runs in the browser. Turn on in the flag service, or with FEATURES_ON="ai-search".
   "ai-search": false,
 } as const;
 
@@ -155,7 +155,7 @@ export function featureForRoute(method: string, path: string): FeatureKey[] {
   const need: FeatureKey[] = [];
   if (path === "/canva" || path.startsWith("/canva/")) {
     need.push("canva-integration");
-    // Exporting a design as a PDF is how a Canva design gets turned in.
+    // Exporting a design as a PDF is how a design gets turned in.
     if (/^\/canva\/(designs\/[^/]+\/export|exports\/)/.test(path)) need.push("turnin-feature");
   }
   if (/^\/cloud\/gdrive(\/|$)/.test(path)) need.push("drive-integration");

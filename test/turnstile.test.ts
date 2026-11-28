@@ -1,4 +1,4 @@
-// Invisible Turnstile on the sign-in page: the token check, and both sign-in routes with it on and off.
+// Invisible bot check on the sign-in page: the token check, and both sign-in routes with it on and off.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/turnstile.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
@@ -13,7 +13,7 @@ function check(name: string, actual: unknown, expected: unknown) {
   else { failed++; console.log(`  FAIL  ${name}\n        expected: ${e}\n        actual:   ${a}`); }
 }
 
-// Cloudflare's siteverify, faked: the token says what it should answer
+// The bot check's siteverify, faked: the token says what it should answer
 const ANSWERS: Record<string, unknown> = {
   good: { success: true, action: "signin", hostname: "app.averages.io" },
   local: { success: true, action: "signin", hostname: "localhost" },

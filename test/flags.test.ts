@@ -89,7 +89,7 @@ check("reviewer sign-in off → 503 test-signin", await json(await signIn(OFF("t
 check("Schoology sign-in off → 503 schoology-signin", await json(await signIn(OFF("schoology-signin"), "abcdefghijklmnop", "abcdefghijklmnopqrstuvwxyz")), [503, { error: "feature_off", feature: "schoology-signin" }]);
 check("Schoology sign-in off doesn't stop the reviewer", (await signIn(OFF("schoology-signin"), "k".repeat(20), "r".repeat(20))).status !== 503, true);
 
-// Flagship is asked at most every FLAG_KEEP_MS per Worker; requests in between use that answer
+// The flag service is asked at most every FLAG_KEEP_MS per Worker; requests in between use that answer
 {
   let asks = 0, drive = true;
   const F = { getBooleanValue: async (k: string, d: boolean) => { asks++; return k === "drive-integration" ? drive : d; }, getStringValue: async () => "" };

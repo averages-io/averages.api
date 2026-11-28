@@ -1,4 +1,4 @@
-// Tests for browser notifications: src/notify.ts (what changed), src/pushStore.ts (the per-student Durable Object.
+// Tests for browser notifications: src/notify.ts (what changed), src/pushStore.ts (the per-student storage object.
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/push.test.ts
 
 import { Hono } from "hono";

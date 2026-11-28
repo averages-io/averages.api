@@ -1,5 +1,5 @@
 // "Sign out everywhere". Sessions are sealed cookies with nothing on the server, so on
-// their own they can't be ended early: a copied cookie kept working for its 15 days. One small Durable Object per
+// their own they can't be ended early: a copied cookie kept working for its 15 days. One small storage object per
 // student now holds a single time, "every sign-in before this has ended", set by POST /auth/signout-everywhere.
 // It holds nothing else, and deletes itself once no session from before that time can still be alive (15 days).
 

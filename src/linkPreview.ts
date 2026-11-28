@@ -197,7 +197,7 @@ export async function getLinkPreview(target: URL): Promise<LinkPreview> {
   } catch {
     out = bare;
   }
-  // YouTube often answers a server with a consent page, so its videos ask YouTube's own oEmbed for the title and
+  // Video sites often answer a server with a consent page, so their videos ask the site's own oEmbed for the title and
   // thumbnail instead.
   if (!out.title && /(^|\.)(youtube\.com|youtu\.be)$/i.test(target.hostname)) {
     try {

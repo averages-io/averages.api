@@ -1,4 +1,4 @@
-// Google Drive and OneDrive that stay connected.
+// Cloud drives that stay connected.
 
 import { b64url, b64urlDecode, codeChallenge, safeAppPath, STATE_RE, type CanvaStorage } from "./canva.ts";
 import { GOOGLE_CLIENT_ID_RE, MS_CLIENT_ID_RE, pick } from "./cloud.ts";
@@ -507,7 +507,7 @@ export class CloudAccount {
         ["state", state],
         ["code_challenge", await codeChallenge(verifier)],
         ["code_challenge_method", "S256"],
-        // A refresh token every time: Google only sends one with
+        // A refresh token every time: the drive only sends one with
         // access_type=offline, and only on a consent screen.
         ["access_type", "offline"],
         ["prompt", "consent"],
@@ -517,7 +517,7 @@ export class CloudAccount {
       if (!client.shared) params.push(["include_granted_scopes", "true"]);
     } else {
       // Never drop a scope they already gave: reconnecting without "read"
-      // mustn't take away adding files from OneDrive.
+      // mustn't take away adding files from the drive.
       const existing = await this.load(uid, app);
       scope = msScopes(
         !!opts.read || !!opts.write || (!!existing && hasScope(existing.scopes, MS_READ_SCOPE)),
@@ -586,7 +586,7 @@ export class CloudAccount {
     }
 
     const scopes = parseScopes(app, typeof json.scope === "string" ? json.scope : entry.scope);
-    // Google lets the student untick Drive on the consent screen.
+    // The student can untick the drive on the consent screen.
     if (app === "gdrive" && !scopes.includes(DRIVE_FILE_SCOPE)) return fail(returnTo, "drive_not_allowed", "drive_not_allowed");
     const refresh = typeof json.refresh_token === "string" ? json.refresh_token : "";
     // Without one the student would be back to signing in every hour.
@@ -674,7 +674,7 @@ export class CloudAccount {
           ...conn,
           access: json.access_token,
           accessExp: nowS() + expiresIn(json.expires_in),
-          // Microsoft sends a new refresh token each time and the old one is
+          // This drive sends a new refresh token each time and the old one is
           // then on its way out: save it BEFORE handing out the access token.
           refresh: typeof json.refresh_token === "string" && json.refresh_token ? json.refresh_token : conn.refresh,
           scopes: typeof json.scope === "string" && json.scope.trim() ? parseScopes(app, json.scope) : conn.scopes,

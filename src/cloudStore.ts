@@ -1,4 +1,4 @@
-// One Durable Object per student for their Google Drive and OneDrive connections.
+// One storage object per student for their cloud drive connections.
 
 import { DurableObject } from "cloudflare:workers";
 import {

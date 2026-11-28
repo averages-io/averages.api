@@ -1,4 +1,4 @@
-// Browser notifications: one PushStore Durable Object per student who turned them on.
+// Browser notifications: one PushStore storage object per student who turned them on.
 
 import { notificationsPlus } from "./plus.ts";
 import { DurableObject } from "cloudflare:workers";
@@ -480,7 +480,7 @@ export class PushStore extends DurableObject<PushEnv> {
       }
 
       // The student may have turned notifications off (or off and on again)
-      // while Schoology or Google was answering: then this check's result
+      // while Schoology or the drive was answering: then this check's result
       // belongs to nobody, and nothing more is written. Types and snapshot are
       // read again too, in case they changed meanwhile: a type switched off
       // mid-check doesn't notify, and one switched on starts with a baseline.

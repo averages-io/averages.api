@@ -1,4 +1,4 @@
-// Google Drive and OneDrive that stay connected: src/cloudConnect.ts through the real Worker routes (/cloud/*).
+// Cloud drives that stay connected: src/cloudConnect.ts through the real Worker routes (/cloud/*).
 // Run: node --experimental-strip-types --import ./test/cf-loader.mjs test/cloudConnect.test.ts
 import worker from "../src/index.ts";
 import { resetRateLimits } from "../src/rateLimit.ts";
@@ -77,7 +77,7 @@ function defaultAnswers() {
       access_token: `ms-at-${++counter}`,
       expires_in: 3600,
       refresh_token: "ms-rt-1",
-      // Microsoft names Graph scopes in full sometimes.
+      // This drive names its scopes in full sometimes.
       scope: (f.scope.split(" ").includes("Files.ReadWrite") ? "https://graph.microsoft.com/Files.ReadWrite " : "")
         + (f.scope.split(" ").includes("Files.Read")
           ? "https://graph.microsoft.com/Files.Read https://graph.microsoft.com/Files.ReadWrite.AppFolder https://graph.microsoft.com/User.Read openid profile email"
@@ -85,7 +85,7 @@ function defaultAnswers() {
       id_token: idToken({ aud: f.client_id, preferred_username: "sam@outlook.com", name: "Sam O" }),
     });
   let ms = 1;
-  // Microsoft answers with what this token can do: the scopes asked for, less offline_access.
+  // The drive answers with what this token can do: the scopes asked for, less offline_access.
   answer["ms:refresh_token"] = (f) =>
     json({ access_token: `ms-at-${++counter}`, expires_in: 3600, refresh_token: `ms-rt-${++ms}`, scope: f.scope.split(" ").filter((x) => x !== "offline_access").join(" ") });
   delete answer.revoke;
@@ -472,7 +472,7 @@ console.log("\ndisconnect");
   check("sign-in client, Schoology student: revoked at Google too, then forgotten (2026-10-26)", [del.res.status, del.data, tokenCalls(GOOGLE_REVOKE_URL).length, (await status(sam)).data.gdrive.connected], [200, { ok: true }, 1, false]);
   check("OneDrive untouched", (await status(sam)).data.onedrive.connected, true);
 
-  // Signed in with Google: the sign-in client also holds their sign-in, so Disconnect leaves Google's grant alone.
+  // Signed in with Classroom: the sign-in client also holds their sign-in, so Disconnect leaves that grant alone.
   const GUID = "g:1098765";
   const gc = await cookieFor(GUID, { key: "", secret: "", g: { at: "g-at", rt: "g-signin-rt", ax: Date.now() + 3600_000, sc: "openid email profile", name: "Gina", email: "gina@example.com", pic: "" } });
   await connect("gdrive", gc);
@@ -495,7 +495,7 @@ console.log("\ndisconnect");
   check("Drive client: revoked at Google (token in the body, not the URL), then forgotten", [gone.data, revoke.length, revoke[0]?.method, revoke[0]?.form.token, revoke[0]?.url, await stored(D, "gdrive")], [{ ok: true }, 1, "POST", "g-rt-1", GOOGLE_REVOKE_URL, null]);
   check("nothing left in the object once both are gone", objects.get(D)!.storage.data.size, 0);
 
-  // Google refuses the refresh token (e.g. 7-day Testing tokens): the access token is revoked instead.
+  // The provider refuses the refresh token (e.g. 7-day Testing tokens): the access token is revoked instead.
   await connect("gdrive", c, "", DRIVE_ENV);
   calls.length = 0;
   answer.revoke = (form: any) => new Response(JSON.stringify({ error: "invalid_token" }), { status: form.token === "g-rt-1" ? 400 : 200 });
@@ -582,7 +582,7 @@ console.log("\nforced refresh and lost connections");
   check("three forced at once: one refresh, all get its token", [tokenCalls(GOOGLE_TOKEN_ENDPOINT).length, results.map((r) => r.data.access_token)], [1, ["g-at-forced-shared", "g-at-forced-shared", "g-at-forced-shared"]]);
   defaultAnswers();
 
-  // The student removed Averages.io from their Google account: the cached token still looks good.
+  // The student removed Averages.io from their account: the cached token still looks good.
   const removed = (await stored(R, "gdrive"))!;
   removed.refreshedAt = 0;
   await objects.get(R)!.storage.put("conn:gdrive", await sealConnection(removed, R, "gdrive", SECRET));
@@ -604,7 +604,7 @@ console.log("\nforced refresh and lost connections");
   const back = await status(c);
   check("connecting again clears lost", [back.data.gdrive.connected, back.data.gdrive.lost, await objects.get(R)!.storage.get("lost:gdrive")], [true, false, undefined]);
 
-  // OneDrive lost, then Disconnect pressed without reconnecting.
+  // The drive connection lost, then Disconnect pressed without reconnecting.
   await connect("onedrive", c);
   await setAccessLeft(R, "onedrive", 0);
   answer["ms:refresh_token"] = () => json({ error: "invalid_grant" }, 400);

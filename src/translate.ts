@@ -1,7 +1,7 @@
 // Advanced translation's server fallback, an Averages Plus perk.
 // The browser translates class names, titles, posts and messages on the device when it can
 // (public/js/averages-i18n.js). Only when it can't, and only if the student turned on
-// "Translate on our server", it sends them here: Workers AI's m2m100 translates them and we
+// "Translate on our server", it sends them here: the hosted m2m100 model translates them and we
 // answer straight away. Nothing is stored and the text is never logged.
 
 export const TRANSLATE_MODEL = "@cf/meta/m2m100-1.2b";

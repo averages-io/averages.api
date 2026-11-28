@@ -1,4 +1,4 @@
-// GET /canva/status's `turnIn`: can this Canva connection turn in designs as PDFs?
+// GET /canva/status's `turnIn`: can this design app connection turn in designs as PDFs?
 import app from "../src/index.ts";
 import { sealSession } from "../src/session.ts";
 

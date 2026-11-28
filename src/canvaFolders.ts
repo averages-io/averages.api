@@ -1,4 +1,4 @@
-// Canva folders on the Files page.
+// Design folders on the Files page.
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import {
@@ -89,7 +89,7 @@ export function folderFailure(res: Response, json: any): CanvaError {
   if (code === "quota_exceeded") return new CanvaError("canva_folder_full", 409);
   if (code === "folder_not_found" || code === "not_found" || res.status === 404) return new CanvaError("canva_folder_gone", 404);
   if (res.status === 401) return new CanvaError("canva_reconnect_needed", 409);
-  // 403: no folder scope on this token, a folder that isn't theirs, or Canva's own folders (Uploads can't move).
+  // 403: no folder scope on this token, a folder that isn't theirs, or the design app's own folders (Uploads can't move).
   if (res.status === 403) return new CanvaError("canva_folder_not_allowed", 403);
   if (res.status === 400) return new CanvaError("bad_request", 400);
   return new CanvaError("canva_folder_failed", 502);
@@ -132,7 +132,7 @@ export async function moveItem(token: string, itemId: string, toFolderId: string
 
 function failure(c: C, error: unknown, fallback: string) {
   if (error instanceof CanvaError) return c.json({ error: error.message }, error.status as any);
-  // From the Durable Object over RPC the class is gone but the code survives in the message.
+  // From the storage object over RPC the class is gone but the code survives in the message.
   const message = error instanceof Error ? error.message : String(error ?? "");
   const code = message.match(/\bcanva_[a-z_]+/)?.[0];
   if (code) return c.json({ error: code }, (code === "canva_reconnect_needed" ? 409 : statusForCode(code)) as any);

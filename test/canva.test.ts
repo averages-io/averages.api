@@ -225,7 +225,7 @@ console.log("tokens and refresh");
   await rejects("a wrong client secret is our problem, not the student's", acct.accessToken(UID), "canva_token_failed");
   check("...so their refresh token is kept", (await acct.loadTokens(UID))?.refresh_token, "STILL_GOOD");
 
-  // Disconnect pressed while a refresh is on its way to Canva.
+  // Disconnect pressed while a refresh is on its way to the design app.
   let release: () => void = () => {};
   handler = async (u) => {
     if (!u.endsWith("/oauth/token")) return json({}, 404);

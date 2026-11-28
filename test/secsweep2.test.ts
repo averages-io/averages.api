@@ -1,5 +1,5 @@
 // Security sweep: the surfaces added since the IDOR pass (classmate photos, the email code
-// popup, Turnstile, the Plus cache, link previews), plus two checks that cover every route at once so a new one
+// popup, the bot check, the Plus cache, link previews), plus two checks that cover every route at once so a new one
 // can't quietly skip them:
 //   1. every POST / PUT / DELETE refuses another site (Origin), with a real session;
 //   2. every signed-in route counts against a rate limit.
@@ -63,8 +63,8 @@ ok("found the routes (more than 90)", routes.length > 90, String(routes.length))
 console.log("\n1. every POST / PUT / DELETE refuses another site, with a real session");
 {
   const cookie = await cookieFor("777");
-  // On purpose: sign-out works from anywhere (it only ends your own session); Stripe's webhook is server to server
-  // (its signature is the check); the Canva probe exists only while testing locally (404 everywhere else); CSP reports
+  // On purpose: sign-out works from anywhere (it only ends your own session); the billing webhook is server to server
+  // (its signature is the check); the design app probe exists only while testing locally (404 everywhere else); CSP reports
   // come from browsers with no session and change nothing (they're only logged).
   const ALLOWED = new Set(["DELETE /auth/session", "POST /stripe/webhook", "POST /canva/probe", "POST /csp-report"]);
   const open: string[] = [];
@@ -80,7 +80,7 @@ console.log("\n1. every POST / PUT / DELETE refuses another site, with a real se
 
 console.log("\n2. every signed-in route counts against a rate limit");
 {
-  // Public or server-to-server: the health page, public config, the sign-in page's own status, sign-out, Stripe.
+  // Public or server-to-server: the health page, public config, the sign-in page's own status, sign-out, billing.
   const PUBLIC = new Set(["GET /", "GET /status", "GET /config/schools", "GET /config/cloud", "GET /config/features", "GET /push/config", "GET /auth/schoology/status", "GET /auth/schoology/sandbox-authorize", "DELETE /auth/session", "POST /stripe/webhook", "GET /.well-known/security.txt"]);
   const none = routes.filter(([m, p]) => !ruleFor(m, fill(p)) && !PUBLIC.has(`${m} ${p}`)).map(([m, p]) => `${m} ${p}`);
   ok("none left out", none.length === 0, none.join(", "));
