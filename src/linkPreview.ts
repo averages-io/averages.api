@@ -1,4 +1,4 @@
-// Link previews: a link in a message shows the page's title, site and picture, like Messages does.
+// Link previews: a link in a message shows the page's title, site and picture.
 
 const UA = "Mozilla/5.0 (compatible; AveragesLinkPreview/1.0; +https://averages.io)";
 const PAGE_MAX = 512 * 1024;
@@ -197,7 +197,7 @@ export async function getLinkPreview(target: URL): Promise<LinkPreview> {
   } catch {
     out = bare;
   }
-  // Video sites often answer a server with a consent page, so their videos ask the site's own oEmbed for the title and
+  // YouTube often answers a server with a consent page, so its videos ask YouTube's own oEmbed for the title and
   // thumbnail instead.
   if (!out.title && /(^|\.)(youtube\.com|youtu\.be)$/i.test(target.hostname)) {
     try {
